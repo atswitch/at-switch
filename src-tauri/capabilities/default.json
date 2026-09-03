@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Minimum permissions for the AT-Switch main window.",
+  "windows": ["main"],
+  "permissions": ["core:default", "opener:default", "dialog:allow-open"]
+}

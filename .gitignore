@@ -1,0 +1,44 @@
+# Node / Frontend Dependencies & Build
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+
+# Rust / Tauri Build Artifacts
+src-tauri/target/
+
+# IDE & Editor Configs
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS & Environment Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.log
+
+# Environment Variables & Keys
+.env
+.env.*
+!.env.example
+
+# Testing & Coverage Outputs
+coverage/
+playwright-report/
+test-results/
+
+# Local Build Logs & Caches
+build-log.txt
+.workbuddy/
+
+

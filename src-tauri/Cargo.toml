@@ -1,0 +1,66 @@
+[package]
+name = "at-switch"
+version = "0.1.7"
+description = "Local-first provider and model switchboard for AI agents"
+authors = ["AT-Switch Contributors"]
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/atswitch/at-switch"
+homepage = "https://github.com/atswitch/at-switch"
+readme = "../README.md"
+
+[lib]
+name = "at_switch_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+async-stream = "0.3"
+axum = "0.8"
+base64 = "0.22"
+chacha20poly1305 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+futures-util = "0.3"
+hex = "0.4"
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
+log = "0.4"
+plist = "1.10"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls-native-roots"] }
+rand = "0.8"
+rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
+rusty-leveldb = "4.0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-autostart = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "net"] }
+toml_edit = "0.25"
+url = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+zeroize = "1"
+tauri-plugin-dialog = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Storage_FileSystem",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
+
+[profile.release]
+codegen-units = 16
+lto = "thin"
+opt-level = "s"
+strip = "symbols"

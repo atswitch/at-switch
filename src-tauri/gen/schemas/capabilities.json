@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Minimum permissions for the AT-Switch main window.","local":true,"windows":["main"],"permissions":["core:default","opener:default","dialog:allow-open"]}}
