@@ -158,7 +158,7 @@ export function SettingsPage({
 
       <footer className="about-strip">
         <span>AT-SWITCH / LOCAL FIRST</span>
-        <strong>v0.1.7</strong>
+        <strong>v3.14.1</strong>
         <span>Windows x64 · macOS Universal</span>
       </footer>
     </>
