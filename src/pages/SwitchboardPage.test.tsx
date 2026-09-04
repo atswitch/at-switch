@@ -25,7 +25,7 @@ describe("SwitchboardPage", () => {
       kind,
       protocol: "openai_chat_completions",
       baseUrl: `https://${kind}.example.test/v1`,
-      isRecommended: kind === "mongyun",
+      isRecommended: false,
       isEnabled: true,
       hasApiKey: true,
       verificationStatus: "verified",

@@ -10,6 +10,10 @@
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg" alt="Platform: macOS | Windows" />
 </p>
 
+<p align="center">
+  简体中文 | <a href="./README_EN.md">English</a>
+</p>
+
 AT-Switch 是一款面向 macOS 和 Windows 的本地 AI Agent Provider 与模型切换工具。
 它将不同 Agent 的配置方式统一为同一套桌面工作流：选择 Agent、维护 Provider、
 选择模型，然后默认以直连方式完成切换。需要协议转换或密钥隔离时，可在高级设置
@@ -121,8 +125,6 @@ AT-Switch。直连要求 Provider 原生支持 Agent 使用的协议：
 CodeBuddy CN 同时使用 Provider 名作为显示名称，因此菜单显示为“Provider 名:模型 ID”，
 但请求仍发送真实模型 ID。
 
-详细操作见 [使用教程](./docs/使用教程.md)。
-
 ## 架构概览
 
 ```mermaid
@@ -152,9 +154,6 @@ flowchart LR
 - 本地代理使用每个 Agent 独立的本地令牌，路由表只保存令牌哈希；
 - 协议匹配由 Agent 能力驱动，新增协议时通过 Codec 和能力矩阵扩展。
 
-完整设计见 [架构设计](./docs/架构设计.md) 和
-[本地代理与直连模式设计](./docs/本地代理与直连模式设计.md)。
-
 ## 目录结构
 
 ```text
@@ -180,12 +179,48 @@ at-switch/
 │   ├── icons/                         # macOS、Windows 和移动端图标源
 │   ├── Cargo.toml
 │   └── tauri.conf.json
-├── docs/                              # PRD、架构、使用与发布文档
 ├── .github/workflows/ci.yml           # macOS / Windows CI
-├── AGENTS.md                          # 开发与迭代规范
+├── CHANGELOG.md                       # 版本变更记录
+├── CONTRIBUTING.md                    # 贡献指南
+├── SECURITY.md                        # 安全漏洞提报政策
 ├── package.json
 └── README.md
 ```
+
+## 下载安装、升级与卸载
+
+面向普通用户的安装包位于 [GitHub Releases](https://github.com/atswitch/at-switch/releases/latest)。
+只下载已公开、完成平台签名的 Release；Draft、未签名或仅使用 ad-hoc 签名的产物仅供
+维护者内部验证。
+
+下载对应安装包及同名 `.sha256` 文件后先校验完整性：
+
+```bash
+# macOS：将占位文件名替换为实际下载的 DMG 文件名
+shasum -a 256 -c "AT-Switch.dmg.sha256"
+```
+
+```powershell
+# Windows：将文件名替换为实际下载的 EXE 或 MSI 文件名
+$installer = "AT-Switch-installer.exe"
+$expected = (Get-Content "$installer.sha256").Split()[0].ToLowerInvariant()
+$actual = (Get-FileHash -Algorithm SHA256 $installer).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw "Checksum mismatch" }
+```
+
+校验成功后，macOS 打开 DMG 并将 AT-Switch 拖入“应用程序”；Windows 运行已签名的
+EXE 或 MSI 并按安装向导完成安装。升级前完全退出 AT-Switch，然后安装新版本覆盖即可，
+本地数据会保留。
+
+卸载前，如果任何 Agent 仍由 AT-Switch 管理，请先在应用中逐一选择“Agent 原始配置”，
+确认恢复成功后再完全退出并卸载。否则已经写入 Agent 原生配置的 Endpoint、模型和直连
+API Key 不会因卸载 AT-Switch 自动撤销。普通卸载可能保留应用数据和系统凭据，便于以后
+升级或重装。若确需彻底清理，请先备份需要保留的数据，再删除下列目录，并在系统凭据
+管理工具中删除服务名为 `com.atswitch.desktop` 的条目；此操作不可逆：
+
+- macOS：`~/Library/Application Support/com.atswitch.desktop/`，并在“钥匙串访问”中
+  删除对应条目；
+- Windows：`%APPDATA%\com.atswitch.desktop\`，并在“凭据管理器”中删除对应条目。
 
 ## 本地开发
 
@@ -229,6 +264,7 @@ npm run tauri:dev
 ```bash
 npm run build
 npm test -- --run
+npm run licenses:check
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml
@@ -258,12 +294,18 @@ npm run tauri:build
 
 构建产物将输出至 `src-tauri/target/release/bundle/` 目录中。
 
+推送与四个工程版本文件一致的 `v*` 语义化版本标签会触发 GitHub Release 工作流。
+工作流在 macOS 与 Windows 上分别构建安装包、生成 SHA-256 校验文件，并创建 Draft
+Release 供维护者完成真机验证后人工发布。没有 Apple 证书时，macOS 产物使用 ad-hoc
+签名；面向最终用户公开安装包前必须完成 Apple Developer ID 签名、公证以及 Windows
+代码签名。不得公开未签名或仅使用 ad-hoc 签名的 Draft Release。
+
 ## 本地数据与安全
 
 | 数据 | 保存位置 |
 | --- | --- |
 | Provider、模型、Agent 绑定、设置 | Tauri 应用数据目录中的 `at-switch.db` |
-| Provider API Key | macOS Keychain / Windows Credential Manager |
+| Provider API Key | AT-Switch 自身保存在 macOS Keychain / Windows Credential Manager；直连模式还会写入目标 Agent 原生配置 |
 | Agent 本地路由令牌 | macOS Keychain / Windows Credential Manager |
 | Agent 原始配置备份 | 应用数据目录 `agent-backups/` 中的加密 `.atsb` 文件 |
 | Prompt、回复、Tool 参数、逐条请求日志 | 不保存 |
@@ -282,7 +324,10 @@ npm run tauri:build
 
 本项目遵循 [Contributor Covenant](./CODE_OF_CONDUCT.md) 行为准则。
 
+- 普通使用问题：[SUPPORT.md](./SUPPORT.md)
+- 版本变更记录：[CHANGELOG.md](./CHANGELOG.md)
+- 第三方素材与商标说明：[THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)
+
 ## 开源协议
 
 本项目基于 [MIT License](./LICENSE) 许可协议开源。
-

@@ -18,7 +18,7 @@ function browserPlatform(): string {
 }
 
 const mockProviderApiKeys = new Map<string, string>([
-  ["preset-mongyun", "sk-browser-preview-40a1"],
+  ["preset-mongyun", "not-a-real-browser-preview-key"],
 ]);
 
 function maskApiKey(value: string) {
@@ -186,7 +186,7 @@ const realSnapshotData: AppSnapshot = {
       kind: "mongyun",
       protocol: "openai_chat_completions",
       baseUrl: "https://api.g2claw.com/v1",
-      isRecommended: true,
+      isRecommended: false,
       isEnabled: true,
       hasApiKey: true,
       maskedApiKey: "•••••••••4214",
@@ -555,7 +555,7 @@ async function invokeMock<T>(
         kind: draft.kind,
         protocol: draft.protocol,
         baseUrl: draft.baseUrl,
-        isRecommended: draft.kind === "mongyun",
+        isRecommended: false,
         isEnabled: true,
         hasApiKey: Boolean(draft.apiKey) || Boolean(existing?.hasApiKey),
         maskedApiKey: draft.apiKey

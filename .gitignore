@@ -31,6 +31,10 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+*.key
+*.p12
+*.pem
+*.pfx
 
 # Testing & Coverage Outputs
 coverage/
@@ -40,5 +44,4 @@ test-results/
 # Local Build Logs & Caches
 build-log.txt
 .workbuddy/
-
 

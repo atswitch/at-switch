@@ -1,5 +1,7 @@
 # 贡献指南 (Contributing to AT-Switch)
 
+简体中文 | [English](./CONTRIBUTING_EN.md)
+
 感谢关注并参与 AT-Switch 开源项目！我们欢迎所有形式的贡献，包括提出 Issue、完善文档、报告安全漏洞以及提交 Pull Request。
 
 ## 开发环境要求
@@ -44,13 +46,16 @@ npm run build
 # 2. 前端单元测试
 npm test -- --run
 
-# 3. Rust 代码格式检查
+# 3. 依赖许可证元数据检查
+npm run licenses:check
+
+# 4. Rust 代码格式检查
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 
-# 4. Rust Clippy 代码质量检查
+# 5. Rust Clippy 代码质量检查
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
-# 5. Rust 核心单元测试
+# 6. Rust 核心单元测试
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
@@ -63,3 +68,16 @@ cargo test --manifest-path src-tauri/Cargo.toml
 3. **跨平台兼容**：涉及 Agent 扫描发现与配置更新的改动，必须同时兼顾 macOS 与 Windows 平台逻辑。
 4. **补充测试**：为新功能或 Bug 修复添加对应的单元测试。
 5. **清晰的提交说明**：在 PR 描述中清晰说明改动动机、实现方案与验证步骤。
+6. **同步变更记录**：用户可见行为变化应更新 [CHANGELOG.md](./CHANGELOG.md) 的
+   `Unreleased` 部分。
+
+## 发布维护
+
+正式版本使用与四个工程版本文件一致的 `v*` 语义化版本标签触发。GitHub Actions
+只创建 Draft Release；维护者必须完成签名、校验和真机安装验证后再人工公开。完整
+检查项见 [.github/RELEASE_CHECKLIST.md](./.github/RELEASE_CHECKLIST.md)。
+
+## 第三方素材
+
+新增或更新第三方名称、图标和商标素材时，必须记录来源并确认允许随仓库分发，相关
+说明同步更新到 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
