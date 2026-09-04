@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [v0.1.7] - 2026-09-04
+## [v3.14.1] - 2026-09-04
 
 ### Added
 - **Initial Open-Source Release**: Open-sourced the core AT-Switch desktop application under the MIT License.
