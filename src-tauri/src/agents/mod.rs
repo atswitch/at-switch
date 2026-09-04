@@ -694,8 +694,8 @@ impl AgentService {
         }
         // 退出失败不再阻塞配置写入。如果 Agent 退不掉（权限、AV 拦截、托盘常驻），
         // 仍然继续写入配置——配置写入成功即视为切换成功，只是不能自动重启，
-        // 需要用户手动重启 Agent。这与 AGENTS.md 第 9 节的「写入失败时先回滚，
-        // 再按原状态恢复 Agent」保持一致：写入失败仍然回滚，但退出失败不回滚。
+        // 需要用户手动重启 Agent。配置写入失败仍然回滚并恢复原运行状态，
+        // 但单独的退出失败不会触发回滚。
         let mut agent_stop_failed_message: Option<String> = None;
         let workbuddy_pause = if draft.agent_id == "workbuddy" {
             match workbuddy::pause_for_runtime_update(&detection) {
@@ -2155,7 +2155,7 @@ mod tests {
             kind: ProviderKind::Mongyun,
             protocol: ApiProtocol::OpenaiChatCompletions,
             base_url: "https://api.example.test/v1".to_owned(),
-            is_recommended: true,
+            is_recommended: false,
             is_enabled: true,
             has_api_key: true,
             masked_api_key: None,
@@ -2191,7 +2191,7 @@ mod tests {
             kind: ProviderKind::Mongyun,
             protocol: ApiProtocol::OpenaiChatCompletions,
             base_url: "https://api.example.test/v1".to_owned(),
-            is_recommended: true,
+            is_recommended: false,
             is_enabled: true,
             has_api_key: true,
             masked_api_key: None,

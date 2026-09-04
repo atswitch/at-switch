@@ -476,7 +476,7 @@ model_provider = "openai"
         let current = r#"model = "glm-test"
 model_provider = "at_switch"
 
-[projects."/Users/star/develop/project/chathub"]
+[projects."/Users/example/develop/sample-project"]
 trust_level = "trusted"
 
 [model_providers.at_switch]
@@ -494,7 +494,7 @@ experimental_bearer_token = "local-token"
         assert!(text.contains("model_provider = \"openai\""));
         assert!(!text.contains("model_provider = \"at_switch\""));
         // 工作空间项目配置与 Provider 定义必须完好保留
-        assert!(text.contains("[projects.\"/Users/star/develop/project/chathub\"]"));
+        assert!(text.contains("[projects.\"/Users/example/develop/sample-project\"]"));
         assert!(text.contains("trust_level = \"trusted\""));
         assert!(text.contains("[model_providers.at_switch]"));
         assert!(text.contains("name = \"智谱 AI\""));
@@ -503,7 +503,7 @@ experimental_bearer_token = "local-token"
     #[test]
     fn round_trip_switch_preserves_custom_providers_and_workspaces() {
         let seed = r#"# User base config
-[projects."/Users/star/develop/project/chathub"]
+[projects."/Users/example/develop/sample-project"]
 trust_level = "trusted"
 
 [model_providers.custom_direct]
@@ -525,7 +525,7 @@ wire_api = "responses"
         assert!(switched_text.contains("model = \"glm-test\""));
         assert!(switched_text.contains("model_provider = \"at_switch\""));
         assert!(switched_text.contains("[model_providers.custom_direct]"));
-        assert!(switched_text.contains("[projects.\"/Users/star/develop/project/chathub\"]"));
+        assert!(switched_text.contains("[projects.\"/Users/example/develop/sample-project\"]"));
 
         // 2. 切回原生官方模型
         let native_bytes = build_native_codex_config(&switched_text, seed).expect("build native");
@@ -535,7 +535,7 @@ wire_api = "responses"
         assert!(!native_text.contains("model_provider = \"at_switch\""));
         assert!(native_text.contains("[model_providers.custom_direct]"));
         assert!(native_text.contains("[model_providers.at_switch]"));
-        assert!(native_text.contains("[projects.\"/Users/star/develop/project/chathub\"]"));
+        assert!(native_text.contains("[projects.\"/Users/example/develop/sample-project\"]"));
         assert!(native_text.contains("# User base config"));
     }
 }

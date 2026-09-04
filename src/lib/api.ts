@@ -18,7 +18,7 @@ function browserPlatform(): string {
 }
 
 const mockProviderApiKeys = new Map<string, string>([
-  ["preset-mongyun", "sk-browser-preview-40a1"],
+  ["preset-mongyun", "not-a-real-browser-preview-key"],
 ]);
 
 function maskApiKey(value: string) {
@@ -186,7 +186,7 @@ const realSnapshotData: AppSnapshot = {
       kind: "mongyun",
       protocol: "openai_chat_completions",
       baseUrl: "https://api.g2claw.com/v1",
-      isRecommended: true,
+      isRecommended: false,
       isEnabled: true,
       hasApiKey: true,
       maskedApiKey: "•••••••••4214",
@@ -347,7 +347,7 @@ const realSnapshotData: AppSnapshot = {
       adapterVerified: true,
       detectedVersion: "5.4.7",
       installPath: "/Applications/WorkBuddy.app",
-      configPath: "/Users/star/.workbuddy/models.json",
+      configPath: "/Users/example/.workbuddy/models.json",
       providerId: "3e495aa8-a81a-4f85-b9a6-14434b8ddda0",
       providerName: "蒙云智算",
       modelId: "GLM-5.2",
@@ -364,7 +364,7 @@ const realSnapshotData: AppSnapshot = {
       adapterVerified: true,
       detectedVersion: "4.11.3",
       installPath: "/Applications/CodeBuddy.app",
-      configPath: "/Users/star/.codebuddy/models.json",
+      configPath: "/Users/example/.codebuddy/models.json",
       needsRestart: true,
       automaticRestartSupported: true,
     },
@@ -377,7 +377,7 @@ const realSnapshotData: AppSnapshot = {
       adapterVerified: true,
       detectedVersion: "0.2.35",
       installPath: "/Applications/QClaw.app",
-      configPath: "/Users/star/.qclaw/openclaw.json",
+      configPath: "/Users/example/.qclaw/openclaw.json",
       needsRestart: true,
       automaticRestartSupported: true,
     },
@@ -400,7 +400,7 @@ const realSnapshotData: AppSnapshot = {
       adapterVerified: true,
       detectedVersion: "26.825.51511",
       installPath: "/Applications/Codex.app",
-      configPath: "/Users/star/.codex/config.toml",
+      configPath: "/Users/example/.codex/config.toml",
       needsRestart: true,
       automaticRestartSupported: true,
     },
@@ -555,7 +555,7 @@ async function invokeMock<T>(
         kind: draft.kind,
         protocol: draft.protocol,
         baseUrl: draft.baseUrl,
-        isRecommended: draft.kind === "mongyun",
+        isRecommended: false,
         isEnabled: true,
         hasApiKey: Boolean(draft.apiKey) || Boolean(existing?.hasApiKey),
         maskedApiKey: draft.apiKey

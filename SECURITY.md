@@ -1,12 +1,17 @@
 # 安全政策 (Security Policy)
 
+简体中文 | [English](./SECURITY_EN.md)
+
 AT-Switch 非常重视用户数据的安全与隐私保护。
 
 ## 安全架构与隐私声明
 
-- **零明文持久化**：Provider API Key 等敏感凭据在本地仅保存于操作系统原生安全凭据库中（macOS Keychain / Windows Credential Manager）。
-- **零日志收集**：AT-Switch 不会收集、传输或持久化用户的任何 Prompt 提示词、模型回复正文、逐条 API 请求日志或个人隐私数据。
-- **本地优先**：所有配置和代理路由均在本地 `127.0.0.1` 完成，不依赖任何中心化云端转发服务。
+- **凭据源安全存储**：AT-Switch 自身将 Provider API Key 和本地路由令牌保存在操作系统原生安全凭据库中（macOS Keychain / Windows Credential Manager）。直连模式需要把所选 Provider API Key 写入目标 Agent 的原生配置；该副本是否明文保存取决于 Agent。需要避免这一副本时，请使用本地代理模式。
+- **不收集业务内容**：AT-Switch 不会把 Prompt、模型回复、工具参数或逐条请求日志发送给项目方，也不会通过遥测收集或持久化这些内容。本地代理模式会在内存中处理请求和响应，并把请求转发给用户选择的 Provider。
+- **本地优先**：配置管理在本机完成；可选代理仅监听 `127.0.0.1`。模型请求会直接或经本地代理发送到用户选择的 Provider，AT-Switch 不依赖项目方运营的中心化转发服务。
+
+用户选择的 Provider 和 Agent 可能按各自条款处理、记录或保留请求数据；这些第三方行为
+不在 AT-Switch 的隐私承诺范围内。请在使用前查阅相应服务的数据政策。
 
 ## 支持的版本
 
