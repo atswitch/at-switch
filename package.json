@@ -18,7 +18,6 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "licenses:check": "node scripts/check-dependency-licenses.mjs",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",

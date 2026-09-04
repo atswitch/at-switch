@@ -1,34 +1,30 @@
 # Changelog
 
-All notable changes to AT-Switch are documented in this file. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+All notable changes to **AT-Switch** will be documented in this file.
 
-## [Unreleased]
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-### Changed
+---
 
-- Removed the built-in preferred-provider designation so all providers are shown
-  without commercial preference.
-- Hardened CI and draft release automation with version checks, checksums, signing
-  safeguards, automated dependency update monitoring, and scheduled vulnerability
-  audits.
-- Clarified direct-mode credential storage and third-party asset ownership.
-
-## [0.1.7] - 2026-09-04
+## [v0.1.7] - 2026-09-04
 
 ### Added
-
-- Provider and model management for WorkBuddy, CodeBuddy CN, QClaw, AutoClaw,
-  Codex, ima, and TRAE.
-- Direct connections and an optional local protocol-converting proxy.
-- OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages support,
-  including streaming and tool calls.
-- Encrypted configuration backups, atomic writes, post-write validation, rollback,
-  and original-configuration restoration.
-- macOS and Windows agent discovery and lifecycle handling.
-- Simplified Chinese and English user interfaces.
-- Cross-platform CI and draft GitHub Release automation.
-
-[Unreleased]: https://github.com/atswitch/at-switch/compare/v0.1.7...HEAD
-[0.1.7]: https://github.com/atswitch/at-switch/releases/tag/v0.1.7
+- **Initial Open-Source Release**: Open-sourced the core AT-Switch desktop application under the MIT License.
+- **Agent Support Matrix**:
+  - Support for **WorkBuddy**: Automated config synchronization with `~/.workbuddy/models.json`.
+  - Support for **CodeBuddy CN**: Workspace model syncing via `~/.codebuddy/models.json`.
+  - Support for **QClaw**: Automatic OpenClaw configuration adaptation via `~/.qclaw/qclaw.json`.
+  - Support for **AutoClaw**: Electron user data authoritative catalog switching.
+  - Support for **Codex**: Full support for config-only switching in `$CODEX_HOME/config.toml` or `~/.codex/config.toml`.
+  - Non-intrusive status detection for **ima** and **TRAE**.
+- **Protocol Translation & Local Proxy**:
+  - Dual-mode switching: Direct mode (default, zero latency) and Local Proxy mode (on `127.0.0.1`).
+  - Seamless bidirectional translation across OpenAI Chat, OpenAI Responses, and Anthropic Messages.
+  - SSE streaming and Tool Calling / Function Calling compatibility layer.
+- **Security & Privacy**:
+  - OS-native credential storage via macOS Keychain and Windows Credential Manager.
+  - Zero plain-text persistence of API keys in application databases.
+  - Zero storage of prompts, model answers, or request bodies.
+- **Transactional Config Safety**: Pre-write snapshot encryption, atomic writes, and rollback on failure.
+- **Multi-language Documentation**: Added English, Chinese, Japanese, and German READMEs.
