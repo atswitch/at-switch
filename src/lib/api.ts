@@ -177,7 +177,7 @@ const mockSnapshotTemplate: AppSnapshot = {
 };
 
 const realSnapshotData: AppSnapshot = {
-  appVersion: "0.1.7",
+  appVersion: "3.14.1",
   platform: "macos",
   providers: [
     {
