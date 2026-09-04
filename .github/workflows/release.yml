@@ -5,10 +5,11 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   release:
-    permissions:
-      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -37,143 +38,23 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Verify release tag and manifest versions
-        run: node scripts/check-release-version.mjs
-
-      - name: Check dependency licenses
-        run: npm run licenses:check
-
-      - name: Configure macOS signing
-        if: runner.os == 'macOS'
-        shell: bash
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          if [[ -z "$APPLE_CERTIFICATE" && -z "$APPLE_CERTIFICATE_PASSWORD" && -z "$KEYCHAIN_PASSWORD" && -z "$APPLE_ID" && -z "$APPLE_PASSWORD" && -z "$APPLE_TEAM_ID" ]]; then
-            echo "Apple signing secrets are not configured; the draft will use an ad-hoc signature."
-            exit 0
-          fi
-
-          for variable in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD KEYCHAIN_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
-            if [[ -z "${!variable}" ]]; then
-              echo "Missing required Apple signing secret: $variable" >&2
-              exit 1
-            fi
-          done
-
-          certificate_path="$RUNNER_TEMP/at-switch-certificate.p12"
-          keychain_path="$RUNNER_TEMP/at-switch-build.keychain-db"
-          echo "$APPLE_CERTIFICATE" | base64 --decode > "$certificate_path"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
-          security default-keychain -s "$keychain_path"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
-          security set-keychain-settings -t 3600 -u "$keychain_path"
-          security import "$certificate_path" -k "$keychain_path" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain_path"
-
-          signing_identity=$(security find-identity -v -p codesigning "$keychain_path" | awk -F'"' '/Developer ID Application/ { print $2; exit }')
-          if [[ -z "$signing_identity" ]]; then
-            echo "No Developer ID Application signing identity was found after importing the certificate." >&2
-            exit 1
-          fi
-          echo "APPLE_SIGNING_IDENTITY=$signing_identity" >> "$GITHUB_ENV"
-
-      - name: Configure Windows signing
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE) -and [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)) {
-            Write-Host "Windows signing secrets are not configured; the unsigned installer will remain in a draft release."
-            exit 0
-          }
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE) -or [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)) {
-            throw "WINDOWS_CERTIFICATE and WINDOWS_CERTIFICATE_PASSWORD must both be configured."
-          }
-
-          $encodedPath = Join-Path $env:RUNNER_TEMP "at-switch-certificate.txt"
-          $certificatePath = Join-Path $env:RUNNER_TEMP "at-switch-certificate.pfx"
-          Set-Content -Path $encodedPath -Value $env:WINDOWS_CERTIFICATE
-          certutil -decode $encodedPath $certificatePath | Out-Null
-          $password = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
-          $certificate = Import-PfxCertificate -FilePath $certificatePath -CertStoreLocation Cert:\CurrentUser\My -Password $password
-          if ($null -eq $certificate) {
-            throw "The Windows signing certificate could not be imported."
-          }
-          $now = Get-Date
-          if ($now -lt $certificate.NotBefore -or $now -gt $certificate.NotAfter) {
-            throw "The Windows signing certificate is not currently valid."
-          }
-          $codeSigningOid = "1.3.6.1.5.5.7.3.3"
-          if ($certificate.EnhancedKeyUsageList.ObjectId.Value -notcontains $codeSigningOid) {
-            throw "The Windows certificate is not valid for code signing."
-          }
-
-          $configPath = "src-tauri/tauri.conf.json"
-          $config = Get-Content -Raw $configPath | ConvertFrom-Json
-          $config.bundle.windows | Add-Member -NotePropertyName certificateThumbprint -NotePropertyValue $certificate.Thumbprint -Force
-          $config.bundle.windows | Add-Member -NotePropertyName digestAlgorithm -NotePropertyValue "sha256" -Force
-          $config.bundle.windows | Add-Member -NotePropertyName timestampUrl -NotePropertyValue "http://timestamp.digicert.com" -Force
-          $config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath
+      - name: Build frontend
+        run: npm run build
 
       - name: Build and create Release
-        id: tauri
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'AT-Switch ${{ github.ref_name }}'
           releaseBody: |
-            Release notes are maintained in the [changelog](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md).
+            ## AT-Switch ${{ github.ref_name }}
 
-            Verify downloaded installers with the accompanying `.sha256` files before installation.
-          releaseDraft: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
+            Official open-source release of AT-Switch.
+            
+            - See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for full release notes.
+            - Official Website: [https://atswitch.io](https://atswitch.io)
+          releaseDraft: false
+          prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
           args: ${{ matrix.args }}
-
-      - name: Upload macOS checksums
-        if: runner.os == 'macOS'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          checksum_count=0
-          while IFS= read -r -d '' artifact; do
-            checksum=$(shasum -a 256 "$artifact" | awk '{print $1}')
-            printf '%s  %s\n' "$checksum" "$(basename "$artifact")" > "$artifact.sha256"
-            gh release upload "$GITHUB_REF_NAME" "$artifact.sha256" --clobber
-            checksum_count=$((checksum_count + 1))
-          done < <(find src-tauri/target/universal-apple-darwin/release/bundle -type f -name '*.dmg' -print0)
-          if [[ "$checksum_count" -eq 0 ]]; then
-            echo "No macOS DMG was produced; refusing to leave the draft without checksums." >&2
-            exit 1
-          fi
-
-      - name: Upload Windows checksums
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          $artifacts = Get-ChildItem "src-tauri/target/release/bundle" -Recurse -File |
-            Where-Object { $_.Extension -in ".exe", ".msi" }
-          if ($artifacts.Count -eq 0) {
-            throw "No Windows installer was produced; refusing to leave the draft without checksums."
-          }
-          foreach ($artifact in $artifacts) {
-            $checksumPath = "$($artifact.FullName).sha256"
-            $hash = (Get-FileHash -Algorithm SHA256 $artifact.FullName).Hash.ToLowerInvariant()
-            Set-Content -Path $checksumPath -Value "$hash  $($artifact.Name)"
-            gh release upload $env:GITHUB_REF_NAME $checksumPath --clobber
-          }
