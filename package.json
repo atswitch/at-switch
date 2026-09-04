@@ -5,6 +5,11 @@
   "type": "module",
   "description": "Local-first provider and model switchboard for AI agents.",
   "license": "MIT",
+  "packageManager": "npm@10.9.3",
+  "engines": {
+    "node": ">=20",
+    "npm": ">=10"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/atswitch/at-switch.git"
@@ -13,6 +18,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "licenses:check": "node scripts/check-dependency-licenses.mjs",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",

@@ -22,7 +22,7 @@ const provider: ProviderSummary = {
   kind: "mongyun",
   protocol: "openai_responses",
   baseUrl: "https://api.example.test/v1",
-  isRecommended: true,
+  isRecommended: false,
   isEnabled: true,
   hasApiKey: true,
   verificationStatus: "verified",

@@ -21,6 +21,7 @@ const MODEL_OUTPUT_MODALITY_MIGRATION: i64 = 2026080201;
 /// 默认供应商」的状态，完全交给用户自行添加。
 const PLACEHOLDER_PROVIDER_PURGE_MIGRATION: i64 = 2026080801;
 const CUSTOM_AGENT_INSTALL_PATH_MIGRATION: i64 = 2026081101;
+const PROVIDER_RECOMMENDATION_REMOVAL_MIGRATION: i64 = 2026090401;
 
 pub struct Database {
     connection: Mutex<Connection>,
@@ -327,6 +328,22 @@ impl Database {
             )?;
         }
 
+        let provider_recommendation_removed = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)",
+            [PROVIDER_RECOMMENDATION_REMOVAL_MIGRATION],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !provider_recommendation_removed {
+            connection.execute("UPDATE providers SET is_recommended = 0", [])?;
+            connection.execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, ?2)",
+                params![
+                    PROVIDER_RECOMMENDATION_REMOVAL_MIGRATION,
+                    Utc::now().to_rfc3339()
+                ],
+            )?;
+        }
+
         Ok(())
     }
 
@@ -455,7 +472,7 @@ impl Database {
                 draft.kind.as_str(),
                 draft.protocol.as_str(),
                 draft.base_url.trim(),
-                i64::from(draft.kind == ProviderKind::Mongyun),
+                0_i64,
                 secret_ref,
                 secret_revision,
                 masked_secret,
@@ -1182,6 +1199,51 @@ mod tests {
     }
 
     #[test]
+    fn migration_removes_legacy_provider_recommendations() {
+        let database = Database::in_memory().expect("database");
+        {
+            let connection = database.connection().expect("connection");
+            connection
+                .execute(
+                    r#"
+                    INSERT INTO providers(
+                        id, name, kind, protocol, base_url, is_recommended,
+                        created_at, updated_at
+                    ) VALUES (
+                        'legacy-recommended', 'Legacy Provider', 'mongyun',
+                        'openai_chat_completions', 'https://api.example.test/v1', 1,
+                        '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'
+                    )
+                    "#,
+                    [],
+                )
+                .expect("seed legacy recommendation");
+            connection
+                .execute(
+                    "DELETE FROM schema_migrations WHERE version = ?1",
+                    [PROVIDER_RECOMMENDATION_REMOVAL_MIGRATION],
+                )
+                .expect("reset recommendation migration");
+        }
+
+        database.initialize().expect("rerun migration");
+
+        let provider = database
+            .get_provider("legacy-recommended")
+            .expect("provider after migration");
+        assert!(!provider.summary.is_recommended);
+        let connection = database.connection().expect("connection");
+        let migration_recorded: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)",
+                [PROVIDER_RECOMMENDATION_REMOVAL_MIGRATION],
+                |row| row.get(0),
+            )
+            .expect("migration marker");
+        assert!(migration_recorded);
+    }
+
+    #[test]
     fn migrates_legacy_models_to_text_output_modality() {
         let connection = Connection::open_in_memory().expect("legacy database");
         connection
@@ -1282,6 +1344,37 @@ mod tests {
             provider.api_key_ref.as_deref(),
             Some("provider/provider-1/api-key/v1")
         );
+    }
+
+    #[test]
+    fn saving_a_provider_never_marks_it_as_recommended() {
+        let database = Database::in_memory().expect("database");
+        let draft = ProviderDraft {
+            id: None,
+            name: "Preset Provider".to_owned(),
+            kind: ProviderKind::Mongyun,
+            protocol: ApiProtocol::OpenaiChatCompletions,
+            base_url: "https://api.example.test/v1".to_owned(),
+            api_key: None,
+            default_model_id: Some("model-a".to_owned()),
+            models: vec![ModelDraft {
+                model_id: "model-a".to_owned(),
+                display_name: "Model A".to_owned(),
+                output_modality: ModelOutputModality::Text,
+                supports_streaming: true,
+                supports_tools: true,
+            }],
+            allow_insecure_http: false,
+        };
+
+        database
+            .save_provider("provider-preset", &draft, None, 0, None)
+            .expect("save preset provider");
+
+        let provider = database
+            .get_provider("provider-preset")
+            .expect("preset provider");
+        assert!(!provider.summary.is_recommended);
     }
 
     #[test]
