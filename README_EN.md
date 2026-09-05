@@ -1,195 +1,128 @@
-<p align="center">
-  <img src="./src-tauri/icons/128x128.png" width="112" alt="AT-Switch logo" />
-</p>
+<div align="center">
 
-<h1 align="center">AT-Switch</h1>
+# AT-Switch
 
-<p align="center">
-  <a href="https://github.com/atswitch/at-switch/actions/workflows/ci.yml"><img src="https://github.com/atswitch/at-switch/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License" /></a>
-  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg" alt="macOS and Windows" />
-</p>
+### The All-in-One Manager & Model Switcher for Codex, WorkBuddy, CodeBuddy, QClaw & AutoClaw
 
-<p align="center">
-  <a href="./README.md">简体中文</a> | English
-</p>
+[![Version](https://img.shields.io/github/v/release/atswitch/at-switch?color=blue&label=version)](https://github.com/atswitch/at-switch/releases)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/atswitch/at-switch/releases)
+[![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Downloads](https://img.shields.io/github/downloads/atswitch/at-switch/total)](https://github.com/atswitch/at-switch/releases/latest)
 
-AT-Switch is a local-first desktop application for managing AI provider and model
-configuration across multiple AI agents on macOS and Windows. It is built with
-Tauri 2, Rust, React, and TypeScript.
+### 🌐 The Only Official Website: **[atswitch.io](https://atswitch.io)**
 
-AT-Switch stores Provider API keys in macOS Keychain or Windows Credential Manager.
-Direct mode also writes the selected key to the target agent's native configuration;
-proxy mode avoids that extra copy. AT-Switch does not persist prompts, model
-responses, tool arguments, or per-request logs.
+[中文](README.md) | English | [日本語](README_JA.md) | [Deutsch](README_DE.md) | [Changelog](CHANGELOG.md)
 
-## Features
+</div>
 
-- Manage providers and model catalogs in one place.
-- Keep an independent provider, model, and connection mode for each agent.
-- Switch between AT-Switch-managed configuration and an agent's original setup.
-- Use direct connections by default, with an optional local proxy for protocol
-  conversion and credential isolation.
-- Support OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages.
-- Preserve streaming and tool-calling semantics across supported conversions.
-- Back up agent configuration before atomic writes, validate the result, and roll
-  back failures.
-- Detect installed agents at startup, when the window regains focus, and on manual
-  refresh.
-- Restore the configuration captured before AT-Switch first managed an agent.
-- Switch between Simplified Chinese and English without restarting the app.
+---
 
-## Supported Platforms
+> [!WARNING]
+>
+> ## Official Channel Statement (Please Read)
+>
+> AT-Switch is a **completely free, open-source** desktop application and **never charges any fees**. Please obtain software exclusively via the following official channels:
+>
+> | Category | Official Link |
+> | :--- | :--- |
+> | **Website** | **[atswitch.io](https://atswitch.io)** |
+> | **Source Code** | **[github.com/atswitch/at-switch](https://github.com/atswitch/at-switch)** |
+> | **Releases** | **[GitHub Releases](https://github.com/atswitch/at-switch/releases)** |
+> | **Issues** | **[GitHub Issues](https://github.com/atswitch/at-switch/issues)** |
+>
+> Any website or client that requests payment, balance recharges, or personal login credentials in the name of "AT-Switch" is fraudulent.
 
-| Platform | Minimum | Packages |
-| --- | --- | --- |
-| macOS | macOS 12 | Apple Silicon, Intel, and Universal `.app` / `.dmg` |
-| Windows | Windows 10/11 | x64 executable and NSIS installer |
+---
 
-CI runs frontend checks, Rust formatting, Clippy, Rust tests, and a Tauri desktop
-link build on macOS and Windows.
+## Introduction
 
-## Supported Agents
+**AT-Switch** is a native desktop management tool designed for developers on macOS and Windows to easily configure and switch LLM providers and models across multiple coding Agents.
 
-| Agent | Detection | Configuration | Native protocol |
-| --- | --- | --- | --- |
-| WorkBuddy | macOS / Windows | Supported | OpenAI Chat Completions |
-| CodeBuddy CN | macOS / Windows | Supported | OpenAI Chat Completions |
-| QClaw | macOS / Windows | Supported | OpenAI Chat Completions |
-| AutoClaw | macOS / Windows | Supported | OpenAI Chat Completions |
-| Codex | macOS / Windows | Supported | OpenAI Responses |
+Instead of hunting down scattered, application-specific configuration files, AT-Switch standardizes the workflow: **Select Agent → Manage Providers → Pick Model → Switch**. 
 
-## Direct and Proxy Modes
+By default, switching is executed directly against the native configurations of target agents. When protocol translation or credential isolation is required, an optional built-in local proxy can be activated with a single click.
 
-Direct mode writes the selected provider endpoint, real model ID, and API key to
-the agent's native configuration. Requests do not pass through AT-Switch, and the
-provider must support the protocol used by the selected agent.
+Built with **Tauri 2, Rust, React, and TypeScript**, AT-Switch prioritizes security and performance. Sensitive API keys are securely stored in native system credential vaults (macOS Keychain or Windows Credential Manager) without ever logging prompts or raw request bodies.
 
-The optional local proxy listens only on `127.0.0.1`. Agent configuration contains
-a high-entropy local routing token, while the real provider key remains in the
-operating system credential store. The proxy performs protocol conversion only
-when required.
+---
 
-## Install, Upgrade, and Uninstall
+## ✨ Key Features
 
-Download public, platform-signed packages from
-[GitHub Releases](https://github.com/atswitch/at-switch/releases/latest). Draft,
-unsigned, and ad-hoc-signed artifacts are for maintainer verification only.
+- **Centralized Provider & Model Catalog**: Manage multiple upstream providers (DeepSeek, Kimi, Zhipu GLM, Doubao, MiniMax, Qwen, etc.) and their custom endpoints in one place.
+- **Per-Agent Independence**: Maintain separate model bindings, active configurations, and connection modes for each Agent.
+- **Direct Mode by Default**: Direct configuration writing removes network hops and latency; the local proxy is reserved under Advanced Settings for compatibility needs.
+- **Multi-Protocol Translation**: Seamless interoperability between **OpenAI Chat Completions**, **OpenAI Responses**, and **Anthropic Messages** protocols.
+- **Streaming & Tool Calling**: Built-in codec preserves streaming chunks and function call structures across protocol transitions.
+- **Transactional Config Rollback**: Encrypted backups are automatically created prior to writing changes, with atomic file writes, validation pre-checks, and automatic rollback on failure.
+- **Automatic Lifecycle Management**: Automatically detects running Agent processes and performs graceful restarts when configuration changes.
+- **Native Security & Zero Cloud Dependency**: Zero collection of user prompts, completions, or telemetry. Runs strictly on `127.0.0.1`.
 
-Download the matching `.sha256` file and verify it before installation:
+---
 
-```bash
-# macOS: replace the placeholder with the downloaded DMG filename
-shasum -a 256 -c "AT-Switch.dmg.sha256"
-```
+## 💻 Supported Platforms & Download
 
-```powershell
-# Windows: replace the placeholder with the downloaded EXE or MSI filename
-$installer = "AT-Switch-installer.exe"
-$expected = (Get-Content "$installer.sha256").Split()[0].ToLowerInvariant()
-$actual = (Get-FileHash -Algorithm SHA256 $installer).Hash.ToLowerInvariant()
-if ($actual -ne $expected) { throw "Checksum mismatch" }
-```
+All official release binaries are hosted on [GitHub Releases](https://github.com/atswitch/at-switch/releases).
 
-On macOS, open the DMG and drag AT-Switch into Applications. On Windows, run the
-signed EXE or MSI and follow the installer. To upgrade, quit AT-Switch completely
-and install the new version over the existing installation; local data is retained.
+| Platform | Minimum OS | Architecture | Package Format |
+| :--- | :--- | :--- | :--- |
+| **macOS** | macOS 12 Monterey | Apple Silicon / Intel / Universal | `.dmg` |
+| **Windows** | Windows 10 / 11 | x64 | `.msi` / `.exe` / `-Portable.zip` |
 
-Before uninstalling, restore every managed agent to **Agent original configuration**
-and verify the restoration. Otherwise, endpoints, model selections, and direct-mode
-API keys already written to agent configuration are not removed with AT-Switch.
-A normal uninstall may retain app data and OS credentials for upgrades or reinstalls.
-For an irreversible full cleanup, first back up anything needed, then remove the
-following app-data directory and OS credential entries whose service name is
-`com.atswitch.desktop`:
+---
 
-- macOS: `~/Library/Application Support/com.atswitch.desktop/` and the matching
-  items in Keychain Access;
-- Windows: `%APPDATA%\com.atswitch.desktop\` and the matching items in Credential
-  Manager.
+## 🤖 Supported Agents Matrix
 
-## Getting Started
+| Agent | Auto-Detection | Direct Mode | Default Protocol | Configuration Mechanism |
+| :--- | :--- | :--- | :--- | :--- |
+| **WorkBuddy** | macOS / Windows | ✅ Supported | OpenAI Chat Completions | Updates `~/.workbuddy/models.json`, preserves user custom entries |
+| **CodeBuddy CN** | macOS / Windows | ✅ Supported | OpenAI Chat Completions | Updates `~/.codebuddy/models.json`, syncs workspace defaults |
+| **QClaw** | macOS / Windows | ✅ Supported | OpenAI Chat Completions | Locates and syncs OpenClaw configuration via `~/.qclaw/qclaw.json` |
+| **AutoClaw** | macOS / Windows | ✅ Supported | OpenAI Chat Completions | Manages authoritative model catalogs in Electron user data |
+| **Codex** | macOS / Windows | ✅ Supported | OpenAI Responses | Updates `$CODEX_HOME/config.toml` or `~/.codex/config.toml` cleanly |
 
-Requirements:
+---
 
-- Node.js 20 or later
-- npm 10 or later
-- Rust 1.85 or later
-- The [Tauri 2 platform prerequisites](https://v2.tauri.app/start/prerequisites/)
+## 🛠️ Local Development & Build
+
+### Prerequisites
+- [Node.js](https://nodejs.org/) (v20 or higher)
+- [Rust](https://www.rust-lang.org/) (stable toolchain)
+- Platform build dependencies:
+  - macOS: Xcode Command Line Tools
+  - Windows: Visual Studio C++ Build Tools & WebView2
+
+### Setup & Run
 
 ```bash
+# Clone the repository
 git clone https://github.com/atswitch/at-switch.git
 cd at-switch
+
+# Install frontend dependencies
 npm ci
+
+# Run development mode (Hot Reload frontend + Rust backend)
+npm run tauri dev
 ```
 
-Run the browser mock:
+### Run Tests & Quality Gates
 
 ```bash
-npm run dev
-```
-
-Run the native desktop application:
-
-```bash
-npm run tauri:dev
-```
-
-## Quality Checks
-
-```bash
+# Frontend build & unit tests
 npm run build
 npm test -- --run
-npm run licenses:check
+
+# Rust format check & Clippy
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+# Rust unit & integration tests
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-Tests use temporary directories, test databases, and in-memory credentials. They
-do not read real API keys or modify real agent configuration.
+---
 
-## Packaging and Releases
+## 📄 License
 
-Build an installer on its native platform:
-
-```bash
-npm run tauri:build
-```
-
-Artifacts are written to `src-tauri/target/release/bundle/`.
-
-Pushing a semantic `v*` tag that matches all version manifests creates a draft
-GitHub Release, builds macOS and Windows installers, and uploads SHA-256 checksum
-files. Maintainers must verify platform signatures and run installation smoke
-tests before publishing the draft. Without Apple credentials, the macOS build uses
-an ad-hoc signature and is not notarized. Never publish an unsigned or ad-hoc-signed
-draft.
-
-## Security and Privacy
-
-| Data | Storage |
-| --- | --- |
-| Providers, models, agent bindings, settings | Local SQLite database |
-| Provider API keys | AT-Switch stores them in the OS credential store; direct mode also writes the selected key to the target agent's native configuration |
-| Local routing tokens | OS credential store |
-| Original agent configuration backups | Encrypted `.atsb` files in the app data directory |
-| Prompts, responses, tool arguments, per-request logs | Not stored |
-
-Do not post API keys, complete configuration files, credentials, or private request
-content in public issues. See [SECURITY_EN.md](./SECURITY_EN.md) for private vulnerability
-reporting.
-
-## Community
-
-- [Contributing guide](./CONTRIBUTING_EN.md)
-- [Code of Conduct](./CODE_OF_CONDUCT.md)
-- [Support](./SUPPORT.md)
-- [Changelog](./CHANGELOG.md)
-- [Third-party notices](./THIRD_PARTY_NOTICES.md)
-
-## License
-
-AT-Switch source code is available under the [MIT License](./LICENSE). Third-party
-names, logos, and trademarks remain the property of their respective owners; see
-[THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
+This project is open-sourced under the [MIT License](LICENSE).

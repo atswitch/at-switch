@@ -12,7 +12,7 @@
 
 ### 🌐 唯一官方网站：**[atswitch.io](https://atswitch.io)**
 
-[English](README.md) | 中文 | [日本語](README_JA.md) | [Deutsch](README_DE.md) | [更新日志](CHANGELOG.md)
+中文 | [English](README_EN.md) | [日本語](README_JA.md) | [Deutsch](README_DE.md) | [更新日志](CHANGELOG.md)
 
 </div>
 

@@ -12,7 +12,7 @@
 
 ### 🌐 唯一の公式サイト：**[atswitch.io](https://atswitch.io)**
 
-[English](README.md) | [中文](README_ZH.md) | 日本語 | [Deutsch](README_DE.md) | [Changelog](CHANGELOG.md)
+[中文](README.md) | [English](README_EN.md) | 日本語 | [Deutsch](README_DE.md) | [Changelog](CHANGELOG.md)
 
 </div>
 
