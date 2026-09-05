@@ -4,9 +4,14 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
   release:
@@ -15,9 +20,9 @@ jobs:
       matrix:
         include:
           - platform: 'macos-14'
-            args: '--target universal-apple-darwin'
+            args: '--target universal-apple-darwin --bundles app,dmg'
           - platform: 'windows-2022'
-            args: ''
+            args: '--target x86_64-pc-windows-msvc --bundles nsis'
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -33,7 +38,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-14' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.platform == 'macos-14' && 'aarch64-apple-darwin,x86_64-apple-darwin' || 'x86_64-pc-windows-msvc' }}
 
       - name: Install dependencies
         run: npm ci
