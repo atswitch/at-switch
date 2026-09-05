@@ -108,56 +108,33 @@ const mockSnapshotTemplate: AppSnapshot = {
     "workbuddy",
     "codebuddy",
     "qclaw",
-    "ima",
     "autoclaw",
-    "trae",
     "codex",
-  ].map((id) => {
-    const switchable = id !== "ima" && id !== "trae";
-    return {
-      id,
-      displayName:
-        id === "workbuddy"
-          ? "WorkBuddy"
-          : id === "codebuddy"
-            ? "CodeBuddy"
-            : id === "qclaw"
-              ? "QClaw"
-              : id === "ima"
-                ? "ima"
-                : id === "autoclaw"
-                  ? "AutoClaw"
-                  : id === "trae"
-                    ? "TRAE"
-                    : "Codex",
-      installStatus: "installed" as const,
-      runtimeStatus: "not_running" as const,
-      configHealth: switchable
-        ? ("healthy" as const)
-        : ("unsupported_version" as const),
-      adapterVerified: switchable,
-      detectedVersion: switchable ? "preview" : undefined,
-      providerId: undefined,
-      providerName: undefined,
-      modelId: undefined,
-      mode: undefined,
-      needsRestart:
-        id === "workbuddy" ||
-        id === "codebuddy" ||
-        id === "qclaw" ||
-        id === "autoclaw" ||
-        id === "codex",
-      automaticRestartSupported:
-        id === "workbuddy" ||
-        id === "codebuddy" ||
-        id === "qclaw" ||
-        id === "autoclaw" ||
-        id === "codex",
-      message: switchable
-        ? "浏览器预览使用演示状态；Tauri 版本会读取本机真实安装"
-        : `${id === "trae" ? "TRAE" : "ima"} 自定义模型暂由登录态内部存储管理`,
-    };
-  }),
+  ].map((id) => ({
+    id,
+    displayName:
+      id === "workbuddy"
+        ? "WorkBuddy"
+        : id === "codebuddy"
+          ? "CodeBuddy"
+          : id === "qclaw"
+            ? "QClaw"
+            : id === "autoclaw"
+              ? "AutoClaw"
+              : "Codex",
+    installStatus: "installed" as const,
+    runtimeStatus: "not_running" as const,
+    configHealth: "healthy" as const,
+    adapterVerified: true,
+    detectedVersion: "preview",
+    providerId: undefined,
+    providerName: undefined,
+    modelId: undefined,
+    mode: undefined,
+    needsRestart: true,
+    automaticRestartSupported: true,
+    message: "浏览器预览使用演示状态；Tauri 版本会读取本机真实安装",
+  })),
   proxy: {
     status: "stopped",
     host: "127.0.0.1",
@@ -403,30 +380,6 @@ const realSnapshotData: AppSnapshot = {
       configPath: "/Users/example/.codex/config.toml",
       needsRestart: true,
       automaticRestartSupported: true,
-    },
-    {
-      id: "ima",
-      displayName: "ima",
-      installStatus: "installed",
-      runtimeStatus: "not_running",
-      configHealth: "unsupported_version",
-      adapterVerified: false,
-      detectedVersion: "147.0.7727.5135",
-      needsRestart: false,
-      automaticRestartSupported: false,
-      message: "ima 自定义模型暂由登录态内部存储管理",
-    },
-    {
-      id: "trae",
-      displayName: "TRAE",
-      installStatus: "installed",
-      runtimeStatus: "not_running",
-      configHealth: "unsupported_version",
-      adapterVerified: false,
-      detectedVersion: "3.5.87",
-      needsRestart: false,
-      automaticRestartSupported: false,
-      message: "TRAE 自定义模型暂由登录态内部存储管理",
     },
   ],
   proxy: {

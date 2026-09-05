@@ -1,10 +1,8 @@
 mod codebuddy;
 mod codex;
-mod ima;
 mod lifecycle;
 mod locator;
 mod openclaw;
-mod trae;
 mod workbuddy;
 
 use std::{
@@ -33,11 +31,9 @@ use crate::{
 use self::{
     codebuddy::CodeBuddyAdapter,
     codex::CodexAdapter,
-    ima::ImaAdapter,
     lifecycle::RestartOutcome,
     locator::{normalized_path_string, DiscoveryContext, Installation, InstallationKind},
     openclaw::{AutoClawAdapter, QClawAdapter},
-    trae::TraeAdapter,
     workbuddy::WorkBuddyAdapter,
 };
 
@@ -183,6 +179,7 @@ impl AgentDetection {
         }
     }
 
+    #[allow(dead_code)]
     fn manual(
         id: &'static str,
         display_name: &'static str,
@@ -334,9 +331,7 @@ impl Default for AgentRegistry {
                 Box::new(WorkBuddyAdapter),
                 Box::new(CodeBuddyAdapter),
                 Box::new(QClawAdapter),
-                Box::new(ImaAdapter),
                 Box::new(AutoClawAdapter),
-                Box::new(TraeAdapter),
                 Box::new(CodexAdapter),
             ],
             context: DiscoveryContext::native(),
@@ -1876,15 +1871,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             ids,
-            [
-                "workbuddy",
-                "codebuddy",
-                "qclaw",
-                "ima",
-                "autoclaw",
-                "trae",
-                "codex"
-            ]
+            ["workbuddy", "codebuddy", "qclaw", "autoclaw", "codex"]
         );
     }
 
@@ -1897,9 +1884,7 @@ mod tests {
             "Programs/WorkBuddy/WorkBuddy.exe",
             "Programs/CodeBuddy CN/CodeBuddy CN.exe",
             "Programs/QClaw/QClaw.exe",
-            "Programs/ima.copilot/ima.copilot.exe",
             "Programs/AutoClaw/AutoClaw.exe",
-            "Programs/TRAE/TRAE.exe",
             "Programs/Codex/Codex.exe",
         ] {
             let executable = local_app_data.join(relative);
@@ -2169,7 +2154,6 @@ mod tests {
             ("workbuddy", ApiProtocol::OpenaiChatCompletions),
             ("codebuddy", ApiProtocol::OpenaiChatCompletions),
             ("qclaw", ApiProtocol::OpenaiChatCompletions),
-            ("ima", ApiProtocol::OpenaiChatCompletions),
             ("autoclaw", ApiProtocol::OpenaiChatCompletions),
             ("codex", ApiProtocol::OpenaiResponses),
         ] {

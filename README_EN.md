@@ -58,11 +58,6 @@ link build on macOS and Windows.
 | QClaw | macOS / Windows | Supported | OpenAI Chat Completions |
 | AutoClaw | macOS / Windows | Supported | OpenAI Chat Completions |
 | Codex | macOS / Windows | Supported | OpenAI Responses |
-| ima | macOS / Windows | Detection only | OpenAI-compatible |
-| TRAE | macOS / Windows | Detection only | OpenAI-compatible |
-
-AT-Switch does not read login cookies or modify undocumented internal databases
-for detection-only agents.
 
 ## Direct and Proxy Modes
 

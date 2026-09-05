@@ -32,9 +32,7 @@ export function AgentsPage({
   onClearInstallPath = () => undefined,
 }: AgentsPageProps) {
   const { language, text } = useLanguage();
-  const visibleAgents = agents.filter(
-    (agent) => agent.id !== "ima" && agent.id !== "trae",
-  );
+  const visibleAgents = agents;
   const supportsInstallSelection =
     platform === "macos" || platform === "windows";
 
