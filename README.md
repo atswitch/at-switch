@@ -2,7 +2,7 @@
 
 # AT-Switch
 
-### Codex、WorkBuddy、CodeBuddy、QClaw 和 AutoClaw 的全方位管理与模型切换工具
+### WorkBuddy、CodeBuddy、QClaw、AutoClaw 和 Codex 的全方位管理与模型切换工具
 
 [![Version](https://img.shields.io/github/v/release/atswitch/at-switch?color=blue&label=version)](https://github.com/atswitch/at-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/atswitch/at-switch/releases)
@@ -12,7 +12,7 @@
 
 ### 🌐 唯一官方网站：**[atswitch.io](https://atswitch.io)**
 
-中文 | [English](README_EN.md) | [日本語](README_JA.md) | [Deutsch](README_DE.md) | [更新日志](CHANGELOG.md)
+中文 | [English](README_EN.md) | [日本語](README_JA.md) | [العربية](README_AR.md) | [更新日志](CHANGELOG.md)
 
 </div>
 

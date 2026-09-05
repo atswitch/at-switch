@@ -26,4 +26,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Zero plain-text persistence of API keys in application databases.
   - Zero storage of prompts, model answers, or request bodies.
 - **Transactional Config Safety**: Pre-write snapshot encryption, atomic writes, and rollback on failure.
-- **Multi-language Documentation**: Added English, Chinese, Japanese, and German READMEs.
+- **Multi-language Documentation**: Added Chinese, English, Japanese, and Arabic READMEs.
