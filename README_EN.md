@@ -2,7 +2,7 @@
 
 # AT-Switch
 
-### The All-in-One Manager & Model Switcher for Codex, WorkBuddy, CodeBuddy, QClaw & AutoClaw
+### The All-in-One Manager & Model Switcher for WorkBuddy, CodeBuddy, QClaw, AutoClaw & Codex
 
 [![Version](https://img.shields.io/github/v/release/atswitch/at-switch?color=blue&label=version)](https://github.com/atswitch/at-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/atswitch/at-switch/releases)
@@ -12,7 +12,7 @@
 
 ### 🌐 The Only Official Website: **[atswitch.io](https://atswitch.io)**
 
-[中文](README.md) | English | [日本語](README_JA.md) | [Deutsch](README_DE.md) | [Changelog](CHANGELOG.md)
+[中文](README.md) | English | [日本語](README_JA.md) | [العربية](README_AR.md) | [Changelog](CHANGELOG.md)
 
 </div>
 
