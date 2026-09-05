@@ -17,7 +17,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Support for **QClaw**: Automatic OpenClaw configuration adaptation via `~/.qclaw/qclaw.json`.
   - Support for **AutoClaw**: Electron user data authoritative catalog switching.
   - Support for **Codex**: Full support for config-only switching in `$CODEX_HOME/config.toml` or `~/.codex/config.toml`.
-  - Non-intrusive status detection for **ima** and **TRAE**.
 - **Protocol Translation & Local Proxy**:
   - Dual-mode switching: Direct mode (default, zero latency) and Local Proxy mode (on `127.0.0.1`).
   - Seamless bidirectional translation across OpenAI Chat, OpenAI Responses, and Anthropic Messages.

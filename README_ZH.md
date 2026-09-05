@@ -79,8 +79,6 @@
 | **QClaw** | macOS / Windows | ✅ 支持 | OpenAI Chat Completions | 基于 `~/.qclaw/qclaw.json` 定位并同步 OpenClaw 模型配置 |
 | **AutoClaw** | macOS / Windows | ✅ 支持 | OpenAI Chat Completions | 更新 Electron 用户数据目录中的权威模型设定 |
 | **Codex** | macOS / Windows | ✅ 支持 | OpenAI Responses | 精确更新 `$CODEX_HOME/config.toml` 或 `~/.codex/config.toml`，保留原有注释 |
-| **ima** | macOS / Windows | 仅状态检测 | OpenAI Chat Completions | 账号服务管理自定义模型；采用非侵入式进程与安装检测 |
-| **TRAE** | macOS / Windows | 仅状态检测 | OpenAI-compatible | 本地数据库管理自定义模型；采用非侵入式进程与安装检测 |
 
 ---
 

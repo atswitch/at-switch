@@ -80,8 +80,6 @@ All official release binaries are hosted on [GitHub Releases](https://github.com
 | **QClaw** | macOS / Windows | ✅ Supported | OpenAI Chat Completions | Locates and syncs OpenClaw configuration via `~/.qclaw/qclaw.json` |
 | **AutoClaw** | macOS / Windows | ✅ Supported | OpenAI Chat Completions | Manages authoritative model catalogs in Electron user data |
 | **Codex** | macOS / Windows | ✅ Supported | OpenAI Responses | Updates `$CODEX_HOME/config.toml` or `~/.codex/config.toml` cleanly |
-| **ima** | macOS / Windows | Detection only | OpenAI Chat Completions | Managed via proprietary session; non-intrusive detection |
-| **TRAE** | macOS / Windows | Detection only | OpenAI Compatible | Managed via internal SQLite storage; non-intrusive detection |
 
 ---
 
