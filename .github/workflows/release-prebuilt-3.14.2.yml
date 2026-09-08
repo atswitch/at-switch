@@ -1,0 +1,43 @@
+name: Publish verified v3.14.2 packages
+
+on:
+  push:
+    tags:
+      - 'v3.14.2'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-prebuilt-v3.14.2
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Verify source version
+        run: node scripts/check-release-version.mjs
+      - name: Download the exact website packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir artifacts
+          cd artifacts
+          curl --fail --location --retry 3 --proto '=https' --tlsv1.2 --output AT-Switch_3.14.2_universal.dmg https://atswitch.io/downloads/AT-Switch_3.14.2_universal.dmg
+          curl --fail --location --retry 3 --proto '=https' --tlsv1.2 --output AT-Switch_3.14.2_x64-setup.exe https://atswitch.io/downloads/AT-Switch_3.14.2_x64-setup.exe
+          cp ../.github/releases/v3.14.2-checksums.txt checksums.txt
+          sha256sum --check checksums.txt
+      - name: Publish verified packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create v3.14.2 --verify-tag --draft --title 'AT-Switch v3.14.2' --notes-file .github/releases/v3.14.2.md
+          gh release upload v3.14.2 artifacts/AT-Switch_3.14.2_universal.dmg artifacts/AT-Switch_3.14.2_x64-setup.exe artifacts/checksums.txt
+          gh release edit v3.14.2 --draft=false --latest
