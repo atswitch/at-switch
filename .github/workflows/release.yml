@@ -15,6 +15,8 @@ concurrency:
 
 jobs:
   release:
+    # v3.14.2 publishes the already-verified website packages without rebuilding.
+    if: github.ref_name != 'v3.14.2'
     strategy:
       fail-fast: false
       matrix:
