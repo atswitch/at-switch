@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v3.14.2] - 2026-09-08
+
+### Added
+- Baidu DuMate detection and model switching on macOS and Windows.
+- Account-scoped `opencode.jsonc` overrides that persist across restarts, including default models, small models, and native aliases used by existing conversations and artifact validation.
+- Restoration of original DuMate configuration while preserving unrelated user settings and custom providers.
+
+### Usage
+- Sign in to DuMate and open its coding agent once before refreshing Agent status.
+- Direct mode requires OpenAI Chat Completions. Use the local proxy for other upstream protocols.
+- Windows x64 and macOS Universal installers are identical on the official website and GitHub Releases, with published SHA-256 checksums.
+
 ## [v3.14.1] - 2026-09-04
 
 ### Added
