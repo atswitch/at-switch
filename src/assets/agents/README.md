@@ -10,6 +10,7 @@
 | `qclaw.png` | QClaw macOS 官方应用 `icon.icns` |
 | `autoclaw.png` | AutoClaw macOS 官方应用 `icon.icns` |
 | `codex.png` | OpenAI 官方 ChatGPT/Codex 应用图标 |
+| `dumate.png` | 百度搭子（DuMate）macOS 官方应用 `icon.icns` |
 
 这些图标只用于识别对应产品。产品名、图标和商标归各自权利人所有，不属于本仓库
 MIT 许可证的授权范围。维护者已确认当前素材可以随项目分发；上游品牌规范或素材

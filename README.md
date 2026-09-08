@@ -2,7 +2,7 @@
 
 # AT-Switch
 
-### WorkBuddy、CodeBuddy、QClaw、AutoClaw 和 Codex 的全方位管理与模型切换工具
+### WorkBuddy、CodeBuddy、QClaw、AutoClaw、Codex 和百度搭子的全方位管理与模型切换工具
 
 [![Version](https://img.shields.io/github/v/release/atswitch/at-switch?color=blue&label=version)](https://github.com/atswitch/at-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/atswitch/at-switch/releases)
@@ -79,6 +79,7 @@
 | **QClaw** | macOS / Windows | ✅ 支持 | OpenAI Chat Completions | 基于 `~/.qclaw/qclaw.json` 定位并同步 OpenClaw 模型配置 |
 | **AutoClaw** | macOS / Windows | ✅ 支持 | OpenAI Chat Completions | 更新 Electron 用户数据目录中的权威模型设定 |
 | **Codex** | macOS / Windows | ✅ 支持 | OpenAI Responses | 精确更新 `$CODEX_HOME/config.toml` 或 `~/.codex/config.toml`，保留原有注释 |
+| **百度搭子（DuMate）** | macOS / Windows | ✅ 支持 | OpenAI Chat Completions | 更新当前账号的 XDG 持久覆盖配置，兼容所有会话目录和内置模型别名 |
 
 ---
 

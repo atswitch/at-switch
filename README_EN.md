@@ -2,7 +2,7 @@
 
 # AT-Switch
 
-### The All-in-One Manager & Model Switcher for WorkBuddy, CodeBuddy, QClaw, AutoClaw & Codex
+### The All-in-One Manager & Model Switcher for WorkBuddy, CodeBuddy, QClaw, AutoClaw, Codex & DuMate
 
 [![Version](https://img.shields.io/github/v/release/atswitch/at-switch?color=blue&label=version)](https://github.com/atswitch/at-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/atswitch/at-switch/releases)
@@ -80,6 +80,7 @@ All official release binaries are hosted on [GitHub Releases](https://github.com
 | **QClaw** | macOS / Windows | ✅ Supported | OpenAI Chat Completions | Locates and syncs OpenClaw configuration via `~/.qclaw/qclaw.json` |
 | **AutoClaw** | macOS / Windows | ✅ Supported | OpenAI Chat Completions | Manages authoritative model catalogs in Electron user data |
 | **Codex** | macOS / Windows | ✅ Supported | OpenAI Responses | Updates `$CODEX_HOME/config.toml` or `~/.codex/config.toml` cleanly |
+| **Baidu DuMate** | macOS / Windows | ✅ Supported | OpenAI Chat Completions | Updates the active account's persistent XDG override for every session directory and built-in model alias |
 
 ---
 
