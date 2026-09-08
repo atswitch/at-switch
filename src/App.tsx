@@ -7,7 +7,10 @@ import { BrandLogo } from "./components/BrandLogo";
 import { Modal } from "./components/Modal";
 import { ProviderForm } from "./components/ProviderForm";
 import { LanguageProvider, useLanguage } from "./i18n";
-import { isSwitchableAgent } from "./lib/agentCapabilities";
+import {
+  isSwitchableAgent,
+  supportsDirectBinding,
+} from "./lib/agentCapabilities";
 import { api, getActiveMockSnapshot } from "./lib/api";
 import { AgentsPage } from "./pages/AgentsPage";
 import { ProvidersPage } from "./pages/ProvidersPage";
@@ -420,13 +423,16 @@ function AppContent() {
     provider: ProviderSummary,
     model: ModelSummary,
   ) => {
+    const mode = supportsDirectBinding(agent.id, provider)
+      ? "direct"
+      : "proxy";
     requestApplyAgentBinding(
       agent,
       {
         agentId: agent.id,
         providerId: provider.id,
         modelId: model.modelId,
-        mode: "direct",
+        mode,
       },
       `${provider.id}:${model.modelId}`,
     );

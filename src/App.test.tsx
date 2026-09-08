@@ -227,7 +227,7 @@ describe("AT-Switch desktop shell", () => {
     const detailButtons = await screen.findAllByRole("button", {
       name: "详情",
     });
-    expect(detailButtons).toHaveLength(5);
+    expect(detailButtons).toHaveLength(6);
     expect(
       detailButtons.every((button) => !button.hasAttribute("disabled")),
     ).toBe(true);
@@ -464,6 +464,29 @@ describe("AT-Switch desktop shell", () => {
     expect(await screen.findByText("AutoClaw 已切换")).toBeInTheDocument();
     expect(
       screen.getByText("AutoClaw 已自动重新打开，新配置已经生效。"),
+    ).toBeInTheDocument();
+  });
+
+  it("confirms, switches and automatically restarts DuMate", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "WorkBuddy" });
+    await user.click(screen.getByRole("tab", { name: "百度搭子" }));
+    await screen.findByRole("heading", { name: "百度搭子" });
+    const modelRow = screen.getByText("GLM-5.1").closest("article");
+    expect(modelRow).not.toBeNull();
+    await user.click(within(modelRow!).getByRole("button", { name: "切换" }));
+
+    expect(
+      screen.getByRole("heading", { name: "重启 百度搭子 后切换模型" }),
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "切换并自动重启" }),
+    );
+    expect(await screen.findByText("百度搭子 已切换")).toBeInTheDocument();
+    expect(
+      screen.getByText("百度搭子 已自动重新打开，新配置已经生效。"),
     ).toBeInTheDocument();
   });
 

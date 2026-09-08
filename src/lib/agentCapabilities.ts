@@ -11,6 +11,7 @@ export const SWITCHABLE_AGENT_IDS = [
   "qclaw",
   "autoclaw",
   "codex",
+  "dumate",
 ] as const;
 
 export function isSwitchableAgent(agent: AgentSummary): boolean {
@@ -20,9 +21,12 @@ export function isSwitchableAgent(agent: AgentSummary): boolean {
 }
 
 export function supportsDirectBinding(
-  _agentId: string,
-  _provider: Pick<ProviderSummary, "kind" | "protocol">,
+  agentId: string,
+  provider: Pick<ProviderSummary, "kind" | "protocol">,
 ): boolean {
+  if (agentId === "dumate") {
+    return providerSupportedProtocols(provider).includes("openai_chat_completions");
+  }
   return true;
 }
 
@@ -39,7 +43,12 @@ export function directBindingRequirement(
   agentId: string,
   language: AppLanguage = "zh-CN",
 ): string {
-  if (agentId === "workbuddy" || agentId === "codebuddy") return "OpenAI Chat";
+  if (
+    agentId === "workbuddy" ||
+    agentId === "codebuddy" ||
+    agentId === "dumate"
+  )
+    return "OpenAI Chat";
   if (agentId === "codex") return "OpenAI Responses";
   return language === "zh-CN"
     ? "智能体支持的原生协议"
