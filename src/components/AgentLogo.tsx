@@ -3,6 +3,7 @@ import clsx from "clsx";
 import autoclawIcon from "../assets/agents/autoclaw.png";
 import codebuddyIcon from "../assets/agents/codebuddy.png";
 import codexIcon from "../assets/agents/codex.png";
+import dumateIcon from "../assets/agents/dumate.png";
 import qclawIcon from "../assets/agents/qclaw.png";
 import workbuddyIcon from "../assets/agents/workbuddy.png";
 
@@ -12,6 +13,7 @@ const agentLogos: Partial<Record<string, string>> = {
   qclaw: qclawIcon,
   autoclaw: autoclawIcon,
   codex: codexIcon,
+  dumate: dumateIcon,
 };
 
 interface AgentLogoProps {

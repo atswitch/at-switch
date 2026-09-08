@@ -2,7 +2,7 @@
 
 # AT-Switch
 
-### WorkBuddy、CodeBuddy、QClaw、AutoClaw、Codex のオールインワン管理・モデル切り替えツール
+### WorkBuddy、CodeBuddy、QClaw、AutoClaw、Codex、DuMate のオールインワン管理・モデル切り替えツール
 
 [![Version](https://img.shields.io/github/v/release/atswitch/at-switch?color=blue&label=version)](https://github.com/atswitch/at-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/atswitch/at-switch/releases)

@@ -23,7 +23,7 @@ describe("Agent protocol capabilities", () => {
     expect(supportsDirectBinding("codex", mongyun)).toBe(true);
   });
 
-  it("allows direct binding for all providers and agents", () => {
+  it("preserves direct binding behavior for existing agents", () => {
     expect(
       supportsDirectBinding("codex", {
         kind: "custom",
@@ -36,6 +36,22 @@ describe("Agent protocol capabilities", () => {
         protocol: "openai_responses",
       }),
     ).toBe(true);
+  });
+
+  it("limits DuMate direct binding to OpenAI Chat providers", () => {
+    expect(
+      supportsDirectBinding("dumate", {
+        kind: "custom",
+        protocol: "openai_chat_completions",
+      }),
+    ).toBe(true);
+    expect(
+      supportsDirectBinding("dumate", {
+        kind: "custom",
+        protocol: "openai_responses",
+      }),
+    ).toBe(false);
+    expect(supportsDirectBinding("dumate", mongyun)).toBe(true);
   });
 
   it("allows OpenClaw-based Agents to use configured protocols directly", () => {

@@ -100,28 +100,22 @@ function mergeModelDrafts(
   return merged;
 }
 
+const mockAgentDisplayNames = {
+  workbuddy: "WorkBuddy",
+  codebuddy: "CodeBuddy",
+  qclaw: "QClaw",
+  autoclaw: "AutoClaw",
+  codex: "Codex",
+  dumate: "百度搭子",
+} as const;
+
 const mockSnapshotTemplate: AppSnapshot = {
   appVersion: "0.1.0-dev",
   platform: browserPlatform(),
   providers: [],
-  agents: [
-    "workbuddy",
-    "codebuddy",
-    "qclaw",
-    "autoclaw",
-    "codex",
-  ].map((id) => ({
+  agents: Object.entries(mockAgentDisplayNames).map(([id, displayName]) => ({
     id,
-    displayName:
-      id === "workbuddy"
-        ? "WorkBuddy"
-        : id === "codebuddy"
-          ? "CodeBuddy"
-          : id === "qclaw"
-            ? "QClaw"
-            : id === "autoclaw"
-              ? "AutoClaw"
-              : "Codex",
+    displayName,
     installStatus: "installed" as const,
     runtimeStatus: "not_running" as const,
     configHealth: "healthy" as const,
@@ -154,7 +148,7 @@ const mockSnapshotTemplate: AppSnapshot = {
 };
 
 const realSnapshotData: AppSnapshot = {
-  appVersion: "3.14.1",
+  appVersion: "3.14.2",
   platform: "macos",
   providers: [
     {

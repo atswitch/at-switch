@@ -1,5 +1,6 @@
 mod codebuddy;
 mod codex;
+mod dumate;
 mod lifecycle;
 mod locator;
 mod openclaw;
@@ -31,6 +32,7 @@ use crate::{
 use self::{
     codebuddy::CodeBuddyAdapter,
     codex::CodexAdapter,
+    dumate::DuMateAdapter,
     lifecycle::RestartOutcome,
     locator::{normalized_path_string, DiscoveryContext, Installation, InstallationKind},
     openclaw::{AutoClawAdapter, QClawAdapter},
@@ -333,6 +335,7 @@ impl Default for AgentRegistry {
                 Box::new(QClawAdapter),
                 Box::new(AutoClawAdapter),
                 Box::new(CodexAdapter),
+                Box::new(DuMateAdapter),
             ],
             context: DiscoveryContext::native(),
         }
@@ -527,16 +530,12 @@ impl AgentService {
                 "自定义安装位置仅支持 macOS 和 Windows。",
             ));
         }
-        if !matches!(
-            agent_id,
-            "workbuddy" | "codebuddy" | "qclaw" | "autoclaw" | "codex"
-        ) {
-            return Err(CommandError::new(
+        let adapter = self.registry.adapter(agent_id).map_err(|_| {
+            CommandError::new(
                 "custom_install_path_agent_unsupported",
                 "该 Agent 不支持选择自定义安装位置。",
-            ));
-        }
-        let adapter = self.registry.adapter(agent_id)?;
+            )
+        })?;
         let normalized = path
             .map(str::trim)
             .filter(|path| !path.is_empty())
@@ -1871,7 +1870,14 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             ids,
-            ["workbuddy", "codebuddy", "qclaw", "autoclaw", "codex"]
+            [
+                "workbuddy",
+                "codebuddy",
+                "qclaw",
+                "autoclaw",
+                "codex",
+                "dumate"
+            ]
         );
     }
 
@@ -1886,6 +1892,7 @@ mod tests {
             "Programs/QClaw/QClaw.exe",
             "Programs/AutoClaw/AutoClaw.exe",
             "Programs/Codex/Codex.exe",
+            "Programs/DuMate/DuMate.exe",
         ] {
             let executable = local_app_data.join(relative);
             fs::create_dir_all(executable.parent().expect("parent")).expect("app directory");
@@ -1906,7 +1913,7 @@ mod tests {
         };
 
         let detections = registry.detections();
-        assert_eq!(detections.len(), 7);
+        assert_eq!(detections.len(), 6);
         for detection in detections {
             assert_ne!(
                 detection.install_status,
@@ -1920,7 +1927,7 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn custom_installation_directories_work_for_all_five_switchable_agents() {
+    fn custom_installation_directories_work_for_all_switchable_agents() {
         let temp = tempfile::tempdir().expect("temp");
         let registry = AgentRegistry {
             context: DiscoveryContext {
@@ -1942,6 +1949,7 @@ mod tests {
             ("qclaw", "QClaw.exe"),
             ("autoclaw", "AutoClaw.exe"),
             ("codex", "Codex.exe"),
+            ("dumate", "DuMate.exe"),
         ] {
             let custom_directory = temp.path().join(format!("custom-{agent_id}"));
             let executable = custom_directory.join(executable_name);
@@ -1967,7 +1975,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn custom_installation_directories_work_for_all_five_switchable_agents_on_macos() {
+    fn custom_installation_directories_work_for_all_switchable_agents_on_macos() {
         let temp = tempfile::tempdir().expect("temp");
         let registry = AgentRegistry {
             context: DiscoveryContext {
@@ -1987,6 +1995,7 @@ mod tests {
             ("qclaw", "QClaw.app"),
             ("autoclaw", "AutoClaw.app"),
             ("codex", "Codex.app"),
+            ("dumate", "DuMate.app"),
         ] {
             let custom_directory = temp.path().join(format!("custom-{agent_id}"));
             let app = custom_directory.join(app_name);
@@ -2156,6 +2165,7 @@ mod tests {
             ("qclaw", ApiProtocol::OpenaiChatCompletions),
             ("autoclaw", ApiProtocol::OpenaiChatCompletions),
             ("codex", ApiProtocol::OpenaiResponses),
+            ("dumate", ApiProtocol::OpenaiChatCompletions),
         ] {
             let adapter = registry.adapter(agent_id).expect("adapter");
             assert_eq!(
@@ -2191,6 +2201,7 @@ mod tests {
             ("qclaw", ApiProtocol::OpenaiChatCompletions),
             ("autoclaw", ApiProtocol::OpenaiChatCompletions),
             ("codex", ApiProtocol::OpenaiResponses),
+            ("dumate", ApiProtocol::OpenaiChatCompletions),
         ] {
             let adapter = registry.adapter(agent_id).expect("adapter");
             assert_eq!(

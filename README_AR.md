@@ -2,7 +2,7 @@
 
 # AT-Switch
 
-### أداة شاملة لإدارة وتبديل النماذج لـ WorkBuddy و CodeBuddy و QClaw و AutoClaw و Codex
+### أداة شاملة لإدارة وتبديل النماذج لـ WorkBuddy و CodeBuddy و QClaw و AutoClaw و Codex و DuMate
 
 [![Version](https://img.shields.io/github/v/release/atswitch/at-switch?color=blue&label=version)](https://github.com/atswitch/at-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/atswitch/at-switch/releases)
@@ -79,6 +79,7 @@
 | **QClaw** | macOS / Windows | ✅ مدعوم | OpenAI Chat Completions | تحديد موقع ومزامنة تكوين OpenClaw عبر `~/.qclaw/qclaw.json` |
 | **AutoClaw** | macOS / Windows | ✅ مدعوم | OpenAI Chat Completions | إدارة إعدادات النماذج في دليل بيانات Electron |
 | **Codex** | macOS / Windows | ✅ مدعوم | OpenAI Responses | تحديث `$CODEX_HOME/config.toml` أو `~/.codex/config.toml` بدقة |
+| **Baidu DuMate** | macOS / Windows | ✅ مدعوم | OpenAI Chat Completions | تحديث تجاوز XDG الدائم للحساب النشط ليشمل جميع جلسات العمل وأسماء النماذج المدمجة |
 
 ---
 
