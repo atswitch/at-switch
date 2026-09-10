@@ -5,6 +5,70 @@ import type { AgentSummary, ProviderSummary } from "../types";
 import { SwitchboardPage } from "./SwitchboardPage";
 
 describe("SwitchboardPage", () => {
+  it.each([
+    { configHealth: "takeover_interrupted", state: "an interrupted first switch" },
+    { configHealth: "external_changed", state: "managed account settings without a matching database binding" },
+  ] as const)("keeps ima recovery available for $state without claiming original models are active", async ({ configHealth }) => {
+    const user = userEvent.setup();
+    const onRestoreNative = vi.fn();
+    render(<SwitchboardPage
+      agent={{
+        id: "ima", displayName: "ima", installStatus: "installed",
+        runtimeStatus: "not_running", configHealth,
+        adapterVerified: true, needsRestart: true, automaticRestartSupported: true,
+        activationRequired: true, message: "上次切换尚未完成，请恢复原始模型。",
+      }}
+      providers={[]} onCreateProvider={vi.fn()} onEditProvider={vi.fn()}
+      onTestProvider={vi.fn()} onSwitchModel={vi.fn()} onRestoreNative={onRestoreNative}
+    />);
+    const route = screen.getByLabelText("当前智能体状态");
+    expect(within(route).getByText("模型状态待确认")).toBeInTheDocument();
+    expect(within(route).queryByText("ima 原有模型")).not.toBeInTheDocument();
+    const original = screen.getByText("原始模型").closest("article")!;
+    expect(within(original).queryByText("使用中")).not.toBeInTheDocument();
+    const restore = within(original).getByRole("button", { name: "切换" });
+    expect(restore).toBeEnabled();
+    await user.click(restore);
+    expect(onRestoreNative).toHaveBeenCalledOnce();
+  });
+
+  it("uses the shared ima list, disables incompatible endpoints, and restores original models", async () => {
+    const user = userEvent.setup();
+    const onRestoreNative = vi.fn();
+    const ima: AgentSummary = {
+      id: "ima", displayName: "ima", installStatus: "installed",
+      runtimeStatus: "not_running", configHealth: "healthy", adapterVerified: true,
+      needsRestart: false, automaticRestartSupported: true,
+      providerId: "selected", providerName: "Selected provider", modelId: "selected-model", mode: "direct",
+    };
+    const provider = (id: string, baseUrl: string, protocol: ProviderSummary["protocol"]): ProviderSummary => ({
+      id, name: id, kind: "custom", protocol, baseUrl,
+      hasApiKey: true, isEnabled: true, isRecommended: false, verificationStatus: "verified",
+      models: [{ id: `${id}:model`, providerId: id, modelId: `${id}-model`, displayName: `${id} model`, outputModality: "text", supportsStreaming: true, supportsTools: false, source: "custom", verificationStatus: "verified" }],
+    });
+    render(<SwitchboardPage
+      agent={ima}
+      providers={[
+        provider("Public", "https://api.example.test/v1", "openai_chat_completions"),
+        provider("Responses", "https://api.example.test/v1", "openai_responses"),
+        provider("Local", "http://127.0.0.1:1234/v1", "openai_chat_completions"),
+      ]}
+      onCreateProvider={vi.fn()} onEditProvider={vi.fn()} onTestProvider={vi.fn()}
+      onSwitchModel={vi.fn()} onRestoreNative={onRestoreNative}
+    />);
+    const rows = within(screen.getByLabelText("ima 模型列表")).getAllByRole("article");
+    expect(within(rows[0]!).getByRole("button", { name: "切换" })).toBeEnabled();
+    for (const row of rows.slice(1)) {
+      const button = within(row).getByRole("button", { name: "切换" });
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute("title", "ima 需要公网可访问的 OpenAI Chat 接口，无法使用本机或局域网地址。");
+    }
+    const original = screen.getByText("原始模型").closest("article")!;
+    expect(within(original).queryByText(/自带模型/)).not.toBeInTheDocument();
+    await user.click(within(original).getByRole("button", { name: "切换" }));
+    expect(onRestoreNative).toHaveBeenCalledOnce();
+  });
+
   it("orders provider models by the shared preset order instead of creation order", () => {
     const agent: AgentSummary = {
       id: "workbuddy",

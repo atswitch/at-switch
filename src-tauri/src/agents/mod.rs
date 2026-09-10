@@ -1,9 +1,15 @@
 mod codebuddy;
 mod codex;
 mod dumate;
+mod ima;
+mod ima_adapter;
+mod ima_local;
 mod lifecycle;
 mod locator;
 mod openclaw;
+mod service_adapter;
+#[cfg(test)]
+mod service_adapter_tests;
 mod workbuddy;
 
 use std::{
@@ -29,10 +35,12 @@ use crate::{
     services::{BaselineSnapshot, ConfigTransaction, FileChange},
 };
 
+use self::service_adapter::ServiceConfigAdapter;
 use self::{
     codebuddy::CodeBuddyAdapter,
     codex::CodexAdapter,
     dumate::DuMateAdapter,
+    ima_adapter::ImaAdapter,
     lifecycle::RestartOutcome,
     locator::{normalized_path_string, DiscoveryContext, Installation, InstallationKind},
     openclaw::{AutoClawAdapter, QClawAdapter},
@@ -254,6 +262,7 @@ impl AgentDetection {
                     .as_ref()
                     .is_some_and(|installation| installation.kind == InstallationKind::DesktopApp),
             activation_required: false,
+            requires_account_connection: false,
             message: self.message.clone(),
         }
     }
@@ -303,6 +312,9 @@ trait AgentAdapter: Send + Sync {
     fn native_activation_required(&self, _detection: &AgentDetection) -> bool {
         false
     }
+    fn service_config(&self) -> Option<&dyn ServiceConfigAdapter> {
+        None
+    }
 }
 
 fn matched_binding_protocols(
@@ -336,6 +348,7 @@ impl Default for AgentRegistry {
                 Box::new(AutoClawAdapter),
                 Box::new(CodexAdapter),
                 Box::new(DuMateAdapter),
+                Box::new(ImaAdapter::default()),
             ],
             context: DiscoveryContext::native(),
         }
@@ -416,6 +429,10 @@ pub struct AgentService {
     transaction: ConfigTransaction,
     proxy: Arc<ProxySupervisor>,
     proxy_routes_restored: AtomicBool,
+    // A service operation includes its database snapshot, remote transaction,
+    // compensation and final summary; locking only the adapter leaves stale
+    // rollback metadata able to overwrite another successful operation.
+    service_operations: tokio::sync::Mutex<()>,
 }
 
 impl AgentService {
@@ -432,6 +449,7 @@ impl AgentService {
             secret_store,
             proxy,
             proxy_routes_restored: AtomicBool::new(false),
+            service_operations: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -448,6 +466,11 @@ impl AgentService {
             .into_iter()
             .map(|detection| {
                 let mut summary = detection.summary();
+                if let Some(service) = self.registry.adapter(&summary.id)?.service_config() {
+                    summary.requires_account_connection = service.account_scope(&detection)
+                        .map(|scope| !self.transaction.service_checkpoint_exists(&summary.id, &scope))
+                        .unwrap_or(true);
+                }
                 if let Some(binding) = bindings.get(&summary.id) {
                     enrich_summary(&self.database, &mut summary, binding);
                     self.enrich_binding_health(&mut summary, binding);
@@ -461,6 +484,8 @@ impl AgentService {
                                     "{} 的实际配置与 AT-Switch 记录不一致：{}。请重新点击目标模型的“切换”，AT-Switch 会重新写入并校验。",
                                     summary.display_name, error.message,
                                 ));
+                            } else if adapter.service_config().is_some() {
+                                summary.message = Some("本地模型选择与上次切换一致；再次切换时会同步并校验在线模型设置。".to_owned());
                             } else {
                                 summary.message = Some(format!(
                                     "{} 当前配置与 AT-Switch 记录一致；可直接切换 Provider、模型和接入方式。",
@@ -468,6 +493,51 @@ impl AgentService {
                                 ));
                             }
                         }
+                    }
+                }
+                if let Some(service) = self.registry.adapter(&summary.id)?.service_config() {
+                    if !summary.requires_account_connection {
+                        match service.checkpoint_status(&detection, &self.transaction) {
+                            Ok(Some((_, true))) => {
+                                summary.config_health = AgentConfigHealth::TakeoverInterrupted;
+                                summary.activation_required = true;
+                                summary.message = Some("上次 ima 切换尚未完成，请点击切换或恢复原始模型，AT-Switch 会先恢复中断的操作。".to_owned());
+                            }
+                            Ok(Some((true, false))) if !bindings.contains_key(&summary.id) => {
+                                summary.config_health = AgentConfigHealth::ExternalChanged;
+                                summary.activation_required = true;
+                                summary.message = Some("当前 ima 账号存在已管理的模型设置，请重新选择目标模型或恢复原始模型。".to_owned());
+                            }
+                            Ok(Some((true, false))) if matches!(summary.config_health, AgentConfigHealth::ExternalChanged) => {
+                                summary.provider_name = None;
+                                summary.provider_id = None;
+                                summary.model_id = None;
+                                summary.mode = None;
+                                summary.activation_required = true;
+                                summary.message = Some("当前 ima 账号的模型设置与保存的绑定不同，请重新选择模型或恢复原始模型。".to_owned());
+                            }
+                            Ok(Some((false, false))) | Ok(None) => {
+                                summary.provider_name = None;
+                                summary.provider_id = None;
+                                summary.model_id = None;
+                                summary.mode = None;
+                                summary.config_health = detection.config_health;
+                                summary.message = detection.message.clone();
+                            }
+                            Err(_) => {
+                                summary.config_health = AgentConfigHealth::ManualRecoveryRequired;
+                                summary.activation_required = true;
+                                summary.message = Some("ima 的模型恢复记录暂时无法读取，请解锁系统凭据库后重试恢复。".to_owned());
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        // A binding from another account must not be displayed
+                        // as this account's currently selected Provider.
+                        summary.provider_name = None;
+                        summary.provider_id = None;
+                        summary.model_id = None;
+                        summary.mode = None;
                     }
                 }
                 if summary.id == "workbuddy"
@@ -624,8 +694,178 @@ impl AgentService {
         Ok(())
     }
 
-    pub async fn apply(&self, draft: AgentBindingDraft) -> AppResult<AgentSummary> {
+    fn require_service_connection(
+        &self,
+        service: &dyn ServiceConfigAdapter,
+        detection: &AgentDetection,
+        confirmed: bool,
+    ) -> AppResult<()> {
+        let scope = service.account_scope(detection)?;
+        if !confirmed
+            && !self
+                .transaction
+                .service_checkpoint_exists(detection.id, &scope)
+        {
+            return Err(CommandError::new(
+                "agent_account_connection_required",
+                "首次使用需要确认连接当前 ima 账号",
+            )
+            .with_recovery("请点击目标模型的“切换”，确认连接后继续。"));
+        }
+        Ok(())
+    }
+
+    async fn apply_service_binding(
+        &self,
+        adapter: &dyn AgentAdapter,
+        service: &dyn ServiceConfigAdapter,
+        detection: &AgentDetection,
+        draft: &AgentBindingDraft,
+        confirmed: bool,
+    ) -> AppResult<AgentSummary> {
+        let provider = self.database.get_provider(&draft.provider_id)?;
+        let model = provider
+            .summary
+            .models
+            .iter()
+            .find(|model| model.model_id == draft.model_id)
+            .ok_or_else(|| CommandError::new("model_not_found", "所选模型不属于该 Provider"))?;
+        let (source_protocol, upstream_protocol) =
+            matched_binding_protocols(adapter, draft.mode, &provider.summary);
+        // Validate the protocol/endpoint before prompting for either credential.
+        let mut desired = DesiredAgentBinding {
+            mode: draft.mode,
+            provider_name: &provider.summary.name,
+            model_id: &model.model_id,
+            supports_tools: model.supports_tools,
+            source_protocol,
+            upstream_protocol,
+            base_url: &provider.summary.base_url,
+            credential: "",
+        };
+        adapter.validate_binding(&desired)?;
+        self.require_service_connection(service, detection, confirmed)?;
+        let reference = provider
+            .api_key_ref
+            .as_deref()
+            .ok_or_else(|| CommandError::new("secret_missing", "Provider 的 API Key 不存在"))?;
+        let credential = self.secret_store.get(reference)?;
+        desired.credential = credential.expose();
+        let binding = StoredAgentBinding {
+            agent_id: draft.agent_id.clone(),
+            mode: draft.mode.as_str().to_owned(),
+            provider_id: draft.provider_id.clone(),
+            default_model_id: draft.model_id.clone(),
+            request_protocol: source_protocol,
+            local_token_ref: None,
+            local_token_revision: 0,
+        };
+        self.database.upsert_agent_state(&detection.summary())?;
+        let previous_binding = self.database.get_agent_binding(&draft.agent_id)?;
+        let commit = || self.database.save_agent_binding(&binding);
+        let outcome = match service
+            .apply(detection, &desired, &self.transaction, &commit)
+            .await
+        {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let restored = match previous_binding {
+                    Some(previous) => self.database.save_agent_binding(&previous),
+                    None => self
+                        .database
+                        .delete_agent_binding_and_runtime_selections(&draft.agent_id),
+                };
+                restored.map_err(|_| {
+                    CommandError::new(
+                        "agent_binding_recovery_required",
+                        "模型切换失败，绑定记录需要恢复；请再次恢复原始模型。",
+                    )
+                })?;
+                return Err(error);
+            }
+        };
+        let mut summary = detection.summary();
+        enrich_summary(&self.database, &mut summary, &binding);
+        summary.requires_account_connection = false;
+        summary.needs_restart = outcome.needs_restart;
+        summary.message = Some(outcome.message);
+        self.database.upsert_agent_state(&summary)?;
+        Ok(summary)
+    }
+
+    async fn restore_service_binding(
+        &self,
+        service: &dyn ServiceConfigAdapter,
+        detection: &AgentDetection,
+        confirmed: bool,
+    ) -> AppResult<AgentSummary> {
+        if detection.install_status == AgentInstallStatus::NotInstalled {
+            return Err(CommandError::new(
+                "agent_not_installed",
+                "请安装并登录 ima 后恢复原始模型。",
+            ));
+        }
+        self.require_service_connection(service, detection, confirmed)?;
+        let previous_binding = self.database.get_agent_binding(detection.id)?;
+        let commit = || {
+            self.database
+                .delete_agent_binding_and_runtime_selections(detection.id)
+        };
+        let outcome = match service.restore(detection, &self.transaction, &commit).await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                if let Some(previous) = previous_binding {
+                    self.database.save_agent_binding(&previous).map_err(|_| {
+                        CommandError::new(
+                            "agent_binding_recovery_required",
+                            "原始模型恢复未完成，绑定记录需要恢复；请重试。",
+                        )
+                    })?;
+                }
+                return Err(error);
+            }
+        };
+        let mut summary = detection.summary();
+        summary.requires_account_connection = false;
+        summary.needs_restart = outcome.needs_restart;
+        summary.message = Some(outcome.message);
+        self.database.upsert_agent_state(&summary)?;
+        Ok(summary)
+    }
+
+    pub async fn delete_provider_with_service_restore(
+        &self,
+        provider_id: &str,
+        delete: &(dyn Fn() -> AppResult<()> + Send + Sync),
+    ) -> AppResult<Vec<String>> {
+        // Keep the affected-binding lookup and Provider deletion in the same
+        // scope, so a new service binding cannot appear between restoration
+        // and deletion of its metadata and credential.
+        let _operation = self.service_operations.lock().await;
+        let affected = self.database.affected_agent_ids_for_provider(provider_id)?;
+        for agent_id in &affected {
+            let adapter = self.registry.adapter(agent_id)?;
+            if let Some(service) = adapter.service_config() {
+                let detection = self.detect_agent(adapter)?;
+                self.restore_service_binding(service, &detection, false)
+                    .await?;
+            }
+        }
+        delete()?;
+        Ok(affected)
+    }
+
+    pub async fn apply_authorized(
+        &self,
+        draft: AgentBindingDraft,
+        confirm_account_connection: bool,
+    ) -> AppResult<AgentSummary> {
         let adapter = self.registry.adapter(&draft.agent_id)?;
+        let _operation = if adapter.service_config().is_some() {
+            Some(self.service_operations.lock().await)
+        } else {
+            None
+        };
         let detection = self.detect_agent(adapter)?;
         if detection.install_status == AgentInstallStatus::NotInstalled {
             return Err(CommandError::new("agent_not_installed", "未检测到该 Agent"));
@@ -638,6 +878,17 @@ impl AgentService {
                     .clone()
                     .unwrap_or_else(|| "该 Agent 当前保持只读".to_owned()),
             ));
+        }
+        if let Some(service) = adapter.service_config() {
+            return self
+                .apply_service_binding(
+                    adapter,
+                    service,
+                    &detection,
+                    &draft,
+                    confirm_account_connection,
+                )
+                .await;
         }
         let config_path = detection.config_path.clone().ok_or_else(|| {
             CommandError::new("agent_config_path_missing", "Agent 配置路径不可用")
@@ -918,9 +1169,23 @@ impl AgentService {
         Ok(summary)
     }
 
-    pub async fn restore_native(&self, agent_id: &str) -> AppResult<AgentSummary> {
+    pub async fn restore_native_authorized(
+        &self,
+        agent_id: &str,
+        confirm_account_connection: bool,
+    ) -> AppResult<AgentSummary> {
         let adapter = self.registry.adapter(agent_id)?;
+        let _operation = if adapter.service_config().is_some() {
+            Some(self.service_operations.lock().await)
+        } else {
+            None
+        };
         let detection = self.detect_agent(adapter)?;
+        if let Some(service) = adapter.service_config() {
+            return self
+                .restore_service_binding(service, &detection, confirm_account_connection)
+                .await;
+        }
         if detection.install_status == AgentInstallStatus::NotInstalled {
             return Err(CommandError::new("agent_not_installed", "未检测到该 Agent"));
         }
@@ -1138,6 +1403,12 @@ impl AgentService {
     /// * Silently succeeds when the Agent is not installed or read-only.
     pub async fn restore_native_after_provider_deletion(&self, agent_id: &str) -> AppResult<()> {
         let adapter = self.registry.adapter(agent_id)?;
+        // Service-backed settings were restored before deleting the Provider.
+        // An offline service must never cause its only recoverable binding/key
+        // to be deleted by the legacy best-effort cleanup path.
+        if adapter.service_config().is_some() {
+            return Ok(());
+        }
         let detection = self.detect_agent(adapter)?;
         if detection.install_status == AgentInstallStatus::NotInstalled {
             return Ok(());
@@ -1251,6 +1522,9 @@ impl AgentService {
             },
             credential: credential.expose(),
         };
+        if let Some(service) = adapter.service_config() {
+            return service.verify_cached(detection, &desired, &self.transaction);
+        }
         adapter.verify_config(detection, &desired)?;
         if adapter.id() == "codebuddy" {
             codebuddy::verify_workspace_model(detection, &model.model_id)?;
@@ -1876,7 +2150,8 @@ mod tests {
                 "qclaw",
                 "autoclaw",
                 "codex",
-                "dumate"
+                "dumate",
+                "ima"
             ]
         );
     }
@@ -1950,6 +2225,7 @@ mod tests {
             ("autoclaw", "AutoClaw.exe"),
             ("codex", "Codex.exe"),
             ("dumate", "DuMate.exe"),
+            ("ima", "ima.copilot.exe"),
         ] {
             let custom_directory = temp.path().join(format!("custom-{agent_id}"));
             let executable = custom_directory.join(executable_name);
@@ -1996,6 +2272,7 @@ mod tests {
             ("autoclaw", "AutoClaw.app"),
             ("codex", "Codex.app"),
             ("dumate", "DuMate.app"),
+            ("ima", "ima.copilot.app"),
         ] {
             let custom_directory = temp.path().join(format!("custom-{agent_id}"));
             let app = custom_directory.join(app_name);

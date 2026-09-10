@@ -87,6 +87,8 @@ pub struct AgentSummary {
     pub needs_restart: bool,
     pub automatic_restart_supported: bool,
     pub activation_required: bool,
+    #[serde(default)]
+    pub requires_account_connection: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }

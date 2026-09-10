@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { api } from "./lib/api";
 
@@ -53,11 +53,68 @@ const seedTestProviders = async () => {
 };
 
 describe("AT-Switch desktop shell", () => {
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(async () => {
     window.localStorage.clear();
     window.localStorage.setItem("at-switch-language", "zh-CN");
     api.resetMock();
     await seedTestProviders();
+  });
+
+  it("connects ima once, cancels without access, switches again and restores original selections", async () => {
+    const user = userEvent.setup();
+    const apply = vi.spyOn(api, "applyAgentBinding");
+    const restore = vi.spyOn(api, "restoreAgentNative");
+    render(<App />);
+    await user.click(await screen.findByRole("tab", { name: "ima" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(apply).not.toHaveBeenCalled();
+
+    const firstRow = screen.getByText("GLM-5.2").closest("article")!;
+    await user.click(within(firstRow).getByRole("button", { name: "切换" }));
+    let dialog = screen.getByRole("dialog", { name: "连接 ima 并切换模型" });
+    expect(within(dialog).getByText(/API Key 和模型名.*腾讯 ima/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/恢复原始模型时保留你已有的自定义模型/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "取消" }));
+    expect(apply).not.toHaveBeenCalled();
+
+    await user.click(within(firstRow).getByRole("button", { name: "切换" }));
+    dialog = screen.getByRole("dialog", { name: "连接 ima 并切换模型" });
+    await user.dblClick(within(dialog).getByRole("button", { name: "连接并切换" }));
+    await waitFor(() => expect(within(firstRow).getByText("使用中")).toBeInTheDocument());
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(apply).toHaveBeenLastCalledWith(expect.objectContaining({ agentId: "ima", mode: "direct", modelId: "glm-5.2" }), true);
+
+    const nextRow = screen.getByText("GLM-5.1").closest("article")!;
+    await user.click(within(nextRow).getByRole("button", { name: "切换" }));
+    await waitFor(() => expect(within(nextRow).getByText("使用中")).toBeInTheDocument());
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(apply).toHaveBeenLastCalledWith(expect.objectContaining({ agentId: "ima", modelId: "glm-5.1" }), undefined);
+
+    const original = screen.getByText("原始模型").closest("article")!;
+    await user.click(within(original).getByRole("button", { name: "切换" }));
+    await waitFor(() => expect(within(original).getByText("使用中")).toBeInTheDocument());
+    expect(restore).toHaveBeenCalledWith("ima", undefined);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const state = await api.bootstrap();
+    expect(state.agents.find((agent) => agent.id === "ima")).toEqual(expect.objectContaining({ requiresAccountConnection: false, providerId: undefined }));
+  });
+
+  it("keeps ima's current selection after a failed switch and allows retry", async () => {
+    await api.applyAgentBinding({ agentId: "ima", providerId: "preset-mongyun", modelId: "glm-5.2", mode: "direct" }, true);
+    const apply = vi.spyOn(api, "applyAgentBinding").mockRejectedValueOnce({ code: "ima_switch_failed", message: "切换失败，已恢复先前配置" });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("tab", { name: "ima" }));
+    const currentRow = screen.getByText("GLM-5.2").closest("article")!;
+    const nextRow = screen.getByText("GLM-5.1").closest("article")!;
+    await user.click(within(nextRow).getByRole("button", { name: "切换" }));
+    await screen.findByText("切换失败，已恢复先前配置");
+    expect(within(currentRow).getByText("使用中")).toBeInTheDocument();
+    expect(within(nextRow).getByRole("button", { name: "切换" })).toBeEnabled();
+    await user.click(within(nextRow).getByRole("button", { name: "切换" }));
+    await waitFor(() => expect(within(nextRow).getByText("使用中")).toBeInTheDocument());
+    expect(apply).toHaveBeenCalledTimes(2);
   });
 
   it("initializes with an empty provider catalog on fresh install", async () => {
@@ -227,7 +284,7 @@ describe("AT-Switch desktop shell", () => {
     const detailButtons = await screen.findAllByRole("button", {
       name: "详情",
     });
-    expect(detailButtons).toHaveLength(6);
+    expect(detailButtons).toHaveLength(7);
     expect(
       detailButtons.every((button) => !button.hasAttribute("disabled")),
     ).toBe(true);

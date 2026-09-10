@@ -2,7 +2,7 @@
 
 # AT-Switch
 
-### WorkBuddy、CodeBuddy、QClaw、AutoClaw、Codex、DuMate のオールインワン管理・モデル切り替えツール
+### WorkBuddy、CodeBuddy、QClaw、AutoClaw、Codex、DuMate、ima のオールインワン管理・モデル切り替えツール
 
 [![Version](https://img.shields.io/github/v/release/atswitch/at-switch?color=blue&label=version)](https://github.com/atswitch/at-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/atswitch/at-switch/releases)
@@ -41,7 +41,7 @@
 
 Agent ごとに散らばった設定ファイルを探す必要はありません：**Agent を選択 → プロバイダーを登録 → モデルを選択 → ワンクリックで切り替え**。
 
-- **ダイレクトモード優先**：標準では各 Agent のネイティブ設定ファイルを直接書き換えるため、プロキシによるレイテンシや負荷が発生しません。
+- **ダイレクトモード優先**：標準では各 Agent のネイティブなモデル設定機構を使用し、AT-Switch のローカルプロキシを経由しません。
 - **ローカルプロキシ対応**：プロトコル変換（Codex Responses と Chat プロトコル間の変換など）や API キーの隔離が必要な場合は、内蔵ローカルプロキシを簡単に有効化できます。
 - **安心のローカルセキュリティ**：Tauri 2、Rust、React、TypeScript で開発されています。API キーは OS の安全な資格情報ストア（macOS Keychain / Windows Credential Manager）に保存され、ユーザープロンプトやログを収集することはありません。
 
@@ -66,6 +66,14 @@ Agent ごとに散らばった設定ファイルを探す必要はありませ�
 | :--- | :--- | :--- | :--- |
 | **macOS** | macOS 12 Monterey 以降 | Apple Silicon / Intel / Universal | `.dmg` |
 | **Windows** | Windows 10 / 11 | x64 | `.msi` / ポータブル版 (`.zip`) |
+
+### ima の利用
+
+上部の **ima** を選び、既存のプロバイダー・モデル一覧で「切り替え」をクリックします。初回接続では、この端末でログイン済みの ima アカウントへのアクセスを確認します。macOS ではキーチェーンの許可も求められる場合があります。ログイン情報の手動コピーは不要です。選択した API URL、API キー、モデル名は ima のカスタムモデル設定として Tencent ima に保存され、**「問問 ima」**と**「我的 copilot」**の両方に適用されます。
+
+現在は**公開 OpenAI Chat エンドポイントへのダイレクト接続**のみ対応し、AT-Switch のローカルプロキシや端末内限定のエンドポイントは利用できません。起動中の ima は安全に終了して再起動するため、生成が終わってから切り替えてください。「元のモデルに復元」は AT-Switch による最初の設定変更前の各入口の選択を復元し、既存のカスタムモデルを保持します。
+
+現在の実装と検証範囲は [ima 接続・検証記録](IMA_INTEGRATION.md)を参照してください。macOS での切り替え・復元の一連の検証は未完了です。Windows は静的調査とコンパイル確認のみで、実機検証は行っていません。ここでの説明は公開済みリリースを示すものではありません。
 
 ---
 

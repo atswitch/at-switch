@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useLanguage } from "../i18n";
-import { supportsDirectBinding } from "../lib/agentCapabilities";
+import { supportsDirectBinding, supportsProxyBinding, usesCloudModelSettings } from "../lib/agentCapabilities";
 import { protocolLabels } from "../lib/format";
 import { modelIsReady } from "../lib/modelCapabilities";
 import type {
@@ -42,6 +42,7 @@ export function AgentBindingForm({
   onClearInstallPath = () => undefined,
 }: AgentBindingFormProps) {
   const { text } = useLanguage();
+  const cloudModelSettings = usesCloudModelSettings(agent.id);
   const availableProviders = useMemo(
     () =>
       providers
@@ -81,7 +82,7 @@ export function AgentBindingForm({
   const canSubmit =
     Boolean(selectedProvider && modelId) &&
     selectedModels.some((model) => model.modelId === modelId) &&
-    (mode === "proxy" || directCompatible) &&
+    (mode === "proxy" ? supportsProxyBinding(agent.id) : directCompatible) &&
     !busy;
 
   const chooseProvider = (nextProviderId: string) => {
@@ -137,9 +138,9 @@ export function AgentBindingForm({
             </strong>
           </span>
           <span>
-            {text("配置文件", "Configuration file")}
+            {cloudModelSettings ? text("配置位置", "Configuration location") : text("配置文件", "Configuration file")}
             <code title={agent.configPath}>
-              {agent.configPath ??
+              {cloudModelSettings ? text("腾讯 ima 当前账号", "Current Tencent ima account") : agent.configPath ??
                 text("首次切换时创建", "Created on first switch")}
             </code>
           </span>
@@ -185,8 +186,12 @@ export function AgentBindingForm({
               </strong>
               <small>
                 {text(
-                  "模型切换统一在主页面完成；请求不经过 AT-Switch，本页只展示配置与安装位置。",
-                  "Switch models from the main page. Requests bypass AT-Switch; this view only shows configuration and installation details.",
+                  cloudModelSettings
+                    ? "在首页选择公网 OpenAI Chat 模型，同时应用到「问问 ima」和「我的 copilot」。模型接口与 API Key 按 ima 原有机制保存到腾讯 ima。"
+                    : "模型切换统一在主页面完成；请求不经过 AT-Switch，本页只展示配置与安装位置。",
+                  cloudModelSettings
+                    ? "Choose a public OpenAI Chat model on the main page for both Ask ima and My copilot. The endpoint and API key are saved to Tencent ima using its model settings."
+                    : "Switch models from the main page. Requests bypass AT-Switch; this view only shows configuration and installation details.",
                 )}
               </small>
             </span>
@@ -203,6 +208,19 @@ export function AgentBindingForm({
           </p>
         </div>
       </section>
+    );
+  }
+
+  if (!supportsProxyBinding(agent.id)) {
+    return (
+      <div className="binding-empty" role="status">
+        <Network size={24} />
+        <h3>{text("请在首页切换 ima 模型", "Switch ima models on the main page")}</h3>
+        <p>{text(
+          "ima 通过云端访问模型，无法连接本机代理。请选择公网可访问的 OpenAI Chat 接口。",
+          "ima reaches models through its cloud and cannot connect to the local proxy. Choose a public OpenAI Chat endpoint.",
+        )}</p>
+      </div>
     );
   }
 

@@ -4,6 +4,12 @@ AT-Switch integrates with third-party AI agents and model providers. Product nam
 logos, and trademarks are used only to identify compatible products and services.
 Their inclusion does not imply endorsement, sponsorship, or affiliation.
 
+Tencent ima / ima.copilot is identified by its product name for compatibility with
+its model settings. The official product source is [Tencent ima](https://ima.qq.com/).
+AT-Switch uses a generic interface symbol for this entry and does not bundle an
+extracted ima application icon. The product name and trademarks remain the
+property of their respective owners.
+
 ## Bundled Identification Assets
 
 The repository contains the following identification assets. The maintainer

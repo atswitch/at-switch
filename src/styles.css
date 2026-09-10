@@ -2835,7 +2835,7 @@ textarea:focus-visible {
   top: 0;
   z-index: 40;
   display: grid;
-  grid-template-columns: minmax(168px, 0.55fr) auto minmax(250px, 0.8fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 18px;
   min-height: 78px;
@@ -2909,6 +2909,10 @@ textarea:focus-visible {
   align-items: center;
   gap: 3px;
   min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
   padding: 4px;
   background: var(--paper-muted);
   border: 1px solid color-mix(in srgb, var(--line) 68%, transparent);
@@ -2917,6 +2921,7 @@ textarea:focus-visible {
 
 .agent-switcher__item {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 8px;
   min-height: 36px;
@@ -2981,6 +2986,11 @@ textarea:focus-visible {
   background: transparent;
   border: 0;
   border-radius: 6px;
+}
+
+.agent-switcher__icon .agent-logo svg {
+  width: 20px;
+  height: 20px;
 }
 
 .agent-switcher__status {
@@ -3796,7 +3806,7 @@ textarea:focus-visible {
   }
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1320px) {
   .desktop-toolbar {
     grid-template-columns: auto minmax(0, 1fr) auto;
     gap: 10px;
@@ -3809,14 +3819,37 @@ textarea:focus-visible {
 
   .agent-switcher {
     justify-self: stretch;
-    justify-content: center;
+    justify-content: safe center;
   }
 
   .agent-switcher__item {
     gap: 6px;
     padding-inline: 8px;
   }
+}
 
+@media (max-width: 1080px) {
+  .desktop-toolbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+  }
+
+  .desktop-brand strong {
+    display: block;
+  }
+
+  .desktop-header-right {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .agent-switcher {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+
+@media (max-width: 1180px) {
   .switchboard__header {
     grid-template-columns: minmax(0, 1fr) minmax(360px, auto);
   }
@@ -3954,4 +3987,3 @@ textarea:focus-visible {
   color: var(--ink-soft);
   letter-spacing: 0.01em;
 }
-

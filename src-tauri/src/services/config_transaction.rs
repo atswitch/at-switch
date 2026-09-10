@@ -63,6 +63,95 @@ impl ConfigTransaction {
         }
     }
 
+    /// Service-backed settings cannot be replaced as a file. Their adapters
+    /// journal the baseline and compensating operation here before touching the
+    /// service, using the same verified encryption as file transactions.
+    pub fn service_checkpoint_exists(&self, agent_id: &str, resource: &str) -> bool {
+        self.service_checkpoint_path(agent_id, resource)
+            .is_ok_and(|path| path.is_file() || path.with_extension("baseline.atsb").is_file())
+    }
+
+    pub fn read_service_checkpoint(
+        &self,
+        agent_id: &str,
+        resource: &str,
+    ) -> AppResult<Option<Vec<u8>>> {
+        let path = self.service_checkpoint_path(agent_id, resource)?;
+        if !path.exists() {
+            if path.with_extension("baseline.atsb").is_file() {
+                return Err(CommandError::new(
+                    "service_checkpoint_missing",
+                    "模型恢复记录缺失，已阻止把当前设置误作原始模型；请保留现有备份后恢复。",
+                ));
+            }
+            return Ok(None);
+        }
+        let payload = self.read_encrypted_backup(&path)?;
+        if payload.path != format!("service:{resource}")
+            || payload.original_sha256 != sha256(&payload.original_content)
+        {
+            return Err(CommandError::new(
+                "service_checkpoint_invalid",
+                "模型恢复记录与当前账号不一致，已阻止修改",
+            ));
+        }
+        Ok(Some(payload.original_content))
+    }
+
+    pub fn save_service_checkpoint(
+        &self,
+        agent_id: &str,
+        resource: &str,
+        content: &[u8],
+    ) -> AppResult<()> {
+        let target = self.service_checkpoint_path(agent_id, resource)?;
+        let payload = BackupPayload {
+            path: format!("service:{resource}"),
+            existed: true,
+            original_content: content.to_vec(),
+            original_sha256: sha256(content),
+        };
+        // Keep immutable per-operation backups as well as the atomic current
+        // checkpoint, so an interrupted network operation remains recoverable.
+        let backup =
+            self.write_encrypted_backup(agent_id, &Uuid::new_v4().to_string(), &payload)?;
+        let verified = self.read_encrypted_backup(&backup)?;
+        if verified.path != payload.path || verified.original_content != content {
+            return Err(CommandError::new(
+                "backup_verification_failed",
+                "模型恢复记录校验失败",
+            ));
+        }
+        let anchor = target.with_extension("baseline.atsb");
+        if !anchor.exists() {
+            let mut original = create_private_file(&anchor)?;
+            original.write_all(&fs::read(&backup)?)?;
+            original.sync_all()?;
+        }
+        write_atomic(&target, &fs::read(backup)?)?;
+        if self.read_service_checkpoint(agent_id, resource)?.as_deref() != Some(content) {
+            return Err(CommandError::new(
+                "service_checkpoint_invalid",
+                "模型恢复记录写入后校验失败",
+            ));
+        }
+        Ok(())
+    }
+
+    fn service_checkpoint_path(&self, agent_id: &str, resource: &str) -> AppResult<PathBuf> {
+        validate_agent_id(agent_id)?;
+        if resource.is_empty() {
+            return Err(CommandError::new(
+                "service_resource_invalid",
+                "模型设置资源无效",
+            ));
+        }
+        Ok(self
+            .backup_root
+            .join(agent_id)
+            .join(format!("service-{}.atsb", sha256(resource.as_bytes()))))
+    }
+
     /// Apply one file resource safely.
     ///
     /// The public shape is intentionally small; a verified Agent adapter builds
@@ -247,6 +336,12 @@ impl ConfigTransaction {
     }
 
     fn restore_payload(&self, payload: &BackupPayload) -> AppResult<()> {
+        if payload.path.starts_with("service:") {
+            return Err(CommandError::new(
+                "service_restore_required",
+                "此备份属于在线模型设置，请通过对应 Agent 恢复",
+            ));
+        }
         let path = PathBuf::from(&payload.path);
         if payload.existed {
             write_atomic(&path, &payload.original_content)?;
@@ -467,6 +562,216 @@ fn sync_parent(_parent: &Path) {}
 mod tests {
     use super::*;
     use crate::infrastructure::MemorySecretStore;
+
+    #[test]
+    fn service_checkpoints_isolate_accounts_and_reject_a_transplanted_checkpoint() {
+        let temp = tempfile::tempdir().expect("temp");
+        let store: Arc<dyn SecretStore> = Arc::new(MemorySecretStore::default());
+        let transaction = ConfigTransaction::new(store, temp.path().join("backups"));
+        let first = "fictional-account-one";
+        let second = "fictional-account-two";
+        transaction
+            .save_service_checkpoint("ima", first, b"original-one")
+            .unwrap();
+        assert!(!transaction.service_checkpoint_exists("ima", second));
+        assert!(transaction
+            .read_service_checkpoint("ima", second)
+            .unwrap()
+            .is_none());
+        transaction
+            .save_service_checkpoint("ima", second, b"original-two")
+            .unwrap();
+        assert_eq!(
+            transaction.read_service_checkpoint("ima", first).unwrap(),
+            Some(b"original-one".to_vec())
+        );
+        assert_eq!(
+            transaction.read_service_checkpoint("ima", second).unwrap(),
+            Some(b"original-two".to_vec())
+        );
+
+        // A valid encrypted file copied to the wrong account must not let it
+        // restore another account's original selection.
+        fs::copy(
+            transaction.service_checkpoint_path("ima", first).unwrap(),
+            transaction.service_checkpoint_path("ima", second).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            transaction
+                .read_service_checkpoint("ima", second)
+                .unwrap_err()
+                .code,
+            "service_checkpoint_invalid"
+        );
+        assert_eq!(
+            transaction.read_service_checkpoint("ima", first).unwrap(),
+            Some(b"original-one".to_vec())
+        );
+    }
+
+    #[test]
+    fn service_updates_keep_immutable_encrypted_recovery_history() {
+        let temp = tempfile::tempdir().expect("temp");
+        let store: Arc<dyn SecretStore> = Arc::new(MemorySecretStore::default());
+        let transaction = ConfigTransaction::new(store, temp.path().join("backups"));
+        let resource = "fictional-account";
+        let original = b"fictional-original-model-and-private-api-key";
+        transaction
+            .save_service_checkpoint("ima", resource, original)
+            .unwrap();
+        let checkpoint = transaction
+            .service_checkpoint_path("ima", resource)
+            .unwrap();
+        let history = fs::read_dir(checkpoint.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path != &checkpoint)
+            .expect("immutable original recovery record");
+        let history_bytes = fs::read(&history).unwrap();
+
+        transaction
+            .save_service_checkpoint("ima", resource, b"fictional-next-model")
+            .unwrap();
+        assert_eq!(
+            transaction
+                .read_service_checkpoint("ima", resource)
+                .unwrap(),
+            Some(b"fictional-next-model".to_vec())
+        );
+        assert_eq!(fs::read(&history).unwrap(), history_bytes);
+        assert_eq!(
+            transaction
+                .read_encrypted_backup(&history)
+                .unwrap()
+                .original_content,
+            original
+        );
+        for entry in fs::read_dir(checkpoint.parent().unwrap()).unwrap() {
+            let bytes = fs::read(entry.unwrap().path()).unwrap();
+            assert!(bytes.starts_with(BACKUP_MAGIC));
+            for sensitive in [original.as_slice(), resource.as_bytes()] {
+                assert!(!bytes.windows(sensitive.len()).any(|part| part == sensitive));
+            }
+        }
+    }
+
+    #[test]
+    fn corrupt_service_checkpoint_stays_present_and_cannot_be_read_as_a_new_baseline() {
+        let temp = tempfile::tempdir().expect("temp");
+        let store: Arc<dyn SecretStore> = Arc::new(MemorySecretStore::default());
+        let transaction = ConfigTransaction::new(store, temp.path().join("backups"));
+        let resource = "fictional-account";
+        transaction
+            .save_service_checkpoint("ima", resource, b"fictional-sensitive-original")
+            .unwrap();
+        let path = transaction
+            .service_checkpoint_path("ima", resource)
+            .unwrap();
+        let mut bytes = fs::read(&path).unwrap();
+        *bytes.last_mut().unwrap() ^= 1;
+        fs::write(path, bytes).unwrap();
+
+        assert!(transaction.service_checkpoint_exists("ima", resource));
+        let error = transaction
+            .read_service_checkpoint("ima", resource)
+            .unwrap_err();
+        assert_eq!(error.code, "backup_decryption_failed");
+        assert!(!format!("{error:?}").contains("fictional-sensitive-original"));
+    }
+
+    #[test]
+    fn missing_current_service_checkpoint_preserves_the_original_recovery_anchor() {
+        let temp = tempfile::tempdir().expect("temp");
+        let store: Arc<dyn SecretStore> = Arc::new(MemorySecretStore::default());
+        let transaction = ConfigTransaction::new(store, temp.path().join("backups"));
+        let resource = "fictional-account";
+        transaction
+            .save_service_checkpoint("ima", resource, b"fictional-original-model")
+            .unwrap();
+        transaction
+            .save_service_checkpoint("ima", resource, b"fictional-managed-model")
+            .unwrap();
+        let checkpoint = transaction
+            .service_checkpoint_path("ima", resource)
+            .unwrap();
+        fs::remove_file(&checkpoint).unwrap();
+
+        // Losing the latest journal must never turn managed settings into a
+        // fresh takeover baseline, even after a process restart.
+        assert!(transaction.service_checkpoint_exists("ima", resource));
+        assert_eq!(
+            transaction
+                .read_service_checkpoint("ima", resource)
+                .unwrap_err()
+                .code,
+            "service_checkpoint_missing"
+        );
+        assert_eq!(
+            transaction
+                .read_encrypted_backup(&checkpoint.with_extension("baseline.atsb"))
+                .unwrap()
+                .original_content,
+            b"fictional-original-model"
+        );
+    }
+
+    #[test]
+    fn authenticated_service_payload_with_a_wrong_content_hash_is_rejected() {
+        let temp = tempfile::tempdir().expect("temp");
+        let store: Arc<dyn SecretStore> = Arc::new(MemorySecretStore::default());
+        let transaction = ConfigTransaction::new(store, temp.path().join("backups"));
+        let resource = "fictional-account";
+        let invalid = BackupPayload {
+            path: format!("service:{resource}"),
+            existed: true,
+            original_content: b"fictional-original".to_vec(),
+            original_sha256: sha256(b"different-original"),
+        };
+        let backup = transaction
+            .write_encrypted_backup("ima", "fictional-invalid-hash", &invalid)
+            .unwrap();
+        fs::copy(
+            backup,
+            transaction
+                .service_checkpoint_path("ima", resource)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            transaction
+                .read_service_checkpoint("ima", resource)
+                .unwrap_err()
+                .code,
+            "service_checkpoint_invalid"
+        );
+    }
+
+    #[test]
+    fn service_recovery_records_cannot_be_restored_as_local_files() {
+        let temp = tempfile::tempdir().expect("temp");
+        let store: Arc<dyn SecretStore> = Arc::new(MemorySecretStore::default());
+        let transaction = ConfigTransaction::new(store, temp.path().join("backups"));
+        transaction
+            .save_service_checkpoint("ima", "fictional-account", b"fictional-model-settings")
+            .unwrap();
+        let directory = temp.path().join("backups/ima");
+        for entry in fs::read_dir(&directory).unwrap() {
+            assert_eq!(
+                transaction
+                    .restore_backup(&entry.unwrap().path())
+                    .unwrap_err()
+                    .code,
+                "service_restore_required"
+            );
+        }
+        assert_eq!(
+            transaction
+                .read_service_checkpoint("ima", "fictional-account")
+                .unwrap(),
+            Some(b"fictional-model-settings".to_vec())
+        );
+    }
 
     #[test]
     fn writes_an_encrypted_backup_and_can_restore_it() {
