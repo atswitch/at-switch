@@ -23,6 +23,17 @@ function agent(
 }
 
 describe("AgentSwitcher", () => {
+  it("shows ima in the same selectable top bar before account connection", async () => {
+    const user = userEvent.setup();
+    const onSwitch = vi.fn();
+    render(<AgentSwitcher agents={[
+      agent("workbuddy", "WorkBuddy", "installed"),
+      { ...agent("ima", "ima", "installed"), requiresAccountConnection: true },
+    ]} activeAgentId="workbuddy" onSwitch={onSwitch} />);
+    await user.click(screen.getByRole("tab", { name: "ima" }));
+    expect(onSwitch).toHaveBeenCalledWith("ima");
+  });
+
   it("allows selecting uninstalled Agents without greying out top bar tabs", async () => {
     const user = userEvent.setup();
     const onSwitch = vi.fn();

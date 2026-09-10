@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "./components/AppShell";
 import { AgentBindingForm } from "./components/AgentBindingForm";
 import { AgentRestartConfirmation } from "./components/AgentRestartConfirmation";
+import { AgentAccountConnectionConfirmation } from "./components/AgentAccountConnectionConfirmation";
 import { BrandLogo } from "./components/BrandLogo";
 import { Modal } from "./components/Modal";
 import { ProviderForm } from "./components/ProviderForm";
@@ -10,6 +11,8 @@ import { LanguageProvider, useLanguage } from "./i18n";
 import {
   isSwitchableAgent,
   supportsDirectBinding,
+  supportsProxyBinding,
+  usesCloudModelSettings,
 } from "./lib/agentCapabilities";
 import { api, getActiveMockSnapshot } from "./lib/api";
 import { AgentsPage } from "./pages/AgentsPage";
@@ -155,6 +158,7 @@ function AppContent() {
   const [proxyBusy, setProxyBusy] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const lastAutomaticScanAt = useRef(0);
+  const agentOperationInFlight = useRef(false);
   const languageRef = useRef(language);
 
   useEffect(() => {
@@ -308,17 +312,19 @@ function AppContent() {
     }
   };
 
-  const executeRestoreAgentNative = async (agent: AgentSummary) => {
+  const executeRestoreAgentNative = async (agent: AgentSummary, confirmAccountConnection?: boolean) => {
+    if (agentOperationInFlight.current) return;
+    agentOperationInFlight.current = true;
     const key = `native:${agent.id}`;
     setSwitchingKey(key);
     try {
-      const restored = await api.restoreAgentNative(agent.id);
+      const restored = await api.restoreAgentNative(agent.id, confirmAccountConnection);
       await loadSnapshot(true);
       notify(
         "good",
         text(
-          `${restored.displayName} 已恢复默认配置`,
-          `${restored.displayName} default configuration restored`,
+          usesCloudModelSettings(restored.id) ? `${restored.displayName} 已恢复原始模型` : `${restored.displayName} 已恢复默认配置`,
+          usesCloudModelSettings(restored.id) ? `${restored.displayName} original models restored` : `${restored.displayName} default configuration restored`,
         ),
         restored.needsRestart
           ? text(
@@ -327,20 +333,26 @@ function AppContent() {
             )
           : ((language === "zh-CN" ? restored.message : undefined) ??
             text(
-              "AT-Switch 管理的路由已移除，智能体自带模型可继续使用。",
-              "The AT-Switch-managed route was removed. Built-in agent models remain available.",
+              usesCloudModelSettings(restored.id)
+                ? "两个入口已恢复接管前的模型选择，你原有的自定义模型保持不变。"
+                : "AT-Switch 管理的路由已移除，智能体自带模型可继续使用。",
+              usesCloudModelSettings(restored.id)
+                ? "Both entries use their pre-takeover model selections. Your original custom models are preserved."
+                : "The AT-Switch-managed route was removed. Built-in agent models remain available.",
             )),
       );
     } catch (error) {
+      if (usesCloudModelSettings(agent.id)) await loadSnapshot(true);
       notify(
         "bad",
         text(
-          "恢复默认配置失败",
-          "Failed to restore default agent configuration",
+          usesCloudModelSettings(agent.id) ? "恢复原始模型失败" : "恢复默认配置失败",
+          usesCloudModelSettings(agent.id) ? "Failed to restore original models" : "Failed to restore default agent configuration",
         ),
         describeCommandError(error, language),
       );
     } finally {
+      agentOperationInFlight.current = false;
       setSwitchingKey(undefined);
     }
   };
@@ -348,11 +360,14 @@ function AppContent() {
   const executeApplyAgentBinding = async (
     draft: AgentBindingDraft,
     modelKey?: string,
+    confirmAccountConnection?: boolean,
   ) => {
+    if (agentOperationInFlight.current) return;
+    agentOperationInFlight.current = true;
     setSavingBinding(true);
     setSwitchingKey(modelKey);
     try {
-      const agent = await api.applyAgentBinding(draft);
+      const agent = await api.applyAgentBinding(draft, confirmAccountConnection);
       setBindingTarget(undefined);
       await loadSnapshot(true);
       notify(
@@ -376,19 +391,22 @@ function AppContent() {
             `${agent.providerName ?? "Provider"} · ${agent.modelId ?? text("模型", "Model")}`),
       );
     } catch (error) {
+      if (usesCloudModelSettings(draft.agentId)) await loadSnapshot(true);
       notify(
         "bad",
         text("智能体配置失败", "Agent configuration failed"),
         describeCommandError(error, language),
       );
     } finally {
+      agentOperationInFlight.current = false;
       setSavingBinding(false);
       setSwitchingKey(undefined);
     }
   };
 
   const requestRestoreAgentNative = (agent: AgentSummary) => {
-    if (agent.needsRestart) {
+    if (agentOperationInFlight.current || pendingAgentAction) return;
+    if (agent.requiresAccountConnection || (agent.needsRestart && (!usesCloudModelSettings(agent.id) || agent.runtimeStatus === "running"))) {
       setPendingAgentAction({ kind: "restore", agent });
       return;
     }
@@ -400,7 +418,9 @@ function AppContent() {
     draft: AgentBindingDraft,
     modelKey?: string,
   ) => {
-    if (agent.needsRestart) {
+    if (agentOperationInFlight.current || pendingAgentAction) return;
+    if (draft.mode === "proxy" && !supportsProxyBinding(agent.id)) return;
+    if (agent.requiresAccountConnection || (agent.needsRestart && (!usesCloudModelSettings(agent.id) || agent.runtimeStatus === "running"))) {
       setPendingAgentAction({ kind: "apply", agent, draft, modelKey });
       return;
     }
@@ -412,9 +432,9 @@ function AppContent() {
     if (!pending) return;
     setPendingAgentAction(undefined);
     if (pending.kind === "restore") {
-      void executeRestoreAgentNative(pending.agent);
+      void executeRestoreAgentNative(pending.agent, pending.agent.requiresAccountConnection || undefined);
     } else {
-      void executeApplyAgentBinding(pending.draft, pending.modelKey);
+      void executeApplyAgentBinding(pending.draft, pending.modelKey, pending.agent.requiresAccountConnection || undefined);
     }
   };
 
@@ -423,6 +443,7 @@ function AppContent() {
     provider: ProviderSummary,
     model: ModelSummary,
   ) => {
+    if (!supportsDirectBinding(agent.id, provider) && !supportsProxyBinding(agent.id)) return;
     const mode = supportsDirectBinding(agent.id, provider)
       ? "direct"
       : "proxy";
@@ -897,15 +918,20 @@ function AppContent() {
                 ))}
               </ul>
               <p className="affected-agents-alert__note">
-                {deletingProviderAlertState.mode === "unbind_only"
+                {deletingProviderAlertState.inUseAgents.some((agent) => usesCloudModelSettings(agent.id))
+                  ? text(
+                      "ima 会先恢复接管前的模型配置；恢复失败时保留供应商和模型。如果 ima 正在运行，会安全退出并重新打开。",
+                      "ima's pre-takeover models are restored first. If restoration fails, the provider and models are kept. If ima is running, it will safely quit and reopen.",
+                    )
+                  : deletingProviderAlertState.mode === "unbind_only"
                   ? text(
                       "当前模型供应商正在使用中，您确定要删除吗？",
                       "This model provider is currently in use. Are you sure you want to delete it?",
                     )
-                  : text(
-                      "删除当前模型后上述智能体将自动恢复为官方默认配置，在新建会话或重新启动后生效。",
-                      "Deleting this model will automatically restore the above agents to their native default configurations, taking effect on the next launch or new session.",
-                    )}
+                    : text(
+                        "删除当前模型后上述智能体将自动恢复为官方默认配置，在新建会话或重新启动后生效。",
+                        "Deleting this model will automatically restore the above agents to their native default configurations, taking effect on the next launch or new session.",
+                      )}
               </p>
             </div>
           )}
@@ -982,15 +1008,20 @@ function AppContent() {
                 ))}
               </ul>
               <p className="affected-agents-alert__note">
-                {deletingModelAlertState.mode === "unbind_only"
+                {(deletingModelTarget?.provider.models.length ?? 0) <= 1 && deletingModelAlertState.inUseAgents.some((agent) => usesCloudModelSettings(agent.id))
+                  ? text(
+                      "ima 会先恢复接管前的模型配置；恢复失败时保留供应商和模型。如果 ima 正在运行，会安全退出并重新打开。",
+                      "ima's pre-takeover models are restored first. If restoration fails, the provider and models are kept. If ima is running, it will safely quit and reopen.",
+                    )
+                  : deletingModelAlertState.mode === "unbind_only"
                   ? text(
                       "当前模型正在使用中，您确定要删除吗？",
                       "This model is currently in use. Are you sure you want to delete it?",
                     )
-                  : text(
-                      "删除当前模型后上述智能体将自动恢复为官方默认配置，在新建会话或重新启动后生效。",
-                      "Deleting this model will automatically restore the above agents to their native default configurations, taking effect on the next launch or new session.",
-                    )}
+                    : text(
+                        "删除当前模型后上述智能体将自动恢复为官方默认配置，在新建会话或重新启动后生效。",
+                        "Deleting this model will automatically restore the above agents to their native default configurations, taking effect on the next launch or new session.",
+                      )}
               </p>
             </div>
           )}
@@ -1017,7 +1048,13 @@ function AppContent() {
       </Modal>
 
       <AgentRestartConfirmation
-        agent={pendingAgentAction?.agent}
+        agent={pendingAgentAction?.agent.requiresAccountConnection ? undefined : pendingAgentAction?.agent}
+        operation={pendingAgentAction?.kind ?? "apply"}
+        onCancel={() => setPendingAgentAction(undefined)}
+        onConfirm={confirmPendingAgentAction}
+      />
+      <AgentAccountConnectionConfirmation
+        agent={pendingAgentAction?.agent.requiresAccountConnection ? pendingAgentAction.agent : undefined}
         operation={pendingAgentAction?.kind ?? "apply"}
         onCancel={() => setPendingAgentAction(undefined)}
         onConfirm={confirmPendingAgentAction}

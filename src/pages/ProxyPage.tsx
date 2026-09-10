@@ -11,6 +11,7 @@ import { useEffect, useState } from "react";
 import { useLanguage } from "../i18n";
 import type { AgentSummary, ProxyStatus } from "../types";
 import { formatDuration, successRate } from "../lib/format";
+import { supportsProxyBinding } from "../lib/agentCapabilities";
 import { PageHeader } from "../components/PageHeader";
 import { StatusPill } from "../components/StatusPill";
 
@@ -189,7 +190,9 @@ export function ProxyPage({
                 <div>
                   <strong>{agent.displayName}</strong>
                   <small>
-                    {agent.mode === "proxy"
+                    {!supportsProxyBinding(agent.id)
+                      ? text("使用云端模型配置，请在首页切换", "Uses cloud model settings; switch from the main page")
+                      : agent.mode === "proxy"
                       ? `${agent.providerName ?? "Provider"} · ${agent.modelId ?? text("模型", "Model")}`
                       : text("未使用本地代理", "Not using the local proxy")}
                   </small>
@@ -203,10 +206,13 @@ export function ProxyPage({
                   onClick={() => onConfigureAgent(agent)}
                   disabled={
                     !agent.adapterVerified ||
+                    !supportsProxyBinding(agent.id) ||
                     agent.installStatus === "not_installed"
                   }
                   title={
-                    agent.adapterVerified
+                    !supportsProxyBinding(agent.id)
+                      ? text("ima 无法访问本机代理，请使用公网 OpenAI Chat 接口", "ima cannot reach the local proxy. Use a public OpenAI Chat endpoint")
+                      : agent.adapterVerified
                       ? text(
                           "选择模型供应商和模型后启用代理接管",
                           "Select a provider and model to enable proxy takeover",
