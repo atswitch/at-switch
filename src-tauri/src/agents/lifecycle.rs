@@ -172,16 +172,54 @@ fn stop_desktop_app_if_running(installation: &Installation, display_name: &str) 
     }
     let process_list = String::from_utf8_lossy(&output.stdout);
     let executable = executable.to_string_lossy();
-    let pids = macos_main_process_ids(&process_list, &executable);
+    let mut pids = macos_main_process_ids(&process_list, &executable);
     if pids.is_empty() {
         return Ok(false);
     }
 
+    // ima is a Chromium desktop client. Sending SIGTERM directly to
+    // its main process can make the next launch show ima's "restore page"
+    // prompt even though no user crash occurred. Ask the application to quit
+    // through Apple Events and report a recoverable timeout instead of forcing
+    // a shutdown when the app is unresponsive.
+    if display_name.eq_ignore_ascii_case("ima") {
+        request_macos_quit();
+        // AppleScript can return before ima finishes flushing its Chromium
+        // profile. Wait for the original main process to disappear instead of
+        // converting that orderly shutdown into SIGTERM.
+        if wait_for_macos_process_exit(&pids, display_name).is_ok() {
+            return Ok(true);
+        }
+        // A relaunch or process handoff can replace the original PID during
+        // shutdown. Re-scan once before reporting that graceful exit failed.
+        if let Ok(output) = Command::new("/bin/ps")
+            .args(["-ax", "-o", "pid=,command="])
+            .output()
+        {
+            if output.status.success() {
+                let process_list = String::from_utf8_lossy(&output.stdout);
+                pids = macos_main_process_ids(&process_list, &executable);
+            }
+        }
+        if pids.is_empty() {
+            return Ok(true);
+        }
+        return Err(process_error(
+            "agent_stop_timeout",
+            display_name,
+            "等待安全退出超时",
+        ));
+    }
+
     for pid in &pids {
-        let status = Command::new("/bin/kill")
+        let output = Command::new("/bin/kill")
             .args(["-TERM", &pid.to_string()])
-            .status()?;
-        if !status.success() {
+            .output()?;
+        if !output.status.success()
+            && !String::from_utf8_lossy(&output.stderr)
+                .to_ascii_lowercase()
+                .contains("no such process")
+        {
             return Err(process_error(
                 "agent_stop_failed",
                 display_name,
@@ -191,6 +229,38 @@ fn stop_desktop_app_if_running(installation: &Installation, display_name: &str) 
     }
     wait_for_macos_process_exit(&pids, display_name)?;
     Ok(true)
+}
+
+#[cfg(target_os = "macos")]
+fn request_macos_quit() {
+    let Ok(mut child) = Command::new("/usr/bin/osascript")
+        .args(["-e", r#"tell application id "com.tencent.imamac" to quit"#])
+        .spawn()
+    else {
+        return;
+    };
+    // ima can spend around twelve seconds flushing its Chromium profile and
+    // cloud session before the Apple Event completes. Cutting this short turns
+    // an orderly quit into SIGTERM and makes the next launch report a crash.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    log::debug!("ima Apple Events quit request was not accepted");
+                }
+                return;
+            }
+            Ok(None) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(100));
+            }
+            Ok(None) | Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -238,8 +308,8 @@ fn wait_for_macos_process_exit(pids: &[u32], display_name: &str) -> AppResult<()
         let any_running = pids.iter().any(|pid| {
             Command::new("/bin/kill")
                 .args(["-0", &pid.to_string()])
-                .status()
-                .is_ok_and(|status| status.success())
+                .output()
+                .is_ok_and(|output| output.status.success())
         });
         if !any_running {
             thread::sleep(Duration::from_millis(500));
@@ -525,18 +595,50 @@ fn stop_desktop_app_if_running(
 
 #[cfg(target_os = "macos")]
 fn launch_desktop_app(installation: &Installation, display_name: &str) -> AppResult<()> {
+    if display_name.eq_ignore_ascii_case("ima") {
+        let status = Command::new("/usr/bin/open")
+            .arg(&installation.path)
+            .status()
+            .map_err(|error| relaunch_error(display_name, error))?;
+        if !status.success() {
+            return Err(relaunch_status_error(display_name));
+        }
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < deadline {
+            if desktop_app_running(installation, display_name)? {
+                // The main process appears before Chromium has finished its
+                // single-instance and quit-event initialization.
+                thread::sleep(Duration::from_secs(2));
+                return Ok(());
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        return Err(CommandError::new(
+            "agent_relaunch_failed",
+            "ima 配置已经保存，但自动重新打开超时",
+        )
+        .with_recovery("请手动打开 ima；新配置已经保存。"));
+    }
     Command::new("/usr/bin/open")
         .arg(&installation.path)
         .spawn()
         .map(|_| ())
-        .map_err(|error| {
-            log::warn!("{display_name} could not be relaunched: {error}");
-            CommandError::new(
-                "agent_relaunch_failed",
-                format!("{display_name} 配置已经保存，但未能自动重新打开"),
-            )
-            .with_recovery(format!("请手动打开 {display_name}；新配置已经保存。"))
-        })
+        .map_err(|error| relaunch_error(display_name, error))
+}
+
+#[cfg(target_os = "macos")]
+fn relaunch_error(display_name: &str, error: std::io::Error) -> CommandError {
+    log::warn!("{display_name} could not be relaunched: {error}");
+    relaunch_status_error(display_name)
+}
+
+#[cfg(target_os = "macos")]
+fn relaunch_status_error(display_name: &str) -> CommandError {
+    CommandError::new(
+        "agent_relaunch_failed",
+        format!("{display_name} 配置已经保存，但未能自动重新打开"),
+    )
+    .with_recovery(format!("请手动打开 {display_name}；新配置已经保存。"))
 }
 
 #[cfg(target_os = "windows")]

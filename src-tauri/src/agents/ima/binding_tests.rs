@@ -23,6 +23,7 @@ struct RemoteData {
     distinct_model_ids: bool,
     nested_custom_models: bool,
     ambiguous_model_links: bool,
+    reject_official_preferences: bool,
 }
 
 fn selectable_id(data: &RemoteData, customize_id: &str, scene: usize) -> String {
@@ -87,7 +88,8 @@ async fn remote(
                 json!({"code":51})
             } else {
                 let id = body["model_id"].as_str().unwrap();
-                if id.is_empty()
+                if (data.reject_official_preferences && id == format!("official-{scene}"))
+                    || id.is_empty()
                     || (id != format!("official-{scene}")
                         && !data.models.iter().any(|model| {
                             selectable_id(&data, model["customize_id"].as_str().unwrap(), scene)
@@ -110,6 +112,12 @@ async fn remote(
                 for (preferred, deleted) in data.preferred.iter_mut().zip(&deleted_choices) {
                     if preferred == deleted {
                         preferred.clear();
+                    }
+                }
+            } else {
+                for (scene, preferred) in data.preferred.iter_mut().enumerate() {
+                    if deleted_choices[scene] == *preferred {
+                        *preferred = "user-owned".to_owned();
                     }
                 }
             }
@@ -144,6 +152,7 @@ async fn fixture() -> (
         distinct_model_ids: false,
         nested_custom_models: false,
         ambiguous_model_links: false,
+        reject_official_preferences: false,
     })));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -172,6 +181,64 @@ fn desired(model: &str) -> DesiredAgentBinding<'_> {
         base_url: "https://provider.example/v1",
         credential: "fictional-provider-key",
     }
+}
+
+fn desired_existing_user_model() -> DesiredAgentBinding<'static> {
+    DesiredAgentBinding {
+        mode: AgentBindingMode::Direct,
+        provider_name: "Existing ima model",
+        model_id: "user-model",
+        supports_tools: true,
+        upstream_protocol: ApiProtocol::OpenaiChatCompletions,
+        source_protocol: ApiProtocol::OpenaiChatCompletions,
+        base_url: "https://user.example/v1",
+        credential: "fictional-user-key",
+    }
+}
+
+#[test]
+fn identifies_a_selected_thinking_mode_under_an_official_default() {
+    let scene: ImaSceneModels = serde_json::from_value(json!({
+        "preferred_model_id": "official-thinking-mode",
+        "models": [{
+            "model_id": "official-parent",
+            "model_type": 10,
+            "is_default": true,
+            "sub_model_infos": {
+                "0": {"model_id": "official-fast-mode", "model_type": 10},
+                "1": {"model_id": "official-thinking-mode", "model_type": 10}
+            }
+        }]
+    }))
+    .unwrap();
+
+    assert!(is_official_default_choice(&scene, "official-thinking-mode"));
+}
+
+#[tokio::test]
+async fn reuses_an_identical_existing_model_without_deleting_it_on_restore() {
+    let (directory, client, transaction, remote, server) = fixture().await;
+    let path = directory.path().join("Preferences");
+    let manager = ImaBindingManager::default();
+    manager
+        .apply_paused(
+            &client,
+            &path,
+            &desired_existing_user_model(),
+            &transaction,
+            &|| Ok(()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(remote.0.lock().unwrap().add_count, 0);
+    manager
+        .restore_paused(&client, &path, &transaction, &|| Ok(()))
+        .await
+        .unwrap();
+    let data = remote.0.lock().unwrap();
+    assert_eq!(data.models.len(), 1);
+    assert_eq!(data.models[0]["customize_id"], "user-owned");
+    server.abort();
 }
 
 #[tokio::test]
@@ -224,8 +291,11 @@ async fn switching_and_restore_preserve_user_rows_unknown_local_fields_and_basel
         extra["copilotModelConfig"]["unrelated_added_after_switch"],
         true
     );
-    assert_eq!(remote.0.lock().unwrap().models.len(), 1);
-    assert_eq!(remote.0.lock().unwrap().preferred, ["", ""]);
+    assert_eq!(remote.0.lock().unwrap().models.len(), 2);
+    assert_eq!(
+        remote.0.lock().unwrap().preferred,
+        ["official-0", "official-1"]
+    );
     manager
         .apply_paused(
             &client,
@@ -258,7 +328,10 @@ async fn second_scene_failure_rolls_back_new_rows_and_both_original_preferences(
         .unwrap_err();
     assert_eq!(error.code, "ima_api_rejected");
     assert_eq!(remote.0.lock().unwrap().models.len(), 1);
-    assert_eq!(remote.0.lock().unwrap().preferred, ["", ""]);
+    assert_eq!(
+        remote.0.lock().unwrap().preferred,
+        ["official-0", "official-1"]
+    );
     ima_local::verify_snapshot(&path, &before).unwrap();
     server.abort();
 }
@@ -306,16 +379,16 @@ async fn restore_does_not_report_success_when_server_cannot_restore_empty_prefer
         )
         .await
         .unwrap();
-    remote.0.lock().unwrap().deletion_resets_preference = false;
+    remote.0.lock().unwrap().reject_official_preferences = true;
     let error = manager
         .restore_paused(&client, &path, &transaction, &|| Ok(()))
         .await
         .unwrap_err();
-    assert_eq!(error.code, "ima_preference_verify_failed");
+    assert_eq!(error.code, "ima_api_rejected");
     let data = remote.0.lock().unwrap();
     assert_eq!(data.models.len(), 2);
     assert_eq!(data.models[1]["model_name"], "model-a");
-    assert_eq!(data.preferred, ["owned-2", "owned-2"]);
+    assert_eq!(data.preferred, ["owned-1", "owned-1"]);
     server.abort();
 }
 
@@ -356,6 +429,41 @@ async fn interrupted_add_is_reused_without_duplicate_model_creation() {
 }
 
 #[tokio::test]
+async fn interrupted_first_switch_repairs_dangling_preferences_to_native_defaults() {
+    let (directory, client, transaction, remote, server) = fixture().await;
+    let path = directory.path().join("Preferences");
+    let before = client.snapshot().await.unwrap();
+    let input = desired_input(&desired("model-a"), &before.homepage).unwrap();
+    let mut record = load_or_create(&transaction, client.account_key(), &before, &path).unwrap();
+    record.pending = Some(PendingOperation {
+        before: selection_state(&before, &path).unwrap(),
+        previous: None,
+        before_ids: before
+            .homepage
+            .models
+            .iter()
+            .map(|model| model.customize_id.clone())
+            .collect(),
+        add_input: Some(input),
+        created: None,
+    });
+    save(&transaction, &record).unwrap();
+    remote.0.lock().unwrap().preferred = ["deleted-0".to_owned(), "deleted-1".to_owned()];
+
+    recover_pending(&client, &path, &transaction, &mut record)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        remote.0.lock().unwrap().preferred,
+        ["official-0", "official-1"]
+    );
+    assert!(record.pending.is_none());
+    assert!(record.managed.is_none());
+    server.abort();
+}
+
+#[tokio::test]
 async fn failed_restore_commit_recreates_only_owned_row_and_can_restore_again() {
     let (directory, client, transaction, remote, server) = fixture().await;
     let path = directory.path().join("Preferences");
@@ -379,24 +487,17 @@ async fn failed_restore_commit_recreates_only_owned_row_and_can_restore_again() 
         .unwrap_err();
     assert_eq!(error.code, "fictional_db_failure");
     assert_eq!(remote.0.lock().unwrap().models.len(), 2);
-    assert_eq!(remote.0.lock().unwrap().preferred, ["owned-2", "owned-2"]);
-    let remapped = ima_local::remap_models(
-        &before,
-        &[(
-            "owned-1".to_owned(),
-            Selection {
-                model_id: "owned-2".to_owned(),
-                model_type: 1000000,
-            },
-        )],
-    );
-    ima_local::verify_snapshot(&path, &remapped).unwrap();
+    assert_eq!(remote.0.lock().unwrap().preferred, ["owned-1", "owned-1"]);
+    ima_local::verify_snapshot(&path, &before).unwrap();
     manager
         .restore_paused(&client, &path, &transaction, &|| Ok(()))
         .await
         .unwrap();
-    assert_eq!(remote.0.lock().unwrap().models.len(), 1);
-    assert_eq!(remote.0.lock().unwrap().preferred, ["", ""]);
+    assert_eq!(remote.0.lock().unwrap().models.len(), 2);
+    assert_eq!(
+        remote.0.lock().unwrap().preferred,
+        ["official-0", "official-1"]
+    );
     server.abort();
 }
 
@@ -445,17 +546,17 @@ async fn distinct_nested_model_ids_switch_and_restore_with_inherited_model_types
     assert_eq!(error.code, "fictional_db_failure");
     assert_eq!(
         remote.0.lock().unwrap().preferred,
-        ["selectable-0-owned-2", "selectable-1-owned-2"]
+        ["selectable-0-owned-1", "selectable-1-owned-1"]
     );
     ima_local::verify_selection(
         &path,
         &[
             Selection {
-                model_id: "selectable-0-owned-2".to_owned(),
+                model_id: "selectable-0-owned-1".to_owned(),
                 model_type: 1000000,
             },
             Selection {
-                model_id: "selectable-1-owned-2".to_owned(),
+                model_id: "selectable-1-owned-1".to_owned(),
                 model_type: 1000000,
             },
         ],
@@ -465,8 +566,11 @@ async fn distinct_nested_model_ids_switch_and_restore_with_inherited_model_types
         .restore_paused(&client, &path, &transaction, &|| Ok(()))
         .await
         .unwrap();
-    assert_eq!(remote.0.lock().unwrap().preferred, ["", ""]);
-    assert_eq!(remote.0.lock().unwrap().models.len(), 1);
+    assert_eq!(
+        remote.0.lock().unwrap().preferred,
+        ["official-0", "official-1"]
+    );
+    assert_eq!(remote.0.lock().unwrap().models.len(), 2);
     ima_local::verify_snapshot(&path, &baseline).unwrap();
     server.abort();
 }
@@ -493,7 +597,10 @@ async fn ambiguous_custom_model_links_roll_back_without_selecting_a_similar_name
         .unwrap_err();
     assert_eq!(error.code, "ima_model_mapping_ambiguous");
     assert_eq!(remote.0.lock().unwrap().models.len(), 1);
-    assert_eq!(remote.0.lock().unwrap().preferred, ["", ""]);
+    assert_eq!(
+        remote.0.lock().unwrap().preferred,
+        ["official-0", "official-1"]
+    );
     ima_local::verify_snapshot(&path, &baseline).unwrap();
     server.abort();
 }

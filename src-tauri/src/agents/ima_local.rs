@@ -42,6 +42,15 @@ pub(crate) struct LocalSelectionSnapshot {
     scenes: [SceneSnapshot; 2],
 }
 
+impl LocalSelectionSnapshot {
+    pub(crate) fn model_ids(&self) -> [Option<String>; 2] {
+        self.scenes.each_ref().map(|scene| match &scene.model_id {
+            SavedField::Value(model_id) if !model_id.is_empty() => Some(model_id.clone()),
+            SavedField::Missing | SavedField::Null | SavedField::Value(_) => None,
+        })
+    }
+}
+
 // A compensated remote re-creation can return a different server model ID. Only
 // remap the operation snapshot; the immutable first-takeover baseline stays intact.
 pub(crate) fn remap_models(
