@@ -45,3 +45,6 @@ test-results/
 build-log.txt
 .workbuddy/
 
+# Agent Instruction Files
+AGENTS.md
+
