@@ -1,6 +1,7 @@
 //! Explicitly opted-in integration acceptance. This is excluded from all normal
 //! tests: it accesses the logged-in ima account and changes real model settings.
-//! No prompts or provider inference requests are issued by this test.
+//! Message prompts are sent only by the separately authorized UI acceptance
+//! runner while this test waits at explicit stages.
 
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
@@ -12,7 +13,7 @@ use crate::{
         AgentAdapter, DesiredAgentBinding,
     },
     domain::{AgentBindingMode, ApiProtocol, AppResult, CommandError},
-    infrastructure::NativeSecretStore,
+    infrastructure::{Database, NativeSecretStore, SecretStore, SecretValue},
     services::ConfigTransaction,
 };
 
@@ -25,6 +26,14 @@ struct LiveUiHandshake {
 }
 
 impl LiveUiHandshake {
+    const STAGES: [&'static str; 5] = [
+        "native-before",
+        "third-party",
+        "third-party-repeat",
+        "native-after",
+        "third-party-after-restore",
+    ];
+
     fn from_env() -> AppResult<Self> {
         let directory = std::env::var_os("AT_SWITCH_IMA_LIVE_UI_DIR").map(PathBuf::from);
         Self::new(directory)
@@ -36,7 +45,7 @@ impl LiveUiHandshake {
                 return Err(ui_marker_error());
             }
             std::fs::create_dir_all(directory).map_err(|_| ui_marker_error())?;
-            for stage in ["a", "b", "native"] {
+            for stage in Self::STAGES {
                 for prefix in ["ready", "continue"] {
                     match std::fs::remove_file(directory.join(format!("{prefix}-{stage}"))) {
                         Ok(()) => {}
@@ -58,7 +67,7 @@ impl LiveUiHandshake {
         let Some(directory) = &self.directory else {
             return Ok(());
         };
-        if !matches!(stage, "a" | "b" | "native") {
+        if !Self::STAGES.contains(&stage) {
             return Err(ui_marker_error());
         }
         std::fs::write(directory.join(format!("ready-{stage}")), stage.as_bytes())
@@ -94,6 +103,76 @@ fn require_live_result<T>(stage: &'static str, result: AppResult<T>) -> T {
         Ok(value) => value,
         Err(error) => panic!("IMA_LIVE_FAILURE stage={stage} code={}", error.code),
     }
+}
+
+struct LiveProvider {
+    provider_name: String,
+    model_id: String,
+    supports_tools: bool,
+    base_url: String,
+    credential: SecretValue,
+}
+
+impl LiveProvider {
+    fn desired(&self) -> DesiredAgentBinding<'_> {
+        DesiredAgentBinding {
+            mode: AgentBindingMode::Direct,
+            provider_name: &self.provider_name,
+            model_id: &self.model_id,
+            supports_tools: self.supports_tools,
+            upstream_protocol: ApiProtocol::OpenaiChatCompletions,
+            source_protocol: ApiProtocol::OpenaiChatCompletions,
+            base_url: &self.base_url,
+            credential: self.credential.expose(),
+        }
+    }
+}
+
+fn configured_live_provider() -> AppResult<LiveProvider> {
+    let database_path = PathBuf::from(
+        std::env::var("AT_SWITCH_IMA_LIVE_DATABASE").map_err(|_| live_configuration_error())?,
+    );
+    if !database_path.is_absolute() || !database_path.is_file() {
+        return Err(live_configuration_error());
+    }
+    let target_model =
+        std::env::var("AT_SWITCH_IMA_LIVE_MODEL_ID").map_err(|_| live_configuration_error())?;
+    let database = Database::open(&database_path)?;
+    let mut matches = Vec::new();
+    for provider in database.list_providers()? {
+        for model in &provider.models {
+            if model.model_id == target_model {
+                matches.push((provider.clone(), model.clone()));
+            }
+        }
+    }
+    if matches.len() != 1 {
+        return Err(live_configuration_error());
+    }
+    let (provider, model) = &matches[0];
+    if provider.protocol != ApiProtocol::OpenaiChatCompletions || !provider.is_enabled {
+        return Err(live_configuration_error());
+    }
+    let stored = database.get_provider(&provider.id)?;
+    let secret_reference = stored
+        .api_key_ref
+        .as_deref()
+        .ok_or_else(live_configuration_error)?;
+    let credential = NativeSecretStore::default().get(secret_reference)?;
+    Ok(LiveProvider {
+        provider_name: provider.name.clone(),
+        model_id: model.model_id.clone(),
+        supports_tools: model.supports_tools,
+        base_url: provider.base_url.clone(),
+        credential,
+    })
+}
+
+fn live_configuration_error() -> CommandError {
+    CommandError::new(
+        "ima_live_provider_invalid",
+        "Live acceptance provider configuration is missing or ambiguous",
+    )
 }
 
 /// Read-only native compatibility probe. Run with
@@ -135,6 +214,37 @@ async fn ima_live_readonly_contract_shapes() {
 }
 
 #[tokio::test]
+#[ignore = "requires explicit read-only native ima account authorization"]
+async fn ima_live_safe_checkpoint_diagnostics() {
+    assert_eq!(
+        std::env::var("AT_SWITCH_IMA_LIVE_DIAGNOSTICS").as_deref(),
+        Ok("1"),
+        "Set AT_SWITCH_IMA_LIVE_DIAGNOSTICS=1 only after explicit read-only authorization"
+    );
+    let backup_root = PathBuf::from(
+        std::env::var("AT_SWITCH_IMA_LIVE_BACKUP_DIR")
+            .expect("AT_SWITCH_IMA_LIVE_BACKUP_DIR must name the encrypted-backup root"),
+    );
+    let detection = ImaAdapter::default().detect(&DiscoveryContext::native());
+    assert!(detection.write_supported, "ima must be ready");
+    let preferences = detection.config_path.as_deref().expect("ima preferences");
+    let version = web_version(preferences).expect("ima extension version");
+    let manager = ImaBindingManager::default();
+    let client = require_live_result(
+        "diagnostics-auth",
+        manager.connect(&detection, &version).await,
+    );
+    let transaction = ConfigTransaction::new(Arc::new(NativeSecretStore::default()), backup_root);
+    let diagnostics = require_live_result(
+        "diagnostics",
+        manager
+            .safe_checkpoint_diagnostics(&client, &detection, &transaction)
+            .await,
+    );
+    println!("IMA_LIVE_SAFE_STATE={diagnostics}");
+}
+
+#[tokio::test]
 #[ignore = "requires explicit live-account authorization and persistent encrypted backup directory"]
 async fn ima_live_roundtrip_restores_original_models_and_preferences() {
     assert_eq!(
@@ -151,6 +261,7 @@ async fn ima_live_roundtrip_restores_original_models_and_preferences() {
         "The encrypted backup directory must be absolute"
     );
     let ui = LiveUiHandshake::from_env().expect("initialize optional live UI handshake");
+    let live_provider = require_live_result("provider", configured_live_provider());
     let adapter = ImaAdapter::default();
     let detection = adapter.detect(&DiscoveryContext::native());
     assert!(
@@ -169,84 +280,76 @@ async fn ima_live_roundtrip_restores_original_models_and_preferences() {
         .expect("checkpoint status")
         .is_some_and(|(managed, pending)| managed || pending)
     {
-        require_live_result(
-            "initial-recovery",
-            manager
-                .restore(&detection, &version, &transaction, &|| Ok(()))
-                .await,
-        );
+        if let Err(error) = manager
+            .restore(&detection, &version, &transaction, &|| Ok(()))
+            .await
+        {
+            if let Ok(diagnostics) = manager
+                .safe_checkpoint_diagnostics(&client, &detection, &transaction)
+                .await
+            {
+                eprintln!("IMA_LIVE_SAFE_STATE={diagnostics}");
+            }
+            require_live_result::<()>("initial-recovery", Err(error));
+        }
     }
     let before = require_live_result("initial-snapshot", client.snapshot().await);
-    assert!(
-        before.homepage.models.len() >= 2,
-        "The live test requires two existing user-configured models"
-    );
     let before_local = require_live_result("initial-local", ima_local::snapshot(preferences));
-    let models = before
-        .homepage
-        .models
-        .iter()
-        .take(2)
-        .map(|model| model.input())
-        .collect::<Vec<_>>();
     let mut exercise_stage = "initial";
     let exercise: AppResult<()> = async {
-        for (index, input) in models.iter().enumerate() {
-            let desired = DesiredAgentBinding {
-                mode: AgentBindingMode::Direct,
-                provider_name: "ima existing configured model",
-                model_id: &input.model_name,
-                supports_tools: true,
-                upstream_protocol: ApiProtocol::OpenaiChatCompletions,
-                source_protocol: ApiProtocol::OpenaiChatCompletions,
-                base_url: &input.api_uri,
-                credential: input.api_key.expose(),
-            };
-            exercise_stage = if index == 0 {
-                "validate-a"
-            } else {
-                "validate-b"
-            };
-            adapter.validate_binding(&desired)?;
-            exercise_stage = if index == 0 { "switch-a" } else { "switch-b" };
-            println!("IMA_LIVE_STAGE={exercise_stage}");
-            let outcome = manager
-                .apply(&detection, &version, &desired, &transaction, &|| Ok(()))
-                .await?;
-            if outcome.needs_restart {
-                return Err(CommandError::new(
-                    "ima_live_restart_failed",
-                    "ima automatic relaunch needs attention",
-                ));
-            }
-            exercise_stage = if index == 0 { "verify-a" } else { "verify-b" };
-            manager.verify_cached(&detection, &desired, &transaction)?;
-            exercise_stage = if index == 0 { "ui-a" } else { "ui-b" };
-            ui.wait(if index == 0 { "a" } else { "b" }).await?;
+        exercise_stage = "ui-native-before";
+        ui.wait("native-before").await?;
+        let desired = live_provider.desired();
+        adapter.validate_binding(&desired)?;
+
+        exercise_stage = "switch-third-party";
+        println!("IMA_LIVE_STAGE={exercise_stage}");
+        let outcome = manager
+            .apply(&detection, &version, &desired, &transaction, &|| Ok(()))
+            .await?;
+        if outcome.needs_restart {
+            return Err(CommandError::new(
+                "ima_live_restart_failed",
+                "ima automatic relaunch needs attention",
+            ));
         }
+        manager.verify_cached(&detection, &desired, &transaction)?;
+        let first_switch = client.snapshot().await?;
+        exercise_stage = "ui-third-party";
+        ui.wait("third-party").await?;
+
+        exercise_stage = "switch-third-party-repeat";
+        println!("IMA_LIVE_STAGE={exercise_stage}");
+        manager
+            .apply(&detection, &version, &desired, &transaction, &|| Ok(()))
+            .await?;
+        manager.verify_cached(&detection, &desired, &transaction)?;
+        let repeated_switch = client.snapshot().await?;
+        if first_switch.homepage.models.len() != repeated_switch.homepage.models.len() {
+            return Err(CommandError::new(
+                "ima_live_duplicate_model",
+                "Repeated switching created an extra ima model",
+            ));
+        }
+        exercise_stage = "ui-third-party-repeat";
+        ui.wait("third-party-repeat").await?;
+
         exercise_stage = "restore-native";
         println!("IMA_LIVE_STAGE={exercise_stage}");
         manager
             .restore(&detection, &version, &transaction, &|| Ok(()))
             .await?;
-        exercise_stage = "ui-native";
-        ui.wait("native").await?;
-        let input = &models[0];
-        let desired = DesiredAgentBinding {
-            mode: AgentBindingMode::Direct,
-            provider_name: "ima existing configured model",
-            model_id: &input.model_name,
-            supports_tools: true,
-            upstream_protocol: ApiProtocol::OpenaiChatCompletions,
-            source_protocol: ApiProtocol::OpenaiChatCompletions,
-            base_url: &input.api_uri,
-            credential: input.api_key.expose(),
-        };
-        exercise_stage = "switch-a-again";
+        exercise_stage = "ui-native-after";
+        ui.wait("native-after").await?;
+
+        exercise_stage = "switch-third-party-after-restore";
         println!("IMA_LIVE_STAGE={exercise_stage}");
         manager
             .apply(&detection, &version, &desired, &transaction, &|| Ok(()))
             .await?;
+        manager.verify_cached(&detection, &desired, &transaction)?;
+        exercise_stage = "ui-third-party-after-restore";
+        ui.wait("third-party-after-restore").await?;
         Ok(())
     }
     .await;
@@ -296,23 +399,32 @@ async fn ima_live_roundtrip_restores_original_models_and_preferences() {
 #[tokio::test]
 async fn ui_handshake_discards_stale_markers_and_consumes_only_the_current_stage() {
     let directory = tempfile::tempdir().unwrap();
-    std::fs::write(directory.path().join("continue-a"), "stale").unwrap();
-    std::fs::write(directory.path().join("ready-native"), "stale").unwrap();
+    std::fs::write(directory.path().join("continue-native-before"), "stale").unwrap();
+    std::fs::write(directory.path().join("ready-native-after"), "stale").unwrap();
     std::fs::write(directory.path().join("unrelated"), "keep").unwrap();
     let ui = LiveUiHandshake::new(Some(directory.path().to_path_buf())).unwrap();
-    assert!(!directory.path().join("continue-a").exists());
-    assert!(!directory.path().join("ready-native").exists());
+    assert!(!directory.path().join("continue-native-before").exists());
+    assert!(!directory.path().join("ready-native-after").exists());
     assert!(directory.path().join("unrelated").exists());
-    std::fs::write(directory.path().join("continue-b"), "continue").unwrap();
-    let timeout = ui.wait_with_timeout("a", Duration::ZERO).await.unwrap_err();
+    std::fs::write(directory.path().join("continue-third-party"), "continue").unwrap();
+    let timeout = ui
+        .wait_with_timeout("native-before", Duration::ZERO)
+        .await
+        .unwrap_err();
     assert_eq!(timeout.code, "ima_live_ui_timeout");
     assert_eq!(
-        std::fs::read_to_string(directory.path().join("ready-a")).unwrap(),
-        "a"
+        std::fs::read_to_string(directory.path().join("ready-native-before")).unwrap(),
+        "native-before"
     );
-    assert!(directory.path().join("continue-b").exists());
-    std::fs::write(directory.path().join("continue-a"), "continue").unwrap();
-    ui.wait_with_timeout("a", Duration::ZERO).await.unwrap();
-    assert!(!directory.path().join("continue-a").exists());
-    LiveUiHandshake::new(None).unwrap().wait("a").await.unwrap();
+    assert!(directory.path().join("continue-third-party").exists());
+    std::fs::write(directory.path().join("continue-native-before"), "continue").unwrap();
+    ui.wait_with_timeout("native-before", Duration::ZERO)
+        .await
+        .unwrap();
+    assert!(!directory.path().join("continue-native-before").exists());
+    LiveUiHandshake::new(None)
+        .unwrap()
+        .wait("native-before")
+        .await
+        .unwrap();
 }

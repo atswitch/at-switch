@@ -1,4 +1,4 @@
-use std::{collections::HashSet, path::Path};
+use std::{collections::HashSet, path::Path, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -46,6 +46,18 @@ struct ManagedModel {
     customize_id: String,
     selections: [Selection; 2],
     input: ImaModelInput,
+    #[serde(default = "default_remove_on_restore")]
+    remove_on_restore: bool,
+    #[serde(default = "default_selected")]
+    selected: bool,
+}
+
+fn default_remove_on_restore() -> bool {
+    true
+}
+
+fn default_selected() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,7 +107,86 @@ impl ImaBindingManager {
         if record.version != 1 || record.account_key != account {
             return Err(checkpoint_invalid());
         }
-        Ok(Some((record.managed.is_some(), record.pending.is_some())))
+        Ok(Some((
+            record
+                .managed
+                .as_ref()
+                .is_some_and(|managed| managed.selected),
+            record.pending.is_some(),
+        )))
+    }
+
+    #[cfg(test)]
+    pub(super) async fn safe_checkpoint_diagnostics(
+        &self,
+        client: &ImaClient,
+        detection: &AgentDetection,
+        transaction: &ConfigTransaction,
+    ) -> AppResult<serde_json::Value> {
+        let path = preferences_path(detection)?;
+        let account = active_account(path)?;
+        let snapshot = client.snapshot().await?;
+        let Some(bytes) = transaction.read_service_checkpoint("ima", &resource_key(&account))?
+        else {
+            return Ok(serde_json::json!({"checkpoint": "absent"}));
+        };
+        let bytes = Zeroizing::new(bytes);
+        let record: Checkpoint =
+            serde_json::from_slice(&bytes).map_err(|_| checkpoint_invalid())?;
+        let managed = record.managed.as_ref();
+        let pending = record.pending.as_ref();
+        let baseline_local = record.baseline.local.model_ids();
+        let relation = |scene: &ImaSceneModels, expected: &str| {
+            let actual = scene.preferred_model_id.as_deref().unwrap_or_default();
+            if actual == expected {
+                "exact"
+            } else if actual.is_empty() {
+                "actual-empty"
+            } else if scene.find(actual).is_none() {
+                "actual-dangling"
+            } else if is_official_default_choice(scene, actual) {
+                "actual-default"
+            } else {
+                "actual-other-valid"
+            }
+        };
+        let relations = |expected: &[String; 2]| {
+            snapshot
+                .scenes
+                .each_ref()
+                .into_iter()
+                .enumerate()
+                .map(|(index, scene)| {
+                    let actual = scene.preferred_model_id.as_deref().unwrap_or_default();
+                    let actual_model = scene.find(actual);
+                    serde_json::json!({
+                        "expected": if expected[index].is_empty() { "empty" } else { "selected" },
+                        "relation": relation(scene, &expected[index]),
+                        "actual_custom": actual_model.and_then(|model| model.customize_id.as_deref()).is_some(),
+                        "actual_managed": managed.is_some_and(|managed| managed.selections[index].model_id == actual),
+                        "default_roots": scene.models.iter().filter(|model| model.is_default).count(),
+                        "baseline_local_present": baseline_local[index].is_some(),
+                        "baseline_local_is_managed": baseline_local[index].as_ref().is_some_and(|model_id| managed.is_some_and(|managed| managed.selections[index].model_id == *model_id)),
+                        "baseline_local_root_index": baseline_local[index].as_ref().and_then(|model_id| scene.models.iter().position(|model| model.model_id == *model_id)),
+                        "managed_root_index": managed.and_then(|managed| scene.models.iter().position(|model| model.model_id == managed.selections[index].model_id)),
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        Ok(serde_json::json!({
+            "checkpoint": "present",
+            "managed": managed.is_some(),
+            "managed_row_present": managed.is_some_and(|managed| snapshot.homepage.models.iter().any(|model| model.customize_id == managed.customize_id)),
+            "managed_remove_on_restore": managed.map(|managed| managed.remove_on_restore),
+            "managed_selected": managed.map(|managed| managed.selected),
+            "pending": pending.is_some(),
+            "pending_previous": pending.and_then(|pending| pending.previous.as_ref()).is_some(),
+            "pending_previous_row_present": pending.and_then(|pending| pending.previous.as_ref()).is_some_and(|previous| snapshot.homepage.models.iter().any(|model| model.customize_id == previous.customize_id)),
+            "pending_add": pending.is_some_and(|pending| pending.add_input.is_some()),
+            "pending_created": pending.is_some_and(|pending| pending.created.is_some()),
+            "baseline": relations(&record.baseline.preferred),
+            "pending_before": pending.map(|pending| relations(&pending.before.preferred)),
+        }))
     }
 
     /// Passive verification reads only AT-Switch's encrypted checkpoint and
@@ -126,6 +217,12 @@ impl ImaBindingManager {
         let managed = record
             .managed
             .ok_or_else(|| CommandError::new("ima_binding_unverified", "ima 当前使用原始配置"))?;
+        if !managed.selected {
+            return Err(CommandError::new(
+                "ima_binding_unverified",
+                "ima 当前使用原始配置",
+            ));
+        }
         if managed.input.model_name != desired.model_id
             || managed.input.api_key.expose() != desired.credential
             || managed.input.api_uri != desired_endpoint(desired.base_url)?
@@ -214,15 +311,22 @@ impl ImaBindingManager {
 
         let result = async {
             let managed = match previous {
-                Some(mut managed) => {
-                    if managed.input != input {
+                Some(managed) => {
+                    if managed.input != input && managed.remove_on_restore {
                         client.modify_model(&managed.customize_id, &input).await?;
+                        let mut managed = managed;
+                        managed.input = input.clone();
+                        managed
+                    } else if managed.input == input {
+                        managed
+                    } else {
+                        create_owned(client, transaction, &mut record, &input).await?
                     }
-                    managed.input = input.clone();
-                    managed
                 }
                 None => create_owned(client, transaction, &mut record, &input).await?,
             };
+            let mut managed = managed;
+            managed.selected = true;
             set_preferences(
                 client,
                 &managed
@@ -239,15 +343,15 @@ impl ImaBindingManager {
                 },
             )?;
             ima_local::verify_selection(path, &managed.selections)?;
-            let current = client.snapshot().await?;
-            verify_managed(&current, &managed)?;
-            verify_preferences(
-                &current.scenes,
+            wait_for_managed(
+                client,
+                &managed,
                 &managed
                     .selections
                     .each_ref()
                     .map(|selection| selection.model_id.clone()),
-            )?;
+            )
+            .await?;
             record.managed = Some(managed);
             commit_checkpoint(transaction, &mut record, commit)
         }
@@ -264,8 +368,29 @@ impl ImaBindingManager {
     ) -> AppResult<()> {
         let snapshot = client.snapshot().await?;
         let mut record = load_or_create(transaction, client.account_key(), &snapshot, path)?;
-        recover_pending(client, path, transaction, &mut record).await?;
-        if record.managed.is_none() {
+        if has_interrupted_native_restore(&record, &snapshot) {
+            finish_interrupted_native_restore(client, path, transaction, &mut record).await?;
+        }
+        let restore_pending = record
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.previous.is_some() && pending.add_input.is_some());
+        if let Err(error) = recover_pending(client, path, transaction, &mut record).await {
+            if restore_pending && error.code == "ima_api_rejected" {
+                // ima may have accepted deletion before the connection failed,
+                // then reject the compensating re-add (for example with its
+                // permission code 100006). Complete the native restore from
+                // the durable before-state instead of leaving a stuck journal.
+                finish_interrupted_native_restore(client, path, transaction, &mut record).await?;
+            } else {
+                return Err(error);
+            }
+        }
+        if record
+            .managed
+            .as_ref()
+            .is_none_or(|managed| !managed.selected)
+        {
             commit()?;
             return Ok(());
         }
@@ -291,17 +416,17 @@ impl ImaBindingManager {
         });
         save(transaction, &record)?;
         let result = async {
-            set_preferences(client, &record.baseline.preferred).await?;
-            if let Some(managed) = &previous {
-                client.delete_model(&managed.customize_id).await?;
-            }
-            // ima rejects an empty set_preferred_model. Deleting our selected
-            // custom entry must reset it; verify that behavior rather than
-            // silently substituting a different official model.
-            let restored = client.snapshot().await?;
-            verify_preferences(&restored.scenes, &record.baseline.preferred)?;
+            // ima rejects an empty preferred-model write and also rejects
+            // immediately re-adding an identical custom model after deletion.
+            // Keep the single reusable row and restore empty remote baselines
+            // from each scene's exact local pre-takeover model ID. The row
+            // remains unselected and is reused or modified by the next switch,
+            // so cycles never create duplicates.
+            restore_native_preferences(client, &record.baseline).await?;
             restore_local(transaction, path, &record.baseline.local)?;
-            record.managed = None;
+            if let Some(managed) = record.managed.as_mut() {
+                managed.selected = false;
+            }
             commit_checkpoint(transaction, &mut record, commit)
         }
         .await;
@@ -510,32 +635,52 @@ async fn create_owned(
     record: &mut Checkpoint,
     input: &ImaModelInput,
 ) -> AppResult<ManagedModel> {
-    let pending = record.pending.as_ref().ok_or_else(checkpoint_invalid)?;
+    let pending = record.pending.clone().ok_or_else(checkpoint_invalid)?;
     let before: HashSet<String> = pending.before_ids.iter().cloned().collect();
     let existing = client.snapshot().await?;
-    let candidates: Vec<&ImaModel> = existing
+    let new_candidates: Vec<&ImaModel> = existing
         .homepage
         .models
         .iter()
         .filter(|model| !before.contains(&model.customize_id) && model.matches(input))
         .collect();
-    if candidates.len() > 1 {
+    if new_candidates.len() > 1 {
         return Err(CommandError::new(
             "ima_created_model_ambiguous",
             "存在多个可能由中断操作创建的模型，已停止添加",
         ));
     }
-    if let Some(model) = candidates.first() {
+    let existing_candidates: Vec<&ImaModel> = existing
+        .homepage
+        .models
+        .iter()
+        .filter(|model| before.contains(&model.customize_id) && model.matches(input))
+        .collect();
+    if new_candidates.is_empty() && existing_candidates.len() > 1 {
+        return Err(CommandError::new(
+            "ima_model_mapping_ambiguous",
+            "ima 中存在多个相同配置模型，无法安全选择",
+        )
+        .with_recovery("请在 ima 中保留一个相同配置的模型后重试。"));
+    }
+    if let Some(model) = new_candidates
+        .first()
+        .or_else(|| existing_candidates.first())
+    {
         let managed = ManagedModel {
             customize_id: model.customize_id.clone(),
             selections: selections_for(model, &existing.scenes)?,
             input: input.clone(),
+            remove_on_restore: !before.contains(&model.customize_id),
+            selected: true,
         };
-        record
-            .pending
-            .as_mut()
-            .ok_or_else(checkpoint_invalid)?
-            .created = Some(managed.clone());
+        if managed.remove_on_restore {
+            record
+                .pending
+                .as_mut()
+                .ok_or_else(checkpoint_invalid)?
+                .created = Some(managed.clone());
+        }
         save(transaction, record)?;
         return Ok(managed);
     }
@@ -573,6 +718,8 @@ async fn create_owned(
         customize_id: model.customize_id.clone(),
         selections: selections_for(model, &snapshot.scenes)?,
         input: input.clone(),
+        remove_on_restore: true,
+        selected: true,
     };
     record
         .pending
@@ -584,18 +731,132 @@ async fn create_owned(
 }
 
 async fn set_preferences(client: &ImaClient, preferred: &[String; 2]) -> AppResult<()> {
+    let current = client.snapshot().await?;
     for (scene, model_id) in preferred.iter().enumerate() {
-        if !model_id.is_empty() {
+        if !model_id.is_empty()
+            && current.scenes[scene].preferred_model_id.as_deref() != Some(model_id.as_str())
+        {
             client.set_preferred_model(scene as u8, model_id).await?;
         }
     }
     Ok(())
 }
 
+async fn restore_native_preferences(
+    client: &ImaClient,
+    state: &SelectionState,
+) -> AppResult<ImaSnapshot> {
+    fn first_selectable(model: &ImaSceneModel) -> Option<String> {
+        model
+            .sub_model_infos
+            .iter()
+            .find_map(first_selectable)
+            .or_else(|| (!model.model_id.is_empty()).then(|| model.model_id.clone()))
+    }
+
+    let current = client.snapshot().await?;
+    let local = state.local.model_ids();
+    let mut targets = state.preferred.clone();
+    for scene in 0..2 {
+        if !targets[scene].is_empty() {
+            continue;
+        }
+        targets[scene] = local[scene]
+            .as_ref()
+            .filter(|model_id| current.scenes[scene].find(model_id).is_some())
+            .cloned()
+            .or_else(|| {
+                current.scenes[scene]
+                    .models
+                    .iter()
+                    .find(|model| model.is_default && !model.model_id.is_empty())
+                    .and_then(first_selectable)
+            })
+            .or_else(|| {
+                current.scenes[scene]
+                    .models
+                    .iter()
+                    .find_map(first_selectable)
+            })
+            .unwrap_or_default();
+    }
+    set_preferences(client, &targets).await?;
+    wait_for_preferences(client, &targets).await
+}
+
+async fn wait_for_managed(
+    client: &ImaClient,
+    managed: &ManagedModel,
+    preferred: &[String; 2],
+) -> AppResult<ImaSnapshot> {
+    let mut last = None;
+    for delay in [0, 250, 750, 1_500] {
+        if delay != 0 {
+            tokio::time::sleep(Duration::from_millis(delay)).await;
+        }
+        let snapshot = client.snapshot().await?;
+        if managed_matches(&snapshot, managed) && preferences_match(&snapshot.scenes, preferred) {
+            return Ok(snapshot);
+        }
+        last = Some(snapshot);
+    }
+    let snapshot = last.ok_or_else(checkpoint_invalid)?;
+    verify_managed(&snapshot, managed)?;
+    verify_preferences(&snapshot.scenes, preferred)?;
+    Ok(snapshot)
+}
+
+async fn wait_for_preferences(
+    client: &ImaClient,
+    preferred: &[String; 2],
+) -> AppResult<ImaSnapshot> {
+    let mut last = None;
+    for delay in [0, 250, 750, 1_500] {
+        if delay != 0 {
+            tokio::time::sleep(Duration::from_millis(delay)).await;
+        }
+        let snapshot = client.snapshot().await?;
+        if preferences_match(&snapshot.scenes, preferred) {
+            return Ok(snapshot);
+        }
+        last = Some(snapshot);
+    }
+    let snapshot = last.ok_or_else(checkpoint_invalid)?;
+    verify_preferences(&snapshot.scenes, preferred)?;
+    Ok(snapshot)
+}
+
+fn managed_matches(snapshot: &ImaSnapshot, managed: &ManagedModel) -> bool {
+    snapshot
+        .homepage
+        .models
+        .iter()
+        .any(|model| model.customize_id == managed.customize_id && model.matches(&managed.input))
+}
+
+fn preferences_match(scenes: &[ImaSceneModels; 2], preferred: &[String; 2]) -> bool {
+    scenes
+        .iter()
+        .zip(preferred)
+        .all(|(scene, id)| scene.preferred_model_id.as_deref().unwrap_or_default() == id)
+}
+
+#[cfg(test)]
+fn is_official_default_choice(scene: &ImaSceneModels, model_id: &str) -> bool {
+    fn contains(models: &[ImaSceneModel], model_id: &str, inside_default: bool) -> bool {
+        models.iter().any(|model| {
+            let inside_default = inside_default || model.is_default;
+            (inside_default && model.model_id == model_id)
+                || contains(&model.sub_model_infos, model_id, inside_default)
+        })
+    }
+    contains(&scene.models, model_id, false)
+}
+
 fn verify_preferences(scenes: &[ImaSceneModels; 2], preferred: &[String; 2]) -> AppResult<()> {
     if scenes.iter().zip(preferred).any(|(scene, id)| {
         let actual = scene.preferred_model_id.as_deref().unwrap_or_default();
-        actual != id && !(id.is_empty() && !actual.is_empty() && scene.find(actual).is_none())
+        actual != id
     }) {
         return Err(CommandError::new(
             "ima_preference_verify_failed",
@@ -731,14 +992,9 @@ async fn recover_pending(
                     .modify_model(&original.customize_id, &original.input)
                     .await?;
             }
-        } else if pending.add_input.is_some() {
-            // A restore operation can be interrupted after ima has deleted our
-            // row. Recreating it just to roll the restore back is unnecessary;
-            // continue restoring the native state instead.
-            previous = None;
         } else {
-            // A delete may have succeeded before the connection failed during a
-            // switch. Recreate only our own row and remap its operation snapshot.
+            // A delete may have succeeded before the connection failed. Recreate
+            // only our own row and remap its operation snapshot to the new IDs.
             let replacement = if let Some(created) = &pending.created {
                 if current.homepage.models.iter().any(|model| {
                     model.customize_id == created.customize_id && model.matches(&original.input)
@@ -795,13 +1051,49 @@ async fn recover_pending(
             client.delete_model(&id).await?;
         }
     }
-    let restored = client.snapshot().await?;
-    verify_preferences(&restored.scenes, &before.preferred)?;
+    let restored = if previous.is_none() {
+        // An interrupted first switch has no managed model to restore. If ima
+        // accepted the model deletion but left its ID selected, move each
+        // originally empty scene to its official default before clearing the
+        // journal. A dangling ID is not a usable restored state in the UI.
+        restore_native_preferences(client, &before).await?
+    } else {
+        wait_for_preferences(client, &before.preferred).await?
+    };
     if let Some(managed) = &previous {
         verify_managed(&restored, managed)?;
     }
     restore_local(transaction, path, &before.local)?;
     record.managed = previous;
+    record.pending = None;
+    save(transaction, record)
+}
+
+fn has_interrupted_native_restore(record: &Checkpoint, snapshot: &ImaSnapshot) -> bool {
+    let Some(pending) = &record.pending else {
+        return false;
+    };
+    let Some(previous) = &pending.previous else {
+        return false;
+    };
+    pending.add_input.is_some()
+        && !snapshot
+            .homepage
+            .models
+            .iter()
+            .any(|model| model.customize_id == previous.customize_id)
+}
+
+async fn finish_interrupted_native_restore(
+    client: &ImaClient,
+    path: &Path,
+    transaction: &ConfigTransaction,
+    record: &mut Checkpoint,
+) -> AppResult<()> {
+    let pending = record.pending.clone().ok_or_else(checkpoint_invalid)?;
+    restore_native_preferences(client, &pending.before).await?;
+    restore_local(transaction, path, &pending.before.local)?;
+    record.managed = None;
     record.pending = None;
     save(transaction, record)
 }
