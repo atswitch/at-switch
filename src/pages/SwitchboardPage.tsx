@@ -4,6 +4,7 @@ import {
   FolderOpen,
   KeyRound,
   LoaderCircle,
+  Network,
   Pencil,
   Plus,
   Radio,
@@ -12,17 +13,21 @@ import {
   Trash2,
 } from "lucide-react";
 import clsx from "clsx";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useLanguage } from "../i18n";
 import { ProviderLogo } from "../components/ProviderLogo";
+import { ProviderModelGroup } from "../components/ProviderModelGroup";
 import {
   directBindingRequirement,
+  isProxyRoutedModel,
+  isProxyRoutedProvider,
   supportsDirectBinding,
 } from "../lib/agentCapabilities";
 import {
   agentAvailabilityLabel,
+  verificationLabel,
 } from "../lib/format";
-import { modelRequiresVerification } from "../lib/modelCapabilities";
+import { modelIsReady, modelRequiresVerification } from "../lib/modelCapabilities";
 import { providerPresetDisplayRank } from "../lib/providerPresets";
 import type {
   AgentSummary,
@@ -97,6 +102,19 @@ export function SwitchboardPage({
   const supportsInstallSelection =
     platform === "macos" || platform === "windows";
 
+  // 供应商较多的目录会很长，折叠状态按当前会话内的供应商 ID 记录；切换 Agent 时
+  // 页面随 key 重挂载，回到全部展开的默认视图。
+  const [collapsedProviderIds, setCollapsedProviderIds] = useState<string[]>(
+    [],
+  );
+  const toggleProviderGroup = (providerId: string) => {
+    setCollapsedProviderIds((current) =>
+      current.includes(providerId)
+        ? current.filter((id) => id !== providerId)
+        : [...current, providerId],
+    );
+  };
+
   return (
     <div className={clsx("switchboard", !installed && "is-unavailable")}>
       <header
@@ -108,7 +126,11 @@ export function SwitchboardPage({
           <strong>
             <span>{agent.displayName}</span>
             <i aria-hidden="true">›</i>
-            <span>{text("当前路由", "Current route")}</span>
+            <span>
+              {agent.proxyPrefEnabled
+                ? text("代理路由", "Proxy route")
+                : text("当前路由", "Current route")}
+            </span>
             <i aria-hidden="true">›</i>
             <span>
               {agent.providerName
@@ -260,160 +282,242 @@ export function SwitchboardPage({
           </div>
         )}
 
-        {providersWithModels.flatMap((provider) => {
-          return provider.models.map((model) => {
-            const configured =
+        {providersWithModels.map((provider) => (
+          <ProviderModelGroup
+            key={provider.id}
+            provider={provider}
+            modelCount={provider.models.length}
+            expanded={!collapsedProviderIds.includes(provider.id)}
+            inUse={
               agent.providerId === provider.id &&
-              agent.modelId === model.modelId &&
-              agent.configHealth === "healthy";
-            const requiresVerification = modelRequiresVerification(model);
-            const directCompatible = supportsDirectBinding(agent.id, provider);
-            const active =
-              agentReady &&
-              configured &&
-              !agent.activationRequired &&
-              agent.mode === "direct";
-            const key = `${provider.id}:${model.modelId}`;
-            const switching = switchingKey === key;
-            const canSwitch =
-              agentReady &&
-              provider.hasApiKey &&
-              directCompatible &&
-              !switchingKey;
+              provider.models.some((model) => model.modelId === agent.modelId)
+            }
+            proxyRouted={isProxyRoutedProvider(agent, provider.id)}
+            onToggle={() => toggleProviderGroup(provider.id)}
+          >
+            {provider.models.map((model) => {
+              const configured =
+                agent.providerId === provider.id &&
+                agent.modelId === model.modelId &&
+                agent.configHealth === "healthy";
+              const requiresVerification = modelRequiresVerification(model);
+              // 验证状态属于具体模型：文本模型必须自己通过连接测试，非文本模型免验证。
+              const modelReady = modelIsReady(model);
+              const pendingVerification = requiresVerification && !modelReady;
+              const directCompatible = supportsDirectBinding(agent.id, provider);
+              const active =
+                agentReady &&
+                configured &&
+                !agent.activationRequired &&
+                agent.mode === "direct";
+              // 代理接管是另一种"正在使用"：目标模型显示「代理中」并提示运行依赖。
+              const proxyActive =
+                agentReady &&
+                configured &&
+                !agent.activationRequired &&
+                isProxyRoutedModel(agent, provider.id, model.modelId);
+              const key = `${provider.id}:${model.modelId}`;
+              const switching = switchingKey === key;
+              const canSwitch =
+                agentReady &&
+                provider.hasApiKey &&
+                modelReady &&
+                directCompatible &&
+                !switchingKey;
 
-            return (
-              <article
-                className={clsx("model-row", active && "is-active")}
-                key={key}
-              >
-                <ProviderMark provider={provider} />
-
-                <div className="model-row__identity">
-                  <div className="model-row__title">
-                    <strong>{model.displayName}</strong>
-                    <span>{provider.name}</span>
-                  </div>
-                  <div className="model-row__meta">
-                    <button
-                      className="model-row__endpoint"
-                      type="button"
-                      onClick={() => onEditProvider(provider)}
-                      title={
-                        provider.baseUrl ||
-                        text("尚未填写 Endpoint", "Endpoint not provided")
-                      }
-                    >
-                      {provider.baseUrl ||
-                        text("尚未填写 Endpoint", "Endpoint not provided")}
-                    </button>
-                    <span className="model-row__model-id">{model.modelId}</span>
-                  </div>
-                </div>
-
-                <div className="model-row__status">
-                  {!directCompatible && (
-                    <span className="verification-copy">
-                      {text("直连需要", "Direct mode requires")} {" "}
-                      {directBindingRequirement(agent.id, language)}
-                    </span>
+              return (
+                <article
+                  className={clsx(
+                    "model-row",
+                    active && "is-active",
+                    proxyActive && "is-proxy",
                   )}
-                </div>
+                  key={key}
+                >
+                  <ProviderMark provider={provider} />
 
-                <div className="model-row__actions">
-                  {requiresVerification && (
+                  <div className="model-row__identity">
+                    <div className="model-row__title">
+                      <strong>{model.displayName}</strong>
+                      <span>{provider.name}</span>
+                    </div>
+                    <div className="model-row__meta">
+                      <button
+                        className="model-row__endpoint"
+                        type="button"
+                        onClick={() => onEditProvider(provider)}
+                        title={
+                          provider.baseUrl ||
+                          text("尚未填写 Endpoint", "Endpoint not provided")
+                        }
+                      >
+                        {provider.baseUrl ||
+                          text("尚未填写 Endpoint", "Endpoint not provided")}
+                      </button>
+                      <span className="model-row__model-id">{model.modelId}</span>
+                    </div>
+                  </div>
+
+                  <div className="model-row__status">
+                    {proxyActive && !pendingVerification && (
+                      <span
+                        className="verification-copy verification-copy--proxy"
+                        title={text(
+                          "流量经由本地代理；退出 AT-Switch 后该智能体无法请求",
+                          "Traffic goes through the local proxy; this agent cannot make requests after AT-Switch exits",
+                        )}
+                      >
+                        <Network size={11} aria-hidden="true" />
+                        {text("代理接管", "Proxied")}
+                      </span>
+                    )}
+                    {pendingVerification && (
+                      <button
+                        type="button"
+                        className="verification-copy verification-copy--pending"
+                        onClick={() => onTestProvider(provider.id, model.modelId)}
+                        disabled={Boolean(testingId)}
+                        title={text(
+                          "点击开始连接验证，通过后即可切换或配置本地代理",
+                          "Click to start the connection test; the model becomes switchable once it passes",
+                        )}
+                      >
+                        <strong>
+                          {verificationLabel(model.verificationStatus, language)}
+                        </strong>
+                        <span aria-hidden="true">
+                          {testingId === key
+                            ? text("验证中…", "Verifying…")
+                            : text("点击验证", "Click to verify")}
+                        </span>
+                      </button>
+                    )}
+                    {!pendingVerification && !directCompatible && (
+                      <span className="verification-copy">
+                        {text("直连需要", "Direct mode requires")} {" "}
+                        {directBindingRequirement(agent.id, language)}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="model-row__actions">
+                    {requiresVerification && (
+                      <button
+                        type="button"
+                        className={clsx(
+                          "row-icon-button",
+                          pendingVerification && "row-icon-button--attention",
+                        )}
+                        aria-label={
+                          pendingVerification
+                            ? text(
+                                `点击验证 ${model.displayName}`,
+                                `Click to verify ${model.displayName}`,
+                              )
+                            : text(
+                                `测试 ${provider.name}`,
+                                `Test ${provider.name}`,
+                              )
+                        }
+                        title={
+                          pendingVerification
+                            ? text(
+                                `点击验证 ${model.displayName}：通过后即可切换或配置本地代理`,
+                                `Click to verify ${model.displayName}: it becomes switchable once it passes`,
+                              )
+                            : text(
+                                `使用 ${model.displayName} 验证模型供应商的普通响应、流式输出与工具调用能力`,
+                                `Use ${model.displayName} to validate normal responses, streaming, and tool calls`,
+                              )
+                        }
+                        onClick={() => onTestProvider(provider.id, model.modelId)}
+                        disabled={testingId === key}
+                      >
+                        <Radio
+                          size={16}
+                          className={
+                            testingId === key ? "is-pulsing" : undefined
+                          }
+                        />
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="row-icon-button"
                       aria-label={text(
-                        `测试 ${provider.name}`,
-                        `Test ${provider.name}`,
+                        `编辑 ${provider.name}`,
+                        `Edit ${provider.name}`,
                       )}
-                      title={text(
-                        `使用 ${model.displayName} 验证模型供应商的普通响应、流式输出与工具调用能力`,
-                        `Use ${model.displayName} to validate normal responses, streaming, and tool calls`,
-                      )}
-                      onClick={() => onTestProvider(provider.id, model.modelId)}
-                      disabled={testingId === key}
+                      title={text("编辑模型供应商", "Edit provider")}
+                      onClick={() => onEditProvider(provider)}
                     >
-                      <Radio
-                        size={16}
-                        className={
-                          testingId === key ? "is-pulsing" : undefined
-                        }
-                      />
+                      <Pencil size={16} />
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    className="row-icon-button"
-                    aria-label={text(
-                      `编辑 ${provider.name}`,
-                      `Edit ${provider.name}`,
+                    {onDeleteModel && (
+                      <button
+                        type="button"
+                        className="row-icon-button row-icon-button--danger"
+                        aria-label={text(
+                          `删除 ${model.displayName}`,
+                          `Delete ${model.displayName}`,
+                        )}
+                        title={text("删除模型", "Delete model")}
+                        onClick={() => onDeleteModel(provider, model)}
+                      >
+                        <Trash2 size={16} />
+                      </button>
                     )}
-                    title={text("编辑模型供应商", "Edit provider")}
-                    onClick={() => onEditProvider(provider)}
-                  >
-                    <Pencil size={16} />
-                  </button>
-                  {onDeleteModel && (
-                    <button
-                      type="button"
-                      className="row-icon-button row-icon-button--danger"
-                      aria-label={text(
-                        `删除 ${model.displayName}`,
-                        `Delete ${model.displayName}`,
-                      )}
-                      title={text("删除模型", "Delete model")}
-                      onClick={() => onDeleteModel(provider, model)}
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  )}
-                  {active ? (
-                    <span className="current-button">
-                      <Check size={15} />
-                      {text("使用中", "In use")}
-                    </span>
-                  ) : (
-                    <button
-                      type="button"
-                      className="switch-button"
-                      disabled={!canSwitch}
-                      title={
-                        !provider.hasApiKey
-                          ? text(
-                              "请先编辑模型供应商并保存 API Key",
-                              "Edit the model provider and save an API key first",
-                            )
-                          : !directCompatible
-                          ? text(
-                              `该模型供应商未提供 ${directBindingRequirement(agent.id, language)}；如需协议转换，请前往高级设置使用本地代理`,
-                              `This provider does not offer ${directBindingRequirement(agent.id, language)}. Use the local proxy in Advanced settings for protocol conversion.`,
-                            )
-                          : !agentReady
+                    {active ? (
+                      <span className="current-button">
+                        <Check size={15} />
+                        {text("使用中", "In use")}
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="switch-button"
+                        disabled={!canSwitch}
+                        title={
+                          !provider.hasApiKey
                             ? text(
-                                "智能体尚不可配置",
-                                "Agent is not configurable",
+                                "请先编辑模型供应商并保存 API Key",
+                                "Edit the model provider and save an API key first",
                               )
-                            : undefined
-                      }
-                      onClick={() => onSwitchModel(provider, model)}
-                    >
-                      {switching ? (
-                        <>
-                          <LoaderCircle className="is-spinning" size={15} />
-                          {text("切换中", "Switching")}
-                        </>
-                      ) : (
-                        text("切换", "Switch")
-                      )}
-                    </button>
-                  )}
-                </div>
-              </article>
-            );
-          });
-        })}
+                            : pendingVerification
+                            ? text(
+                                "该模型尚未通过连接验证，请先点击右侧连接测试",
+                                "This model has not passed the connection test yet. Run the test on the right first",
+                              )
+                            : !directCompatible
+                            ? text(
+                                `该模型供应商未提供 ${directBindingRequirement(agent.id, language)}；如需协议转换，请前往高级设置使用本地代理`,
+                                `This provider does not offer ${directBindingRequirement(agent.id, language)}. Use the local proxy in Advanced settings for protocol conversion.`,
+                              )
+                            : !agentReady
+                              ? text(
+                                  "智能体尚不可配置",
+                                  "Agent is not configurable",
+                                )
+                              : undefined
+                        }
+                        onClick={() => onSwitchModel(provider, model)}
+                      >
+                        {switching ? (
+                          <>
+                            <LoaderCircle className="is-spinning" size={15} />
+                            {text("切换中", "Switching")}
+                          </>
+                        ) : (
+                          text("切换", "Switch")
+                        )}
+                      </button>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
+          </ProviderModelGroup>
+        ))}
 
         <button
           type="button"

@@ -134,14 +134,14 @@ export function AgentsPage({
                 </StatusPill>
                 <button
                   className="button button--small"
-                  disabled={!agent.adapterVerified || !installed}
                   onClick={() => onConfigure(agent)}
                   title={
-                    agent.adapterVerified && installed
+                    agent.adapterVerified
                       ? text("查看配置与安装位置", "View configuration and installation")
-                      : language === "zh-CN"
-                        ? agent.message ?? "当前智能体无法由 AT-Switch 自动配置"
-                        : "This agent cannot be configured automatically by AT-Switch"
+                      : text(
+                          "查看检测详情与只读说明",
+                          "View detection details and read-only notice",
+                        )
                   }
                 >
                   {text("详情", "Details")}

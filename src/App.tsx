@@ -2,21 +2,23 @@ import { AlertTriangle, CheckCircle2, LoaderCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "./components/AppShell";
 import { AgentBindingForm } from "./components/AgentBindingForm";
+import { AgentReadonlyDetails } from "./components/AgentReadonlyDetails";
 import { AgentRestartConfirmation } from "./components/AgentRestartConfirmation";
 import { BrandLogo } from "./components/BrandLogo";
 import { Modal } from "./components/Modal";
 import { ProviderForm } from "./components/ProviderForm";
 import { LanguageProvider, useLanguage } from "./i18n";
 import {
+  isDetectionOnlyAgent,
   isSwitchableAgent,
   supportsDirectBinding,
 } from "./lib/agentCapabilities";
 import { api, getActiveMockSnapshot } from "./lib/api";
 import { AgentsPage } from "./pages/AgentsPage";
 import { ProvidersPage } from "./pages/ProvidersPage";
-import { ProxyPage } from "./pages/ProxyPage";
-import { SettingsPage } from "./pages/SettingsPage";
+import { SettingsPage, type SettingsTab } from "./pages/SettingsPage";
 import { SwitchboardPage } from "./pages/SwitchboardPage";
+import { parsePageId } from "./lib/navigation";
 import type {
   AppSettings,
   AppSnapshot,
@@ -81,7 +83,15 @@ function AppContent() {
   );
   const isRealData = searchParams.get("real_data") === "true";
   const showWindowFrame = searchParams.get("window_frame") === "true";
-  const initialPage = (searchParams.get("page") as PageId) || "overview";
+  const requestedPage = searchParams.get("page");
+  // 独立「本地代理」页已合并到设置页，旧深链仍然落到同一处。
+  const initialPage: PageId =
+    parsePageId(requestedPage) ??
+    (requestedPage === "proxy" ? "settings" : "overview");
+  const initialSettingsTab: SettingsTab =
+    requestedPage === "proxy" || searchParams.get("tab") === "proxy"
+      ? "proxy"
+      : "general";
   const initialAgent =
     searchParams.get("agent") ||
     (typeof window !== "undefined"
@@ -186,6 +196,20 @@ function AppContent() {
       );
     },
     [],
+  );
+
+  const notifyAgentError = useCallback(
+    (agent: AgentSummary, error: unknown) => {
+      const currentLanguage = languageRef.current;
+      notify(
+        "bad",
+        currentLanguage === "zh-CN"
+          ? `${agent.displayName} 操作失败`
+          : `Failed to update ${agent.displayName}`,
+        describeCommandError(error, currentLanguage),
+      );
+    },
+    [notify],
   );
 
   const loadSnapshot = useCallback(
@@ -634,6 +658,52 @@ function AppContent() {
     }
   };
 
+  // 切换某个 Agent 的"代理用量统计"开关。后端会把偏好持久化并即时在内存
+  // RouteStore 里注册/注销代理路由。多个 Agent 同时切换时排队等待。
+  const proxyPrefQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const [proxyPrefBusyAgentId, setProxyPrefBusyAgentId] = useState<string>();
+  const toggleAgentProxyPref = async (agent: AgentSummary, enabled: boolean) => {
+    if (enabled && (!agent.providerId || !agent.modelId)) {
+      notify(
+        "bad",
+        text(
+          "请先在首页选择模型",
+          "Please select a model on the home page first",
+        ),
+        text(
+          `在开启 ${agent.displayName} 的代理统计前，需要先在首页为该智能体绑定 Provider 和模型。`,
+          `Before enabling telemetry for ${agent.displayName}, you need to bind a provider and model on the home page first.`,
+        ),
+      );
+      return;
+    }
+    const next = proxyPrefQueueRef.current.then(async () => {
+      setProxyPrefBusyAgentId(agent.id);
+      try {
+        await api.setAgentProxyPref(agent.id, enabled);
+        await loadSnapshot(true);
+        notify(
+          enabled ? "good" : "bad",
+          enabled
+            ? text(
+                `${agent.displayName} 已加入代理用量统计`,
+                `${agent.displayName} is now routed through the proxy`,
+              )
+            : text(
+                `${agent.displayName} 已退出代理用量统计`,
+                `${agent.displayName} is no longer routed through the proxy`,
+              ),
+        );
+      } catch (error) {
+        notifyAgentError(agent, error);
+      } finally {
+        setProxyPrefBusyAgentId(undefined);
+      }
+    });
+    proxyPrefQueueRef.current = next.catch(() => undefined);
+    await next;
+  };
+
   const updateSettings = async (settings: Partial<AppSettings>) => {
     if (!snapshot) return;
     const previous = snapshot.settings;
@@ -756,28 +826,29 @@ function AppContent() {
             onTest={(id, modelId) => void testProvider(id, modelId)}
           />
         )}
-        {page === "proxy" && (
-          <ProxyPage
-            proxy={snapshot.proxy}
-            agents={snapshot.agents}
-            busy={proxyBusy}
-            onConfigureAgent={(agent) =>
-              setBindingTarget({ agent, mode: "proxy" })
-            }
-            onStart={() => void mutateProxy("start")}
-            onStop={() => void mutateProxy("stop")}
-            onUpdatePort={(port) => void updatePort(port)}
-          />
-        )}
         {page === "settings" && (
           <SettingsPage
+            appVersion={snapshot.appVersion}
+            platform={snapshot.platform}
             settings={snapshot.settings}
             proxy={snapshot.proxy}
+            agents={snapshot.agents}
             proxyAgentCount={snapshot.agents.filter(
-              (agent) => agent.mode === "proxy",
+              (agent) => Boolean(agent.proxyPrefEnabled),
             ).length}
-            onOpenProxy={() => navigateTo("proxy")}
+            proxyBusy={proxyBusy}
+            proxyBusyAgentId={proxyPrefBusyAgentId}
+            initialTab={initialSettingsTab}
             onUpdate={(settings) => void updateSettings(settings)}
+            onStartProxy={() => void mutateProxy("start")}
+            onStopProxy={() => void mutateProxy("stop")}
+            onUpdateProxyPort={(port) => void updatePort(port)}
+            onToggleProxyPref={(agent, enabled) =>
+              void toggleAgentProxyPref(agent, enabled)
+            }
+            onConfigureProxy={(agent) =>
+              setBindingTarget({ agent, mode: "proxy" })
+            }
           />
         )}
       </AppShell>
@@ -788,46 +859,56 @@ function AppContent() {
           if (!savingBinding) setBindingTarget(undefined);
         }}
         eyebrow={
-          bindingTarget?.mode === "proxy"
-            ? "ADVANCED PROXY ROUTING"
-            : "AGENT CONFIGURATION"
+          bindingTarget && isDetectionOnlyAgent(bindingTarget.agent.id)
+            ? "AGENT DETECTION"
+            : bindingTarget?.mode === "proxy"
+              ? "ADVANCED PROXY ROUTING"
+              : "AGENT CONFIGURATION"
         }
         title={
           bindingTarget
-            ? bindingTarget.mode === "proxy"
+            ? isDetectionOnlyAgent(bindingTarget.agent.id)
               ? text(
-                  `本地代理配置 ${bindingTarget.agent.displayName}`,
-                  `Configure local proxy for ${bindingTarget.agent.displayName}`,
+                  `${bindingTarget.agent.displayName} 检测详情`,
+                  `${bindingTarget.agent.displayName} detection details`,
                 )
-              : text(
-                  `${bindingTarget.agent.displayName} 配置详情`,
-                  `${bindingTarget.agent.displayName} configuration details`,
-                )
+              : bindingTarget.mode === "proxy"
+                ? text(
+                    `本地代理配置 ${bindingTarget.agent.displayName}`,
+                    `Configure local proxy for ${bindingTarget.agent.displayName}`,
+                  )
+                : text(
+                    `${bindingTarget.agent.displayName} 配置详情`,
+                    `${bindingTarget.agent.displayName} configuration details`,
+                  )
             : text("配置智能体", "Configure agent")
         }
       >
-        {bindingTarget && (
-          <AgentBindingForm
-            key={`${bindingTarget.agent.id}:${bindingTarget.agent.providerId ?? "new"}:${bindingTarget.mode}`}
-            agent={bindingTarget.agent}
-            providers={snapshot.providers}
-            mode={bindingTarget.mode}
-            busy={savingBinding}
-            platform={snapshot.platform}
-            installPathBusy={
-              installPathBusyAgentId === bindingTarget.agent.id
-            }
-            onSelectInstallPath={() =>
-              void selectAgentInstallPath(bindingTarget.agent)
-            }
-            onClearInstallPath={() =>
-              void clearAgentInstallPath(bindingTarget.agent)
-            }
-            onSubmit={(draft) =>
-              requestApplyAgentBinding(bindingTarget.agent, draft)
-            }
-          />
-        )}
+        {bindingTarget &&
+          (isDetectionOnlyAgent(bindingTarget.agent.id) ? (
+            <AgentReadonlyDetails agent={bindingTarget.agent} />
+          ) : (
+            <AgentBindingForm
+              key={`${bindingTarget.agent.id}:${bindingTarget.agent.providerId ?? "new"}:${bindingTarget.mode}`}
+              agent={bindingTarget.agent}
+              providers={snapshot.providers}
+              mode={bindingTarget.mode}
+              busy={savingBinding}
+              platform={snapshot.platform}
+              installPathBusy={
+                installPathBusyAgentId === bindingTarget.agent.id
+              }
+              onSelectInstallPath={() =>
+                void selectAgentInstallPath(bindingTarget.agent)
+              }
+              onClearInstallPath={() =>
+                void clearAgentInstallPath(bindingTarget.agent)
+              }
+              onSubmit={(draft) =>
+                requestApplyAgentBinding(bindingTarget.agent, draft)
+              }
+            />
+          ))}
       </Modal>
 
       <Modal

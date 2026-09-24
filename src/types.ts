@@ -1,4 +1,4 @@
-export type PageId = "overview" | "agents" | "providers" | "proxy" | "settings";
+export type PageId = "overview" | "agents" | "providers" | "settings";
 
 export type AppLanguage = "zh-CN" | "en";
 
@@ -88,6 +88,11 @@ export interface AgentSummary {
   providerId?: string;
   modelId?: string;
   mode?: "direct" | "proxy";
+  /**
+   * 用户在「本地代理」页是否打开了该 Agent 的"用量统计"开关。
+   * 与 binding/mode 解耦——开启只表示该 Agent 的流量经过本地代理并被统计。
+   */
+  proxyPrefEnabled?: boolean;
   needsRestart: boolean;
   automaticRestartSupported: boolean;
   activationRequired?: boolean;
@@ -118,7 +123,24 @@ export interface ProxyStatus {
   successfulRequests: number;
   conversionFailures: number;
   upstreamFailures: number;
+  /** 最近的请求摘要，新的在前；只在内存中保留，代理重启后清空。 */
+  recentRequests: ProxyRequestLogEntry[];
+  /** 当前已被代理路由的 Agent ID 列表（开关已开启 + 存在有效 binding）。 */
+  proxiedAgents?: string[];
   error?: string;
+}
+
+/** 一条请求摘要，仅含展示字段——不含请求体、响应体或凭据。 */
+export interface ProxyRequestLogEntry {
+  at: string;
+  agentId: string;
+  providerId: string;
+  providerName: string;
+  model: string;
+  /** 上游 HTTP 状态码；连不上上游时为 502。 */
+  status: number;
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 export interface AppSettings {
@@ -134,7 +156,38 @@ export interface AppSnapshot {
   providers: ProviderSummary[];
   agents: AgentSummary[];
   proxy: ProxyStatus;
+  /** 全量使用日志（代理请求 + 切换操作），新的在前。 */
+  usageLog: UsageLogEntry[];
   settings: AppSettings;
+}
+
+/** GitHub Releases 返回的最新可用版本。 */
+export interface ReleaseInfo {
+  tagName: string;
+  version: string;
+  htmlUrl: string;
+  publishedAt: string;
+  bodyPreview?: string;
+}
+
+/** `request` 走代理的真实请求；`switch` 切换操作（直连模式下唯一可观察的事件）。 */
+export type UsageKind = "request" | "switch";
+
+export type UsageOutcome = "ok" | "failed";
+
+export interface UsageLogEntry {
+  kind: UsageKind;
+  at: string;
+  agentId: string;
+  providerId: string;
+  providerName: string;
+  model: string;
+  /** 上游 HTTP 状态码；切换类记录没有。 */
+  status?: number;
+  outcome: UsageOutcome;
+  inputTokens?: number;
+  outputTokens?: number;
+  errorCode?: string;
 }
 
 export interface ProviderDraft {

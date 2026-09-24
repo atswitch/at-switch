@@ -1,6 +1,8 @@
 import clsx from "clsx";
+import { useId } from "react";
 import { useLanguage } from "../i18n";
 import { isSwitchableAgent } from "../lib/agentCapabilities";
+import { agentAvailabilityLabel } from "../lib/format";
 import type { AgentSummary } from "../types";
 import { AgentLogo } from "./AgentLogo";
 
@@ -16,15 +18,29 @@ export function AgentSwitcher({
   onSwitch,
 }: AgentSwitcherProps) {
   const { language, text } = useLanguage();
+  const selectableAgents = agents.filter(isSwitchableAgent);
+  const activeAgent =
+    selectableAgents.find((agent) => agent.id === activeAgentId) ??
+    selectableAgents[0];
+  const tablistId = `${useId()}-agent-switcher`;
+
+  const statusHint = (agent: AgentSummary) =>
+    agentAvailabilityLabel(agent.installStatus, agent.runtimeStatus, language);
+
+  if (!activeAgent) {
+    return null;
+  }
+
   return (
     <div
+      id={tablistId}
       className="agent-switcher"
       role="tablist"
       aria-label={text("选择智能体", "Select agent")}
     >
-      {agents.filter(isSwitchableAgent).map((agent) => {
+      {selectableAgents.map((agent) => {
+        const isActive = agent.id === activeAgent.id;
         const installed = agent.installStatus !== "not_installed";
-        const active = agent.id === activeAgentId;
         const ready = installed && agent.adapterVerified;
 
         return (
@@ -32,37 +48,18 @@ export function AgentSwitcher({
             key={agent.id}
             type="button"
             role="tab"
-            aria-selected={active}
-            className={clsx(
-              "agent-switcher__item",
-              active && "is-active",
-            )}
+            className={clsx("agent-switcher__item", isActive && "is-active")}
+            aria-selected={isActive}
+            title={`${agent.displayName} · ${statusHint(agent)}`}
             onClick={() => onSwitch(agent.id)}
-            title={
-              ready
-                ? text(
-                    `${agent.displayName} 已就绪`,
-                    `${agent.displayName} is ready`,
-                  )
-                : !installed
-                  ? text(
-                      `${agent.displayName} 未安装`,
-                      `${agent.displayName} is not installed`,
-                    )
-                  : language === "zh-CN" && agent.message
-                    ? agent.message
-                    : text(
-                        `${agent.displayName} 尚不可配置`,
-                        `${agent.displayName} is unavailable`,
-                      )
-            }
           >
             <span className="agent-switcher__icon">
               <AgentLogo agentId={agent.id} />
               <i
                 className={clsx(
                   "agent-switcher__status",
-                  ready ? "is-ready" : installed ? "is-warning" : "",
+                  ready && "is-ready",
+                  installed && !ready && "is-warning",
                 )}
                 aria-hidden="true"
               />
