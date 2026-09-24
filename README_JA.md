@@ -2,7 +2,7 @@
 
 # AT-Switch
 
-### WorkBuddy、CodeBuddy、QClaw、AutoClaw、Codex、DuMate のオールインワン管理・モデル切り替えツール
+### WorkBuddy、CodeBuddy、QClaw、AutoClaw、Codex、DuMate、Hermes、OpenCode、Kimi Work、AionClaw、ZCode のオールインワン管理・モデル切り替えツール
 
 [![Version](https://img.shields.io/github/v/release/atswitch/at-switch?color=blue&label=version)](https://github.com/atswitch/at-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/atswitch/at-switch/releases)
@@ -66,6 +66,29 @@ Agent ごとに散らばった設定ファイルを探す必要はありませ�
 | :--- | :--- | :--- | :--- |
 | **macOS** | macOS 12 Monterey 以降 | Apple Silicon / Intel / Universal | `.dmg` |
 | **Windows** | Windows 10 / 11 | x64 | `.msi` / ポータブル版 (`.zip`) |
+
+### サポート対象 Agent
+
+| Agent | プラットフォーム | 状態 | ネイティブ・プロトコル | 備考 |
+| --- | --- | --- | --- | --- |
+| **WorkBuddy** | macOS / Windows | ✅ 対応 | OpenAI Chat Completions | 標準 XDG 設定の上書きを更新し、セッションフィールドと組み込みモデル別名を保持 |
+| **CodeBuddy** | macOS / Windows | ✅ 対応 | OpenAI Chat Completions | JSONC コメント・末尾カンマ・組み込みアカウントを保持しつつ対象アカウントの標準 XDG 設定を更新 |
+| **QClaw** | macOS / Windows | ✅ 対応 | OpenAI Chat Completions | プロセス状態を保持しつつ標準 XDG 設定を上書き |
+| **AutoClaw** | macOS / Windows | ✅ 対応 | OpenAI Chat Completions | 標準 XDG 設定の選択アカウントを上書きし、未知フィールド・組み込み状態を保持 |
+| **Codex** | macOS / Windows | ✅ 対応 | OpenAI Responses | `$CODEX_HOME/config.toml` または `~/.codex/config.toml` をきれいに更新 |
+| **DuMate** | macOS / Windows | ✅ 対応 | OpenAI Chat Completions | すべてのセッションディレクトリと組み込みモデル別名に対して、選択中アカウントの永続 XDG オーバーライドを更新 |
+| **Hermes Agent** | macOS / Windows | ✅ 対応 | OpenAI Chat Completions | `$HERMES_HOME/config.yaml` または `~/.hermes/config.yaml` を更新し、他の YAML フィールドを保持 |
+| **OpenCode** | macOS / Windows | ✅ 対応 | OpenAI Chat Completions | 管理対象プロバイダとデフォルトモデルを更新し、JSONC コメント・末尾カンマ・サードパーティ製プロバイダを保持 |
+| **ZCode** | macOS / Windows | ✅ 対応 | OpenAI Chat Completions / OpenAI Responses / Anthropic Messages | `~/.zcode/v2/provider_config.json` の管理対象プロバイダ・モデルルール・デフォルトモデルを更新し、他のプロバイダと未知フィールドを保持 |
+| **Trae CN** | macOS / Windows | ✅ 対応 | OpenAI Chat Completions | Trae 内で設定済みのカスタムモデル間を切り替え（`state.vscdb` の選択記録を書き換え）。認証情報は Trae が暗号化管理し、AT-Switch は読み書きしない |
+| **TRAE SOLO CN** | macOS / Windows | ✅ 対応 | OpenAI Chat Completions | 0.1.69 以降は選択中モデルが平文 `state.vscdb` に戻り、Trae CN と同様にアプリ内で設定済みのカスタムモデル間を切り替え可能。0.1.66 は暗号化 DB に保存していたため 0.1.69 以降が必要 |
+| **QwenWork** | macOS / Windows | 🟡 検出のみ | — | カスタムモデルはクライアント側スイッチとサーバー側認可の二重ゲート。ローカルで解除できるのは前者のみで、モデルは選択できても呼び出しは 403 で拒否される（`You do not have access to this model service`）ため、設定は変更しない |
+| **DoubaoWork** | macOS / Windows | 🟡 検出のみ | — | ユーザー階層の Provider / BYOK 設定項目が見つからないため、インストール状態のみ表示 |
+| **Coze** | macOS / Windows | 🟡 検出のみ | — | ローカルデータは実行時およびログイン状態でありプロバイダ設定ではないため、インストール状態のみ表示 |
+| **Kimi Work** | macOS / Windows | 🟡 検出のみ | — | Daimon は起動ごとに `model.current` をサーバー配信の既定モデルで上書きする（公式モデル名 `k3-agent` でも `k2d8-preview` に戻る）。そのため実行時 TOML の `default_model` は常に公式モデルとなり、独自プロバイダは TOML に現れても選択されない。書き込み経路がないため設定は変更しない |
+| **AionClaw** | macOS / Windows | ✅ 対応 | OpenAI Chat Completions / OpenAI Responses / Anthropic Messages | サンドボックス内 `openclaw/state/openclaw.json` の管理対象プロバイダとデフォルトモデルを更新（QClaw と同一実装を共用） |
+| **EasyClaw** | macOS / Windows | ✅ 対応 | OpenAI Chat Completions / OpenAI Responses / Anthropic Messages | 同じく OpenClaw カーネル（`gateway.asar/openclaw.mjs`）を内蔵。`~/.easyclaw/easyclaw.json` の管理プロバイダと `agents.defaults.model.primary` を更新。このファイルが権威設定（`EASYCLAW_CONFIG_DIR` が `~/.easyclaw` を指す）のため二重書き込みは不要 |
+| **ima** | macOS / Windows | 🟡 検出のみ | — | ima にはカスタムモデルの入口があります（`Default/Preferences` の `kExtraSettingInfo`、ユーザー追加の `NMauto` を含む）が、**外部からの書き込みは保持されません**。ima 終了中に選択状態を書き換えても、起動 11 秒後に元の値へ書き戻され、当該モデル UUID はローカルの `Preferences` 以外に存在しないため、権威状態はサーバー側にあります。よって書き込みません |
 
 ---
 

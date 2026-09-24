@@ -1,0 +1,95 @@
+feature: zcode-integration
+created: "2026-09-21"
+plan: design.md
+adapter_id: zcode
+category: 完整接入（可切换）
+
+tasks:
+  - id: t1-design
+    title: 输出 ZCode 完整接入设计方案
+    status: done
+    depends_on: []
+    artifacts:
+      - design.md
+    notes: >-
+      真机调研推翻原 detection-only 定性：~/.zcode/v2/provider_config.json 的
+      providerRules 与 manualProviderModelRules 是官方预留的用户级写入通道,
+      且 access.apiKey 为明文字段、api.type 支持三种协议。
+
+  - id: t2-adapter
+    title: 实现 ZCodeAdapter 并替换 detection-only 注册
+    status: done
+    depends_on: [t1-design]
+    artifacts:
+      - at-switch/src-tauri/src/agents/zcode.rs
+      - at-switch/src-tauri/src/agents/mod.rs
+      - at-switch/src-tauri/src/agents/detection_only.rs
+    acceptance:
+      - 'ZCodeAdapter 实现 AgentAdapter 全部契约（detect / source_protocol / validate_binding / build_config / build_native_config / verify_config）。'
+      - '写入满足 zod strict 约束：不产生未知字段。'
+      - 'providerId 使用 at-switch 且不以 account: 开头。'
+      - '重复切换幂等，不累积重复 provider 或 model 条目。'
+      - '恢复官方配置只移除 AT-Switch 管理内容，保留用户其他 Provider。'
+
+  - id: t3-tests
+    title: ZCode 适配器单元测试
+    status: done
+    depends_on: [t2-adapter]
+    artifacts:
+      - at-switch/src-tauri/src/agents/zcode_tests.rs
+    acceptance:
+      - '覆盖 detect、build_config、build_native_config、verify_config。'
+      - '覆盖未知字段保留与重复切换幂等。'
+      - '覆盖 Direct 协议映射与空 Base URL 拒绝。'
+
+  - id: t4-frontend
+    title: 前端能力声明：zcode 从仅检测改为可切换
+    status: done
+    depends_on: [t2-adapter]
+    artifacts:
+      - at-switch/src/lib/agentCapabilities.ts
+      - at-switch/src/lib/agentCapabilities.test.ts
+      - at-switch/src/lib/api.ts
+      - at-switch/src/App.test.tsx
+    acceptance:
+      - 'zcode 加入 SWITCHABLE_AGENT_IDS，且 isDetectionOnlyAgent("zcode") 为 false。'
+      - '浏览器 Mock 的 mockAgentDisplayNames 补齐全部注册 Agent（含 qwenwork / doubaowork / coze）。'
+      - '前端测试断言 zcode 可切换、aionclaw 仍为只读。'
+
+  - id: t5-docs
+    title: 更新 README 与适配资料清单
+    status: done
+    depends_on: [t2-adapter]
+    artifacts:
+      - at-switch/README.md
+      - at-switch/README_ZH.md
+      - at-switch/README_EN.md
+      - at-switch/README_JA.md
+      - at-switch/README_AR.md
+      - doc/Agent适配资料清单.md
+    acceptance:
+      - 'ZCode 在支持矩阵中从「仅检测」改为「支持」，写明协议与配置机制。'
+      - 'Kimi Work 的标注同步修正为仅检测（修正既有文档与代码不一致）。'
+      - '补齐千问办公、豆包工作、扣子三行。'
+
+  - id: t6-acceptance
+    title: 真机验收
+    status: completed
+    depends_on: [t2-adapter, t3-tests, t4-frontend, t5-docs]
+    verified:
+      - '个人配置被 ZCode 正常加载（无 provider-config 报错）。'
+      - 'AT-Switch 切换后 ZCode 模型列表出现目标模型。'
+      - 'AT-Switch 切换模型，ZCode 自动退出并重启（生命周期生效）。'
+      - 'ZCode 直接选中目标模型，无需手动选择。'
+      - '关键机制：任务表是权威来源，Local Storage 只是启动时从任务表刷出的镜像；两层都同步后才生效。'
+    acceptance:
+      - '官方模型切换到第三方模型，重启 ZCode 后仍生效。'
+      - '新建会话不显式指定模型，由默认配置选中目标模型。'
+      - '从 ZCode 日志确认真实 Provider、模型与 Endpoint。'
+      - '第三方模型之间切换、以及恢复官方模型后再切回。'
+      - '失败写入能回滚。'
+      - '确认 Windows 路径与 providerRules 是否真被读取。'
+    notes: >-
+      写入通道已证实可用：personal provider + personalModelIds/modelOrder + 明文 apiKey
+      均被 ZCode 接受，t2–t5 无需回退。待确认项是连续切换时历史模型是否保留，以及
+      重启后是否仍生效、真实 Endpoint 是否指向目标 Provider。

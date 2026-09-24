@@ -2,7 +2,7 @@
 
 # AT-Switch
 
-### The All-in-One Manager & Model Switcher for WorkBuddy, CodeBuddy, QClaw, AutoClaw, Codex & DuMate
+### The All-in-One Manager & Model Switcher for WorkBuddy, CodeBuddy, QClaw, AutoClaw, Codex, DuMate, Hermes, OpenCode, Kimi Work, AionClaw & ZCode
 
 [![Version](https://img.shields.io/github/v/release/atswitch/at-switch?color=blue&label=version)](https://github.com/atswitch/at-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/atswitch/at-switch/releases)
@@ -81,6 +81,18 @@ All official release binaries are hosted on [GitHub Releases](https://github.com
 | **AutoClaw** | macOS / Windows | ✅ Supported | OpenAI Chat Completions | Manages authoritative model catalogs in Electron user data |
 | **Codex** | macOS / Windows | ✅ Supported | OpenAI Responses | Updates `$CODEX_HOME/config.toml` or `~/.codex/config.toml` cleanly |
 | **Baidu DuMate** | macOS / Windows | ✅ Supported | OpenAI Chat Completions | Updates the active account's persistent XDG override for every session directory and built-in model alias |
+| **Hermes Agent** | macOS / Windows | ✅ Supported | OpenAI Chat Completions | Updates `$HERMES_HOME/config.yaml` or `~/.hermes/config.yaml`, preserving the remaining YAML fields |
+| **OpenCode** | macOS / Windows | ✅ Supported | OpenAI Chat Completions | Updates the managed provider and default model in the user config, preserving JSONC comments, trailing commas, and third-party providers |
+| **ZCode** | macOS / Windows | ✅ Supported | OpenAI Chat Completions / OpenAI Responses / Anthropic Messages | Updates the managed provider, model rules and default model in `~/.zcode/v2/provider_config.json`, preserving other providers and unknown fields |
+| **Trae CN** | macOS / Windows | ✅ Supported | OpenAI Chat Completions | Switches between the custom models already configured inside Trae by rewriting its `state.vscdb` selection records; credentials stay encrypted and are never read or written |
+| **TRAE SOLO CN** | macOS / Windows | ✅ Supported | OpenAI Chat Completions | Since 0.1.69 the active model is written back to the plain `state.vscdb`, so it switches between the custom models configured inside the app just like Trae CN; 0.1.66 kept it in an encrypted database, hence the 0.1.69+ requirement |
+| **QwenWork** | macOS / Windows | 🟡 Detection only | — | Custom models are gated twice — by the account's client-side switch and by the model gateway's server-side authorization. Only the former can be unlocked locally, so a model becomes selectable yet its calls still fail with HTTP 403 (`You do not have access to this model service`); nothing is written |
+| **DoubaoWork** | macOS / Windows | 🟡 Detection only | — | No user-level Provider / BYOK entry discovered; only installation status is exposed |
+| **Coze** | macOS / Windows | 🟡 Detection only | — | Local data is runtime and login state, not provider configuration; only installation status is exposed |
+| **Kimi Work** | macOS / Windows | 🟡 Detection only | — | Daimon rewrites `model.current` on every startup with the server-served default (even an official model name such as `k3-agent` is reset to `k2d8-preview`), so the runtime TOML's `default_model` always falls back to the official model. A custom provider does reach the runtime TOML but is never selected, so nothing is written |
+| **AionClaw** | macOS / Windows | ✅ Supported | OpenAI Chat Completions / OpenAI Responses / Anthropic Messages | Updates the managed provider and default model in the sandboxed `openclaw/state/openclaw.json`, sharing the implementation with QClaw |
+| **EasyClaw** | macOS / Windows | ✅ Supported | OpenAI Chat Completions / OpenAI Responses / Anthropic Messages | Also runs the OpenClaw kernel (`gateway.asar/openclaw.mjs`); updates the managed provider and `agents.defaults.model.primary` in `~/.easyclaw/easyclaw.json`, which is the authoritative config (`EASYCLAW_CONFIG_DIR` points at `~/.easyclaw`), so no second file is needed |
+| **ima** | macOS / Windows | 🟡 Detection only | — | ima *does* expose a custom-model surface (`kExtraSettingInfo` in `Default/Preferences`, including a user-added `NMauto`), but an external write does not stick: with ima closed we wrote a different selection and ima rewrote it 11 seconds after launch, restoring the original value; the model UUID appears nowhere locally except `Preferences`, so the authoritative state is server-side and nothing is written |
 
 ---
 
