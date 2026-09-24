@@ -22,6 +22,10 @@ const MODEL_OUTPUT_MODALITY_MIGRATION: i64 = 2026080201;
 const PLACEHOLDER_PROVIDER_PURGE_MIGRATION: i64 = 2026080801;
 const CUSTOM_AGENT_INSTALL_PATH_MIGRATION: i64 = 2026081101;
 const PROVIDER_RECOMMENDATION_REMOVAL_MIGRATION: i64 = 2026090401;
+/// 引入"代理用量统计开关"：每个 Agent 单独记录是否启用本地代理路由；
+/// 与 agent_bindings.mode 解耦——binding 决定"切到哪个模型"，proxy_pref
+/// 决定"该 Agent 的流量是否经过本地代理并被统计"。
+const AGENT_PROXY_PREF_MIGRATION: i64 = 2026092301;
 
 pub struct Database {
     connection: Mutex<Connection>,
@@ -198,6 +202,12 @@ impl Database {
 
             INSERT OR IGNORE INTO proxy_settings(singleton, port, desired_running)
             VALUES (1, 54187, 0);
+
+            CREATE TABLE IF NOT EXISTS agent_proxy_prefs (
+                agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            );
             "#,
         )?;
         ensure_column(&connection, "providers", "verified_model_id", "TEXT")?;
@@ -341,6 +351,21 @@ impl Database {
                     PROVIDER_RECOMMENDATION_REMOVAL_MIGRATION,
                     Utc::now().to_rfc3339()
                 ],
+            )?;
+        }
+
+        let agent_proxy_pref_migrated = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)",
+            [AGENT_PROXY_PREF_MIGRATION],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !agent_proxy_pref_migrated {
+            // 旧的代理路由语义与 binding.mode 强绑定。新表只表达"用户是否开启
+            // 用量统计"，与 binding 解耦——首次迁移只建表，老用户的 binding 仍按
+            // 旧逻辑（mode === "proxy"）生效，直到用户主动切换本表开关。
+            connection.execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, ?2)",
+                params![AGENT_PROXY_PREF_MIGRATION, Utc::now().to_rfc3339()],
             )?;
         }
 
@@ -720,6 +745,35 @@ impl Database {
         connection.execute(
             "UPDATE proxy_settings SET port = ?1 WHERE singleton = 1",
             [i64::from(port)],
+        )?;
+        Ok(())
+    }
+
+    /// 读取全部"代理用量统计"开关。没有记录的 Agent 视为关闭。
+    pub(crate) fn agent_proxy_prefs(&self) -> AppResult<HashMap<String, bool>> {
+        let connection = self.connection()?;
+        let mut statement =
+            connection.prepare("SELECT agent_id, enabled FROM agent_proxy_prefs")?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? != 0))
+        })?;
+        rows.collect::<Result<HashMap<String, bool>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// 写入单个 Agent 的"代理用量统计"开关。agent_id 必须已存在于 agents 表，
+    /// 否则外键会拒绝写入——由调用方保证某个 Agent 已被扫描过。
+    pub(crate) fn set_agent_proxy_pref(&self, agent_id: &str, enabled: bool) -> AppResult<()> {
+        let connection = self.connection()?;
+        connection.execute(
+            r#"
+            INSERT INTO agent_proxy_prefs(agent_id, enabled, updated_at)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(agent_id) DO UPDATE SET
+                enabled = excluded.enabled,
+                updated_at = excluded.updated_at
+            "#,
+            params![agent_id, i64::from(enabled), Utc::now().to_rfc3339()],
         )?;
         Ok(())
     }

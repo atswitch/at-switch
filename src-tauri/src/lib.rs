@@ -9,14 +9,15 @@ use std::sync::Arc;
 
 use agents::AgentService;
 use commands::{
-    apply_agent_binding, bootstrap, delete_provider, get_provider_api_key_mask, refresh_snapshot,
-    restore_agent_native, reveal_provider_api_key, save_provider, set_agent_install_path,
-    start_proxy, stop_proxy, test_provider, update_proxy_port, update_settings,
+    apply_agent_binding, bootstrap, check_update, delete_provider, get_provider_api_key_mask,
+    refresh_snapshot, restore_agent_native, reveal_provider_api_key, save_provider,
+    set_agent_install_path, set_agent_proxy_pref, start_proxy, stop_proxy, test_provider,
+    update_proxy_port, update_settings,
 };
 use domain::{AppResult, CommandError};
 use infrastructure::{Database, NativeSecretStore, SecretStore};
 use proxy::ProxySupervisor;
-use services::ProviderService;
+use services::{ProviderService, UsageLog};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -28,6 +29,8 @@ pub struct AppState {
     providers: Arc<ProviderService>,
     agents: Arc<AgentService>,
     proxy: Arc<ProxySupervisor>,
+    /// 代理请求之外的操作记录（切换等），与代理请求合并后构成完整使用日志。
+    usage_log: Arc<UsageLog>,
 }
 
 impl AppState {
@@ -61,6 +64,7 @@ impl AppState {
             providers,
             agents,
             proxy,
+            usage_log: Arc::new(UsageLog::default()),
         })
     }
 }
@@ -83,6 +87,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             bootstrap,
+            check_update,
             refresh_snapshot,
             set_agent_install_path,
             save_provider,
@@ -95,7 +100,8 @@ pub fn run() {
             start_proxy,
             stop_proxy,
             update_proxy_port,
-            update_settings
+            update_settings,
+            set_agent_proxy_pref
         ])
         .run(tauri::generate_context!())
         .expect("AT-Switch failed to start");

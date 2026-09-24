@@ -6,8 +6,9 @@ use tauri_plugin_autostart::ManagerExt;
 use crate::{
     domain::{
         AgentBindingDraft, AgentSummary, AppResult, AppSettings, AppSnapshot, CommandError,
-        ProviderDraft, ProviderSummary, ProxyStatus, SettingsPatch,
+        ProviderDraft, ProviderSummary, ProxyStatus, ReleaseInfo, SettingsPatch, UsageLogEntry,
     },
+    services::USAGE_LOG_LIMIT,
     AppState,
 };
 
@@ -107,6 +108,15 @@ pub async fn restore_agent_native(
 }
 
 #[tauri::command]
+pub async fn set_agent_proxy_pref(
+    state: State<'_, AppState>,
+    agent_id: String,
+    enabled: bool,
+) -> AppResult<AgentSummary> {
+    state.agents.set_agent_proxy_pref(&agent_id, enabled).await
+}
+
+#[tauri::command]
 pub async fn start_proxy(state: State<'_, AppState>) -> AppResult<ProxyStatus> {
     // Loading persisted routes is intentionally separate from starting the
     // listener. The listener only starts after this explicit user command.
@@ -184,14 +194,37 @@ pub fn update_settings(
 
 async fn snapshot(state: &AppState) -> AppResult<AppSnapshot> {
     state.agents.restore_proxy_routes().await?;
+    let proxy_status = state.proxy.status().await;
+    let usage_log = merged_usage_log(state, &proxy_status).await;
     Ok(AppSnapshot {
         app_version: env!("CARGO_PKG_VERSION").to_owned(),
         platform: std::env::consts::OS.to_owned(),
         providers: state.providers.list()?,
         agents: state.agents.scan()?,
-        proxy: state.proxy.status().await,
+        proxy: proxy_status,
+        usage_log,
         settings: state.database.settings()?,
     })
+}
+
+/// 代理请求覆盖"流量经过 AT-Switch"的部分；直连模式下的请求由智能体直发上游，
+/// AT-Switch 不在链路上，无法记录。只返回代理侧的实际流量记录。
+async fn merged_usage_log(state: &AppState, proxy: &ProxyStatus) -> Vec<UsageLogEntry> {
+    let mut entries = state.usage_log.recent(USAGE_LOG_LIMIT).await;
+    entries.extend(proxy.recent_requests.iter().map(|entry| {
+        UsageLogEntry::request(
+            &entry.agent_id,
+            &entry.provider_id,
+            &entry.provider_name,
+            &entry.model,
+            entry.status,
+            entry.input_tokens,
+            entry.output_tokens,
+        )
+    }));
+    entries.sort_by(|left, right| right.at.cmp(&left.at));
+    entries.truncate(USAGE_LOG_LIMIT);
+    entries
 }
 
 fn set_autostart(app: &AppHandle, enabled: bool) -> AppResult<()> {
@@ -210,3 +243,8 @@ fn set_autostart(app: &AppHandle, enabled: bool) -> AppResult<()> {
 
 #[allow(dead_code)]
 fn _assert_shared_state_is_thread_safe(_: Arc<AppState>) {}
+
+#[tauri::command]
+pub async fn check_update() -> AppResult<Option<ReleaseInfo>> {
+    crate::domain::check_update(env!("CARGO_PKG_VERSION")).await
+}
