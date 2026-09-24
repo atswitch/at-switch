@@ -84,6 +84,10 @@ pub struct AgentSummary {
     pub model_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// 用户在「本地代理」页是否开启了该 Agent 的用量统计开关。与 binding/mode
+    /// 解耦：开启只表示"流量经过本地代理并被统计"，不改变切到了哪个模型。
+    #[serde(default)]
+    pub proxy_pref_enabled: bool,
     pub needs_restart: bool,
     pub automatic_restart_supported: bool,
     pub activation_required: bool,

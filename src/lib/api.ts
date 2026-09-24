@@ -1,12 +1,13 @@
 import type {
   AgentBindingDraft,
-  AgentSummary,
   AppSettings,
   AppSnapshot,
   ProviderDraft,
   ProviderSummary,
   ProxyStatus,
+  ReleaseInfo,
 } from "../types";
+import type { AgentSummary } from "../types";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 
@@ -107,6 +108,18 @@ const mockAgentDisplayNames = {
   autoclaw: "AutoClaw",
   codex: "Codex",
   dumate: "百度搭子",
+  hermes: "Hermes",
+  opencode: "OpenCode",
+  kimiwork: "Kimi Work",
+  aionclaw: "AionClaw",
+  zcode: "ZCode",
+  qwenwork: "千问办公",
+  doubaowork: "豆包工作",
+  coze: "扣子",
+  traework: "Trae CN",
+  traecode: "TRAE SOLO CN",
+  easyclaw: "EasyClaw",
+  ima: "ima",
 } as const;
 
 const mockSnapshotTemplate: AppSnapshot = {
@@ -138,7 +151,9 @@ const mockSnapshotTemplate: AppSnapshot = {
     successfulRequests: 0,
     conversionFailures: 0,
     upstreamFailures: 0,
+    recentRequests: [],
   },
+  usageLog: [],
   settings: {
     language: "zh-CN",
     theme: "system",
@@ -385,7 +400,9 @@ const realSnapshotData: AppSnapshot = {
     successfulRequests: 0,
     conversionFailures: 0,
     upstreamFailures: 0,
+    recentRequests: [],
   },
+  usageLog: [],
   settings: {
     language: "zh-CN",
     theme: "system",
@@ -657,6 +674,9 @@ async function invokeMock<T>(
         ...(args?.settings as Partial<AppSettings>),
       };
       return structuredClone(mockSnapshot.settings) as T;
+    case "check_update":
+      // Mock: pretend there's a newer version available
+      return null as T; // null = no update (keep it simple for mock)
     default:
       throw new Error(`Mock command not implemented: ${command}`);
   }
@@ -695,10 +715,17 @@ export const api = {
     invoke<AgentSummary>("apply_agent_binding", { draft }),
   restoreAgentNative: (agentId: string) =>
     invoke<AgentSummary>("restore_agent_native", { agentId }),
+  setAgentProxyPref: (agentId: string, enabled: boolean) =>
+    invoke<AgentSummary>("set_agent_proxy_pref", { agentId, enabled }),
   startProxy: () => invoke<ProxyStatus>("start_proxy"),
   stopProxy: () => invoke<ProxyStatus>("stop_proxy"),
   updateProxyPort: (port: number) =>
     invoke<ProxyStatus>("update_proxy_port", { port }),
   updateSettings: (settings: Partial<AppSettings>) =>
     invoke<AppSettings>("update_settings", { settings }),
+  checkUpdate: () => invoke<ReleaseInfo | null>("check_update"),
+  openUrl: async (url: string) => {
+    const { openUrl } = await import("@tauri-apps/plugin-opener");
+    await openUrl(url);
+  },
 };

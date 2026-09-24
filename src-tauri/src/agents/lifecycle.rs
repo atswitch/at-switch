@@ -220,13 +220,21 @@ fn macos_bundle_executable(app_path: &Path, display_name: &str) -> AppResult<Pat
 
 #[cfg(target_os = "macos")]
 fn macos_main_process_ids(process_list: &str, executable: &str) -> Vec<u32> {
+    // Some desktop Agents (ZCode, for one) launch with `argv[0]` set to the
+    // bare executable name rather than the full bundle path. Matching only the
+    // absolute path makes those Agents look stopped, so AT-Switch writes the
+    // config while they are still running and they overwrite it on exit.
+    let file_name = Path::new(executable)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(executable);
     process_list
         .lines()
         .filter_map(|line| {
             let mut parts = line.trim().splitn(2, char::is_whitespace);
             let pid = parts.next()?.parse::<u32>().ok()?;
             let command = parts.next()?.trim_start();
-            (command == executable).then_some(pid)
+            (command == executable || command == file_name).then_some(pid)
         })
         .collect()
 }
@@ -830,5 +838,35 @@ mod tests {
             windows_launch_working_directory(&executable, "QClaw"),
             Some(install_dir)
         );
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_tests {
+    use super::macos_main_process_ids;
+
+    #[test]
+    fn matches_agents_that_report_only_the_executable_name() {
+        let executable = "/Applications/ZCode.app/Contents/MacOS/ZCode";
+        let process_list = concat!(
+            "24858 ZCode\n",
+            "24865 /Applications/ZCode.app/Contents/Frameworks/ZCode Helper.app/Contents/MacOS/ZCode Helper --type=gpu-process\n",
+            "24900 /Applications/Other.app/Contents/MacOS/ZCode\n"
+        );
+
+        // argv[0] may be the bare name, so the main process is still detected
+        // while helper processes are not.
+        assert_eq!(
+            macos_main_process_ids(process_list, executable),
+            vec![24858]
+        );
+    }
+
+    #[test]
+    fn still_matches_the_full_bundle_path() {
+        let executable = "/Applications/Codex.app/Contents/MacOS/Codex";
+        let process_list = "1200 /Applications/Codex.app/Contents/MacOS/Codex\n1201 Codex Helper\n";
+
+        assert_eq!(macos_main_process_ids(process_list, executable), vec![1200]);
     }
 }

@@ -1,15 +1,21 @@
+mod aionclaw;
 mod codebuddy;
 mod codex;
+mod detection_only;
 mod dumate;
+mod hermes;
 mod lifecycle;
 mod locator;
 mod openclaw;
+mod opencode;
+mod trae_family;
 mod workbuddy;
+mod zcode;
 
 use std::{
     collections::HashMap,
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -32,11 +38,18 @@ use crate::{
 use self::{
     codebuddy::CodeBuddyAdapter,
     codex::CodexAdapter,
+    detection_only::{
+        COZE_ADAPTER, DOUBAO_WORK_ADAPTER, IMA_ADAPTER, KIMI_WORK_ADAPTER, QWEN_WORK_ADAPTER,
+    },
     dumate::DuMateAdapter,
+    hermes::HermesAdapter,
     lifecycle::RestartOutcome,
     locator::{normalized_path_string, DiscoveryContext, Installation, InstallationKind},
-    openclaw::{AutoClawAdapter, QClawAdapter},
+    openclaw::{AionClawAdapter, AutoClawAdapter, EasyClawAdapter, QClawAdapter},
+    opencode::OpenCodeAdapter,
+    trae_family::{TRAECODE_ADAPTER, TRAEWORK_ADAPTER},
     workbuddy::WorkBuddyAdapter,
+    zcode::ZCodeAdapter,
 };
 
 type ConfigProbe = fn(&PathBuf) -> AppResult<()>;
@@ -247,6 +260,7 @@ impl AgentDetection {
             provider_id: None,
             model_id: None,
             mode: None,
+            proxy_pref_enabled: false,
             needs_restart: self.needs_restart,
             automatic_restart_supported: self.needs_restart
                 && self
@@ -303,6 +317,42 @@ trait AgentAdapter: Send + Sync {
     fn native_activation_required(&self, _detection: &AgentDetection) -> bool {
         false
     }
+    /// Adapters that ship companion resources alongside their main config
+    /// (e.g. Hermes' `.env` sidecar) identify themselves here so the apply
+    /// pipeline can write and roll those back together.
+    fn companion_paths(&self, _detection: &AgentDetection) -> AppResult<Vec<PathBuf>> {
+        Ok(Vec::new())
+    }
+    /// Adapters whose truth lives in an application database rather than a
+    /// standalone config file return `None`. The apply pipeline then skips the
+    /// file transaction entirely and relies on the adapter's side effects plus
+    /// `verify_config`, because replacing a live SQLite file wholesale would
+    /// discard its WAL. Defaults to the detected config path, so every
+    /// file-backed adapter keeps the existing backup/rollback behaviour.
+    fn config_write_target(&self, detection: &AgentDetection) -> Option<PathBuf> {
+        detection.config_path.clone()
+    }
+    fn build_companion(
+        &self,
+        _detection: &AgentDetection,
+        _desired: &DesiredAgentBinding<'_>,
+        _path: &Path,
+    ) -> AppResult<Vec<u8>> {
+        Ok(Vec::new())
+    }
+    #[allow(dead_code)]
+    fn restore_companion(
+        &self,
+        _detection: &AgentDetection,
+        _path: &Path,
+        _existed: bool,
+        _content: &[u8],
+    ) -> AppResult<Vec<u8>> {
+        // Reserved companion restore hook. The rollback pipeline that wires
+        // companion resources through `restore_backup` lands in a follow-up;
+        // keeping the default here avoids a dead-code warning until then.
+        Ok(Vec::new())
+    }
 }
 
 fn matched_binding_protocols(
@@ -336,6 +386,18 @@ impl Default for AgentRegistry {
                 Box::new(AutoClawAdapter),
                 Box::new(CodexAdapter),
                 Box::new(DuMateAdapter),
+                Box::new(HermesAdapter),
+                Box::new(OpenCodeAdapter),
+                Box::new(QWEN_WORK_ADAPTER),
+                Box::new(DOUBAO_WORK_ADAPTER),
+                Box::new(COZE_ADAPTER),
+                Box::new(KIMI_WORK_ADAPTER),
+                Box::new(AionClawAdapter),
+                Box::new(ZCodeAdapter),
+                Box::new(TRAEWORK_ADAPTER),
+                Box::new(TRAECODE_ADAPTER),
+                Box::new(EasyClawAdapter),
+                Box::new(IMA_ADAPTER),
             ],
             context: DiscoveryContext::native(),
         }
@@ -443,11 +505,14 @@ impl AgentService {
             .into_iter()
             .map(|binding| (binding.agent_id.clone(), binding))
             .collect::<HashMap<_, _>>();
+        let proxy_prefs = self.database.agent_proxy_prefs()?;
         self.registry
             .detections_with_custom_paths(&custom_paths)
             .into_iter()
             .map(|detection| {
                 let mut summary = detection.summary();
+                summary.proxy_pref_enabled =
+                    proxy_prefs.get(&summary.id).copied().unwrap_or(false);
                 if let Some(binding) = bindings.get(&summary.id) {
                     enrich_summary(&self.database, &mut summary, binding);
                     self.enrich_binding_health(&mut summary, binding);
@@ -583,8 +648,12 @@ impl AgentService {
     }
 
     async fn restore_proxy_routes_once(&self) -> AppResult<()> {
+        let prefs = self.database.agent_proxy_prefs()?;
         for binding in self.database.list_agent_bindings()? {
-            if binding.mode != AgentBindingMode::Proxy.as_str() {
+            // 新代理注册语义：仅依赖 proxy_pref_enabled；不再看 binding.mode。
+            // 老数据里 mode === "proxy" 但 prefs 未启用的 Agent 不会被注册，
+            // 这是有意的行为——用户必须主动打开"用量统计"开关才会被代理接管。
+            if !prefs.get(&binding.agent_id).copied().unwrap_or(false) {
                 continue;
             }
             let Some(local_ref) = binding.local_token_ref.as_deref() else {
@@ -610,6 +679,8 @@ impl AgentService {
                     local_token.expose(),
                     RouteSnapshot {
                         agent_id: binding.agent_id,
+                        provider_id: provider.summary.id.clone(),
+                        provider_name: provider.summary.name.clone(),
                         source_protocol: binding.request_protocol,
                         upstream_protocol: provider
                             .summary
@@ -622,6 +693,111 @@ impl AgentService {
                 .await;
         }
         Ok(())
+    }
+
+    /// 切换某个 Agent 的"代理用量统计"开关。开启时如果该 Agent 当前是直连模式，
+    /// 会先自动把它切到本地代理模式（创建 local token + 写配置），这样流量才
+    /// 会真正经过代理并被统计。关闭时只注销路由，不影响 Agent 已有的配置。
+    pub async fn set_agent_proxy_pref(
+        &self,
+        agent_id: &str,
+        enabled: bool,
+    ) -> AppResult<AgentSummary> {
+        let adapter = self.registry.adapter(agent_id)?;
+        let detection = self.detect_agent(adapter)?;
+        if detection.install_status == AgentInstallStatus::NotInstalled {
+            return Err(CommandError::new("agent_not_installed", "未检测到该 Agent"));
+        }
+        if !detection.write_supported {
+            return Err(CommandError::new(
+                "agent_adapter_unverified",
+                "该 Agent 适配尚未验证",
+            ));
+        }
+
+        self.database.set_agent_proxy_pref(agent_id, enabled)?;
+
+        let binding = match self.database.get_agent_binding(agent_id)? {
+            Some(binding) => binding,
+            None => {
+                // 该 Agent 从未被 AT-Switch 绑定过模型——toggle 只设置偏好标志
+                // 不会完成代理配置（local token、路由注册等）。回退标志并返回
+                // 明确错误，提示用户先在首页选择模型。
+                self.database.set_agent_proxy_pref(agent_id, false)?;
+                return Err(CommandError::new(
+                    "model_not_selected",
+                    "请先在首页为该智能体选择模型后再开启代理统计",
+                ));
+            }
+        };
+
+        if enabled {
+            // 如果当前是直连模式（没有 local_token_ref），先自动 apply 成
+            // proxy 模式——apply 会创建 local token、写配置、注册路由。这样
+            // toggle 才会真正让流量经过代理，而不是只持久化一个偏好标志。
+            if binding.local_token_ref.is_none() {
+                if binding.provider_id.is_empty() || binding.default_model_id.is_empty() {
+                    // 绑定记录存在但缺少 Provider 或 Model 信息，无法完成代理配置。
+                    self.database.set_agent_proxy_pref(agent_id, false)?;
+                    return Err(CommandError::new(
+                        "model_not_selected",
+                        "请先在首页为该智能体选择模型后再开启代理统计",
+                    ));
+                }
+                let draft = AgentBindingDraft {
+                    agent_id: agent_id.to_owned(),
+                    provider_id: binding.provider_id.clone(),
+                    model_id: binding.default_model_id.clone(),
+                    mode: AgentBindingMode::Proxy,
+                };
+                return match self.apply(draft).await {
+                    Ok(summary) => Ok(summary),
+                    Err(error) => {
+                        // apply 失败，回退 proxyPrefEnabled，让 UI 显示为关闭。
+                        self.database.set_agent_proxy_pref(agent_id, false)?;
+                        Err(error)
+                    }
+                };
+            }
+            // 已经有 local token 的正常路径：注册路由。
+            if let Some(local_ref) = binding.local_token_ref.as_deref() {
+                if let Ok(local_token) = self.secret_store.get(local_ref) {
+                    if let Ok(provider) = self.database.get_provider(&binding.provider_id) {
+                        if let Some(upstream_ref) = provider.api_key_ref.as_deref() {
+                            if self.secret_store.get(upstream_ref).is_ok() {
+                                self.proxy
+                                    .routes()
+                                    .register(
+                                        local_token.expose(),
+                                        RouteSnapshot {
+                                            agent_id: binding.agent_id.clone(),
+                                            provider_id: provider.summary.id.clone(),
+                                            provider_name: provider.summary.name.clone(),
+                                            source_protocol: binding.request_protocol,
+                                            upstream_protocol: provider
+                                                .summary
+                                                .upstream_protocol_for(binding.request_protocol),
+                                            upstream_base_url: provider.summary.base_url.clone(),
+                                            upstream_model: binding.default_model_id.clone(),
+                                            upstream_api_key_ref: upstream_ref.to_owned(),
+                                        },
+                                    )
+                                    .await;
+                            }
+                        }
+                    }
+                }
+            }
+        } else if let Some(local_ref) = binding.local_token_ref.as_deref() {
+            if let Ok(local_token) = self.secret_store.get(local_ref) {
+                self.proxy.routes().unregister(local_token.expose()).await;
+            }
+        }
+
+        self.scan()?
+            .into_iter()
+            .find(|agent| agent.id == agent_id)
+            .ok_or_else(|| CommandError::internal("保存代理偏好后无法读取 Agent 状态"))
     }
 
     pub async fn apply(&self, draft: AgentBindingDraft) -> AppResult<AgentSummary> {
@@ -639,7 +815,10 @@ impl AgentService {
                     .unwrap_or_else(|| "该 Agent 当前保持只读".to_owned()),
             ));
         }
-        let config_path = detection.config_path.clone().ok_or_else(|| {
+        // Adapters whose truth is not a config file (Trae stores the active
+        // model inside a SQLite database) nominate a different transaction
+        // target, so the database itself is never replaced wholesale.
+        let config_path = adapter.config_write_target(&detection).ok_or_else(|| {
             CommandError::new("agent_config_path_missing", "Agent 配置路径不可用")
         })?;
         self.database.upsert_agent_state(&detection.summary())?;
@@ -737,6 +916,9 @@ impl AgentService {
                 return Err(error);
             }
         };
+        // Hermes resolves `key_env` references from the `.env` sidecar next to
+        // config.yaml, so the credential is delivered through that file.
+        let extra_changes = self.companion_changes(adapter, &detection, &desired)?;
         if let Err(error) = self.transaction.baseline(&draft.agent_id, &config_path) {
             self.cleanup_new_local_token(&local_token_metadata);
             return Err(error);
@@ -754,6 +936,26 @@ impl AgentService {
                 return Err(error);
             }
         };
+        if let Err(error) = self.apply_companions(&draft.agent_id, extra_changes) {
+            let _ = self.transaction.restore_backup(&result.backup_path);
+            self.cleanup_new_local_token(&local_token_metadata);
+            return Err(error);
+        }
+        // Trae 的有效状态在数据库里而非那个文件里：必须先把选中记录改到目标
+        // 模型，再走统一校验，否则 verify_config 读到的是尚未更新的数据库，
+        // 首次切换到任何模型都会“校验失败”。
+        let trae_selection = if matches!(draft.agent_id.as_str(), "traework" | "traecode") {
+            match trae_family::apply_selection(&detection, &draft.model_id) {
+                Ok(changes) => Some(changes),
+                Err(error) => {
+                    let _ = self.transaction.restore_backup(&result.backup_path);
+                    self.cleanup_new_local_token(&local_token_metadata);
+                    return Err(error);
+                }
+            }
+        } else {
+            None
+        };
         // verify_config 自己读 config_path 上的最新文件内容，不依赖 detect 的
         // 副产物（installation/config_health 等都不会在写文件后变化），所以
         // 直接复用上一次 detection，避免再次跑 locate_desktop_app 的全平台扫描。
@@ -761,6 +963,11 @@ impl AgentService {
         // 要枚举全系统进程表 + 查注册表 + 扫 PATH，单次 1~3 秒。
         if let Err(error) = adapter.verify_config(&detection, &desired) {
             let restore_result = self.transaction.restore_backup(&result.backup_path);
+            // 数据库里的行级改动也必须回滚，否则"已恢复原配置"名不副实：文件回去了，
+            // 应用选中的模型却停在目标值上。
+            if let Some(changes) = trae_selection.as_ref() {
+                let _ = trae_family::restore_selection(&detection, changes);
+            }
             self.cleanup_new_local_token(&local_token_metadata);
             return match restore_result {
                 Ok(()) => Err(CommandError::new(
@@ -816,6 +1023,9 @@ impl AgentService {
         };
         if let Err(error) = self.database.save_agent_binding(&next_binding) {
             let _ = self.transaction.restore_backup(&result.backup_path);
+            if let Some(changes) = trae_selection.as_ref() {
+                let _ = trae_family::restore_selection(&detection, changes);
+            }
             self.rollback_workbuddy_session(&detection, workbuddy_session_mutation.as_ref());
             self.rollback_codebuddy_workspaces(codebuddy_workspace_mutation.as_ref());
             self.cleanup_new_local_token(&local_token_metadata);
@@ -833,6 +1043,8 @@ impl AgentService {
                     credential.expose(),
                     RouteSnapshot {
                         agent_id: draft.agent_id.clone(),
+                        provider_id: provider.summary.id.clone(),
+                        provider_name: provider.summary.name.clone(),
                         source_protocol,
                         upstream_protocol,
                         upstream_base_url: provider.summary.base_url.clone(),
@@ -849,6 +1061,55 @@ impl AgentService {
             result.final_sha256
         );
 
+        // ZCode pins the selected model per task and mirrors it into Chromium
+        // local storage on startup, so both the task index (the authority) and
+        // the cached selection are repointed while the app is paused above.
+        if draft.agent_id == "zcode" {
+            match zcode::apply_task_model(&detection, &draft.model_id) {
+                Ok(changes) => log::info!(
+                    "ZCode task models synced: tasks={}, model={}",
+                    changes.len(),
+                    draft.model_id
+                ),
+                Err(error) => log::warn!(
+                    "ZCode task model sync failed after configuration write: {}",
+                    error.message
+                ),
+            }
+            match zcode::apply_model_selection(&detection, &draft.model_id) {
+                Ok(changes) => log::info!(
+                    "ZCode model selection synced: records={}, model={}",
+                    changes.len(),
+                    draft.model_id
+                ),
+                Err(error) => log::warn!(
+                    "ZCode model selection sync failed after configuration write: {}",
+                    error.message
+                ),
+            }
+        }
+        // AionClaw 启动时从 sqlite 的 kv.app_config 重建
+        // openclaw/state/openclaw.json，所以外部对该 JSON 的写入会被覆盖；
+        // 真正生效的写入必须落在数据库上，并在写后立即校验。
+        if draft.agent_id == "aionclaw" {
+            match aionclaw::apply_config(&detection, &desired) {
+                Ok(change) => {
+                    if let Err(error) = aionclaw::verify_config(&detection, &desired) {
+                        let _ = aionclaw::restore_config(&detection, &change);
+                        let _ = self.transaction.restore_backup(&result.backup_path);
+                        return Err(error);
+                    }
+                    log::info!(
+                        "AionClaw model synced into its database: model={}",
+                        desired.model_id
+                    );
+                }
+                Err(error) => {
+                    let _ = self.transaction.restore_backup(&result.backup_path);
+                    return Err(error);
+                }
+            }
+        }
         if draft.mode == AgentBindingMode::Direct {
             if let Some(previous) = previous_binding {
                 if let Some(reference) = previous.local_token_ref {
@@ -933,7 +1194,7 @@ impl AgentService {
                     .unwrap_or_else(|| "该 Agent 当前保持只读".to_owned()),
             ));
         }
-        let config_path = detection.config_path.clone().ok_or_else(|| {
+        let config_path = adapter.config_write_target(&detection).ok_or_else(|| {
             CommandError::new("agent_config_path_missing", "Agent 配置路径不可用")
         })?;
         let previous_binding = self.database.get_agent_binding(agent_id)?;
@@ -1765,6 +2026,33 @@ impl AgentService {
             }
         }
     }
+
+    /// Companion resources an adapter needs beyond its main config file.
+    /// Hermes delivers the API credential through the `.env` sidecar next to
+    /// config.yaml; every other adapter contributes nothing.
+    fn companion_changes(
+        &self,
+        adapter: &dyn AgentAdapter,
+        detection: &AgentDetection,
+        desired: &DesiredAgentBinding<'_>,
+    ) -> AppResult<Vec<FileChange>> {
+        adapter
+            .companion_paths(detection)?
+            .into_iter()
+            .map(|path| {
+                adapter
+                    .build_companion(detection, desired, &path)
+                    .map(|new_content| FileChange { path, new_content })
+            })
+            .collect()
+    }
+
+    fn apply_companions(&self, agent_id: &str, changes: Vec<FileChange>) -> AppResult<()> {
+        for change in changes {
+            self.transaction.apply_file(agent_id, change)?;
+        }
+        Ok(())
+    }
 }
 
 fn enrich_summary(database: &Database, summary: &mut AgentSummary, binding: &StoredAgentBinding) {
@@ -1876,7 +2164,19 @@ mod tests {
                 "qclaw",
                 "autoclaw",
                 "codex",
-                "dumate"
+                "dumate",
+                "hermes",
+                "opencode",
+                "qwenwork",
+                "doubaowork",
+                "coze",
+                "kimiwork",
+                "aionclaw",
+                "zcode",
+                "traework",
+                "traecode",
+                "easyclaw",
+                "ima",
             ]
         );
     }
@@ -1892,15 +2192,21 @@ mod tests {
             "Programs/QClaw/QClaw.exe",
             "Programs/AutoClaw/AutoClaw.exe",
             "Programs/Codex/Codex.exe",
+            "Programs/OpenCode/OpenCode.exe",
+            "Programs/Kimi/Kimi.exe",
             "Programs/DuMate/DuMate.exe",
         ] {
             let executable = local_app_data.join(relative);
             fs::create_dir_all(executable.parent().expect("parent")).expect("app directory");
             fs::write(executable, b"test executable").expect("executable");
         }
+        let home = temp.path().join("home");
+        fs::create_dir_all(home.join(".hermes")).expect("Hermes config directory");
+        fs::write(home.join(".hermes/config.yaml"), b"model: m\nprovider: p\n")
+            .expect("Hermes config");
         let registry = AgentRegistry {
             context: DiscoveryContext {
-                home: temp.path().join("home"),
+                home,
                 application_data_dir: temp.path().join("Roaming"),
                 application_dirs: Vec::new(),
                 path_entries: Vec::new(),
@@ -1913,7 +2219,7 @@ mod tests {
         };
 
         let detections = registry.detections();
-        assert_eq!(detections.len(), 6);
+        assert_eq!(detections.len(), 9);
         for detection in detections {
             assert_ne!(
                 detection.install_status,
@@ -1950,6 +2256,7 @@ mod tests {
             ("autoclaw", "AutoClaw.exe"),
             ("codex", "Codex.exe"),
             ("dumate", "DuMate.exe"),
+            ("opencode", "OpenCode.exe"),
         ] {
             let custom_directory = temp.path().join(format!("custom-{agent_id}"));
             let executable = custom_directory.join(executable_name);
@@ -1996,6 +2303,7 @@ mod tests {
             ("autoclaw", "AutoClaw.app"),
             ("codex", "Codex.app"),
             ("dumate", "DuMate.app"),
+            ("opencode", "OpenCode.app"),
         ] {
             let custom_directory = temp.path().join(format!("custom-{agent_id}"));
             let app = custom_directory.join(app_name);
@@ -2166,6 +2474,8 @@ mod tests {
             ("autoclaw", ApiProtocol::OpenaiChatCompletions),
             ("codex", ApiProtocol::OpenaiResponses),
             ("dumate", ApiProtocol::OpenaiChatCompletions),
+            ("hermes", ApiProtocol::OpenaiChatCompletions),
+            ("opencode", ApiProtocol::OpenaiChatCompletions),
         ] {
             let adapter = registry.adapter(agent_id).expect("adapter");
             assert_eq!(
@@ -2202,6 +2512,8 @@ mod tests {
             ("autoclaw", ApiProtocol::OpenaiChatCompletions),
             ("codex", ApiProtocol::OpenaiResponses),
             ("dumate", ApiProtocol::OpenaiChatCompletions),
+            ("hermes", ApiProtocol::OpenaiChatCompletions),
+            ("opencode", ApiProtocol::OpenaiChatCompletions),
         ] {
             let adapter = registry.adapter(agent_id).expect("adapter");
             assert_eq!(
