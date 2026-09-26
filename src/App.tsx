@@ -792,6 +792,7 @@ function AppContent() {
             }
             onRestoreNative={() => requestRestoreAgentNative(activeAgent)}
             platform={snapshot.platform}
+            proxyRunning={snapshot.proxy.status === "running"}
             installPathBusy={installPathBusyAgentId === activeAgent.id}
             onSelectInstallPath={() => void selectAgentInstallPath(activeAgent)}
             onClearInstallPath={() => void clearAgentInstallPath(activeAgent)}

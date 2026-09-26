@@ -84,16 +84,24 @@ export function supportsDirectBinding(
 
 /**
  * 该 Agent 是否正通过本地代理使用某个供应商。代理接管意味着退出 AT-Switch 后
- * 该 Agent 无法继续请求，因此首页必须显式标识出来。代理接管语义由
- * `proxyPrefEnabled` 决定，与 `binding.mode` 解耦：开关关闭后即便
- * `binding.mode === "proxy"`，代理也不会接管流量。
+ * 该 Agent 无法继续请求，因此首页必须显式标识出来。标记仅在代理实际运行时显示，
+ * 总开关关闭（代理未运行）时不显示，避免"代理停了但标记还在"的误导。
+ *
+ * 语义由 `proxyPrefEnabled`（用户偏好）和代理运行状态共同决定：
+ * - `proxyPrefEnabled === true` 且代理在运行：显示"代理接管"标记
+ * - `proxyPrefEnabled === true` 但代理已停止：不显示标记（代理未实际接管流量）
+ * - `proxyPrefEnabled === false`：不显示标记（与 `binding.mode` 解耦，开关关闭后
+ *   即便 `binding.mode === "proxy"`，代理也不会接管流量）
  */
 export function isProxyRoutedProvider(
   agent: AgentSummary,
   providerId: string,
+  proxyRunning: boolean,
 ): boolean {
   return (
-    Boolean(agent.proxyPrefEnabled) && agent.providerId === providerId
+    Boolean(agent.proxyPrefEnabled) &&
+    agent.providerId === providerId &&
+    proxyRunning
   );
 }
 
@@ -102,9 +110,11 @@ export function isProxyRoutedModel(
   agent: AgentSummary,
   providerId: string,
   modelId: string,
+  proxyRunning: boolean,
 ): boolean {
   return (
-    isProxyRoutedProvider(agent, providerId) && agent.modelId === modelId
+    isProxyRoutedProvider(agent, providerId, proxyRunning) &&
+    agent.modelId === modelId
   );
 }
 

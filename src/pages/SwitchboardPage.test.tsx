@@ -679,4 +679,122 @@ describe("SwitchboardPage", () => {
     expect(buttons).toHaveLength(2);
     for (const button of buttons) expect(button).toBeEnabled();
   });
+
+  it("hides the proxy badge when proxyPrefEnabled is set but proxy is not running", () => {
+    // 模拟代理偏好已开启但代理服务已停止：根因场景
+    const agent: AgentSummary = {
+      id: "workbuddy",
+      displayName: "WorkBuddy",
+      installStatus: "installed",
+      runtimeStatus: "not_running",
+      configHealth: "healthy",
+      adapterVerified: true,
+      needsRestart: false,
+      automaticRestartSupported: false,
+      providerId: "provider-minimax",
+      modelId: "minimax-model",
+      mode: "direct",
+      proxyPrefEnabled: true,
+    };
+    const provider: ProviderSummary = {
+      id: "provider-minimax",
+      name: "MiniMax",
+      kind: "custom",
+      protocol: "openai_chat_completions",
+      baseUrl: "https://api.minimax.chat/v1",
+      isRecommended: false,
+      isEnabled: true,
+      hasApiKey: true,
+      verificationStatus: "verified",
+      models: [
+        {
+          id: "provider-minimax:minimax-model",
+          providerId: "provider-minimax",
+          modelId: "minimax-model",
+          displayName: "MiniMax 模型",
+          outputModality: "text",
+          supportsStreaming: true,
+          supportsTools: true,
+          source: "builtin",
+          verificationStatus: "verified",
+        },
+      ],
+    };
+
+    render(
+      <SwitchboardPage
+        agent={agent}
+        providers={[provider]}
+        onCreateProvider={vi.fn()}
+        onEditProvider={vi.fn()}
+        onTestProvider={vi.fn()}
+        onSwitchModel={vi.fn()}
+        onRestoreNative={vi.fn()}
+        proxyRunning={false}
+      />,
+    );
+
+    // proxyRunning=false 时即使 proxyPrefEnabled=true，"代理接管"标签也不显示
+    expect(screen.queryByText("代理接管")).not.toBeInTheDocument();
+    expect(screen.queryByText("Proxied")).not.toBeInTheDocument();
+    // Provider 组徽章也不显示
+    expect(document.querySelector(".model-group__badge--proxy")).toBeNull();
+  });
+
+  it("shows the proxy badge when proxy is running and proxyPrefEnabled is set", () => {
+    const agent: AgentSummary = {
+      id: "workbuddy",
+      displayName: "WorkBuddy",
+      installStatus: "installed",
+      runtimeStatus: "running",
+      configHealth: "healthy",
+      adapterVerified: true,
+      needsRestart: false,
+      automaticRestartSupported: false,
+      providerId: "provider-minimax",
+      modelId: "minimax-model",
+      mode: "proxy",
+      proxyPrefEnabled: true,
+    };
+    const provider: ProviderSummary = {
+      id: "provider-minimax",
+      name: "MiniMax",
+      kind: "custom",
+      protocol: "openai_chat_completions",
+      baseUrl: "https://api.minimax.chat/v1",
+      isRecommended: false,
+      isEnabled: true,
+      hasApiKey: true,
+      verificationStatus: "verified",
+      models: [
+        {
+          id: "provider-minimax:minimax-model",
+          providerId: "provider-minimax",
+          modelId: "minimax-model",
+          displayName: "MiniMax 模型",
+          outputModality: "text",
+          supportsStreaming: true,
+          supportsTools: true,
+          source: "builtin",
+          verificationStatus: "verified",
+        },
+      ],
+    };
+
+    render(
+      <SwitchboardPage
+        agent={agent}
+        providers={[provider]}
+        onCreateProvider={vi.fn()}
+        onEditProvider={vi.fn()}
+        onTestProvider={vi.fn()}
+        onSwitchModel={vi.fn()}
+        onRestoreNative={vi.fn()}
+        proxyRunning={true}
+      />,
+    );
+
+    // proxyRunning=true 且 proxyPrefEnabled=true 时显示"代理接管"标签
+    expect(screen.getByText("代理接管")).toBeInTheDocument();
+  });
 });

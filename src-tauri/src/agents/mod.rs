@@ -1111,6 +1111,15 @@ impl AgentService {
             }
         }
         if draft.mode == AgentBindingMode::Direct {
+            // 切到直连模式后流量不再经过本地代理，同步关闭该 Agent 的代理用量
+            // 统计开关，避免首页"代理接管"标记残留。
+            if let Err(error) = self.database.set_agent_proxy_pref(&draft.agent_id, false) {
+                log::warn!(
+                    "unable to clear proxy usage preference for {}: {}",
+                    draft.agent_id,
+                    error.message
+                );
+            }
             if let Some(previous) = previous_binding {
                 if let Some(reference) = previous.local_token_ref {
                     if let Ok(token) = self.secret_store.get(&reference) {
@@ -2721,6 +2730,116 @@ mod tests {
             .expect("restore routes");
 
         assert_eq!(proxy.status().await.status, ProxyRuntimeStatus::Stopped);
+    }
+
+    #[tokio::test]
+    async fn switching_to_direct_binding_clears_proxy_usage_preference() {
+        let temp = tempfile::tempdir().expect("temp");
+        let home = temp.path().join("home");
+        fs::create_dir_all(home.join(".hermes")).expect("hermes config directory");
+        fs::write(
+            home.join(".hermes/config.yaml"),
+            b"model: default\nprovider: official\n",
+        )
+        .expect("hermes config");
+
+        let database = Arc::new(Database::in_memory().expect("database"));
+        let secret_store: Arc<dyn SecretStore> = Arc::new(MemorySecretStore::default());
+        let proxy =
+            ProxySupervisor::new(54187, Arc::clone(&secret_store)).expect("proxy supervisor");
+        let mut service = AgentService::new(
+            Arc::clone(&database),
+            secret_store,
+            temp.path().join("backups"),
+            proxy,
+        );
+        service.registry.context = DiscoveryContext {
+            home,
+            application_data_dir: temp.path().join("app-data"),
+            application_dirs: Vec::new(),
+            path_entries: Vec::new(),
+            system_application_search: false,
+            custom_installation_path: None,
+            #[cfg(target_os = "windows")]
+            local_app_data: None,
+            #[cfg(target_os = "windows")]
+            program_files: Vec::new(),
+        };
+
+        let hermes = service
+            .registry
+            .adapter("hermes")
+            .expect("hermes adapter")
+            .detect(&service.registry.context)
+            .summary();
+        database
+            .upsert_agent_state(&hermes)
+            .expect("save agent state");
+
+        let provider_secret_ref = "provider/hermes-test/api-key/v1";
+        service
+            .secret_store
+            .put(
+                provider_secret_ref,
+                &SecretValue::new("sk-hermes-upstream".to_owned()),
+            )
+            .expect("seed provider secret");
+
+        let draft = ProviderDraft {
+            id: Some("hermes-provider".to_owned()),
+            name: "Hermes 测试供应商".to_owned(),
+            kind: ProviderKind::Custom,
+            protocol: ApiProtocol::OpenaiChatCompletions,
+            base_url: "https://hermes.test/v1".to_owned(),
+            api_key: None,
+            default_model_id: Some("test-model".to_owned()),
+            models: vec![ModelDraft {
+                model_id: "test-model".to_owned(),
+                display_name: "Test Model".to_owned(),
+                output_modality: ModelOutputModality::Text,
+                supports_streaming: true,
+                supports_tools: true,
+            }],
+            allow_insecure_http: false,
+        };
+        database
+            .save_provider(
+                "hermes-provider",
+                &draft,
+                Some(provider_secret_ref),
+                1,
+                Some("••••-key"),
+            )
+            .expect("save provider");
+
+        database
+            .set_agent_proxy_pref("hermes", true)
+            .expect("enable proxy pref");
+
+        let summary = service
+            .apply(AgentBindingDraft {
+                agent_id: "hermes".to_owned(),
+                provider_id: "hermes-provider".to_owned(),
+                model_id: "test-model".to_owned(),
+                mode: AgentBindingMode::Direct,
+            })
+            .await
+            .expect("apply direct binding");
+
+        assert_eq!(summary.mode, AgentBindingMode::Direct);
+        assert!(
+            !summary.proxy_pref_enabled,
+            "切到直连模式后必须关闭代理用量统计开关",
+        );
+        assert_eq!(
+            database
+                .agent_proxy_prefs()
+                .expect("proxy prefs")
+                .get("hermes")
+                .copied(),
+            Some(false),
+            "数据库中的代理用量统计开关必须被清除",
+        );
     }
 
     #[test]

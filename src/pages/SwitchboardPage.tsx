@@ -51,6 +51,8 @@ interface SwitchboardPageProps {
   onRestoreNative: () => void;
   platform?: string;
   installPathBusy?: boolean;
+  /** 本地代理服务是否正在运行，影响"代理接管"标记和 Provider 组徽章的显示。 */
+  proxyRunning?: boolean;
   onSelectInstallPath?: () => void;
   onClearInstallPath?: () => void;
 }
@@ -68,6 +70,7 @@ export function SwitchboardPage({
   onRestoreNative,
   platform = "unknown",
   installPathBusy = false,
+  proxyRunning = false,
   onSelectInstallPath = () => undefined,
   onClearInstallPath = () => undefined,
 }: SwitchboardPageProps) {
@@ -292,7 +295,7 @@ export function SwitchboardPage({
               agent.providerId === provider.id &&
               provider.models.some((model) => model.modelId === agent.modelId)
             }
-            proxyRouted={isProxyRoutedProvider(agent, provider.id)}
+            proxyRouted={isProxyRoutedProvider(agent, provider.id, proxyRunning)}
             onToggle={() => toggleProviderGroup(provider.id)}
           >
             {provider.models.map((model) => {
@@ -315,7 +318,7 @@ export function SwitchboardPage({
                 agentReady &&
                 configured &&
                 !agent.activationRequired &&
-                isProxyRoutedModel(agent, provider.id, model.modelId);
+                isProxyRoutedModel(agent, provider.id, model.modelId, proxyRunning);
               const key = `${provider.id}:${model.modelId}`;
               const switching = switchingKey === key;
               const canSwitch =

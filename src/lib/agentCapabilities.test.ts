@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   directBindingRequirement,
   isDetectionOnlyAgent,
+  isProxyRoutedModel,
+  isProxyRoutedProvider,
   isSwitchableAgent,
   providerSupportedProtocols,
   supportsDirectBinding,
@@ -20,6 +22,16 @@ function agent(id: string): AgentSummary {
     adapterVerified: true,
     needsRestart: false,
     automaticRestartSupported: false,
+  };
+}
+
+function proxyAgent(id: string, providerId: string, modelId: string): AgentSummary {
+  return {
+    ...agent(id),
+    mode: "proxy",
+    providerId,
+    modelId,
+    proxyPrefEnabled: true,
   };
 }
 
@@ -135,5 +147,39 @@ describe("Agent protocol capabilities", () => {
     };
     expect(supportsDirectBinding("qclaw", anthropic)).toBe(true);
     expect(supportsDirectBinding("autoclaw", anthropic)).toBe(true);
+  });
+});
+
+describe("Proxy routing badge", () => {
+  const routedAgent = proxyAgent("workbuddy", "provider-1", "model-a");
+
+  it("marks the bound provider as proxy routed while the proxy runs", () => {
+    expect(isProxyRoutedProvider(routedAgent, "provider-1", true)).toBe(true);
+    expect(
+      isProxyRoutedModel(routedAgent, "provider-1", "model-a", true),
+    ).toBe(true);
+  });
+
+  it("hides the proxy routing badge when the proxy is stopped", () => {
+    // 回归：总开关关闭后代理未运行，偏好开关仍为 true，标记必须消失。
+    expect(isProxyRoutedProvider(routedAgent, "provider-1", false)).toBe(false);
+    expect(
+      isProxyRoutedModel(routedAgent, "provider-1", "model-a", false),
+    ).toBe(false);
+  });
+
+  it("keeps the badge hidden when the proxy preference is off", () => {
+    const directAgent = agent("workbuddy");
+    expect(isProxyRoutedProvider(directAgent, "provider-1", true)).toBe(false);
+    expect(
+      isProxyRoutedModel(directAgent, "provider-1", "model-a", true),
+    ).toBe(false);
+  });
+
+  it("only marks the provider the agent is actually bound to", () => {
+    expect(isProxyRoutedProvider(routedAgent, "provider-2", true)).toBe(false);
+    expect(
+      isProxyRoutedModel(routedAgent, "provider-1", "model-b", true),
+    ).toBe(false);
   });
 });
