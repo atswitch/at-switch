@@ -42,7 +42,7 @@ export function ProxyRecentRequests({ proxy }: ProxyRecentRequestsProps) {
                 <th scope="col">{text("供应商 / 模型", "Provider / Model")}</th>
                 <th scope="col">{text("状态", "Status")}</th>
                 <th scope="col" className="usage-log__cell--numeric">
-                  {text("输入 / 输出 tokens", "In / Out tokens")}
+                  {text("输入 / 输出 / 缓存", "In / Out / Cache")}
                 </th>
               </tr>
             </thead>
@@ -70,7 +70,9 @@ export function ProxyRecentRequests({ proxy }: ProxyRecentRequestsProps) {
                     </span>
                   </td>
                   <td className="usage-log__tokens">
-                    {row.inputTokens == null && row.outputTokens == null ? (
+                    {row.inputTokens == null &&
+                    row.outputTokens == null &&
+                    row.cacheReadTokens == null ? (
                       <span className="usage-log__unknown">
                         {text("未知", "unknown")}
                       </span>
@@ -79,6 +81,12 @@ export function ProxyRecentRequests({ proxy }: ProxyRecentRequestsProps) {
                         <span>{row.inputTokens ?? "—"}</span>
                         <i aria-hidden="true">/</i>
                         <span>{row.outputTokens ?? "—"}</span>
+                        <i aria-hidden="true">/</i>
+                        <span>
+                          {row.cacheReadTokens == null
+                            ? text("未知", "unknown")
+                            : row.cacheReadTokens}
+                        </span>
                       </>
                     )}
                   </td>

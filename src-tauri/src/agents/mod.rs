@@ -28,7 +28,8 @@ use rand::{rngs::OsRng, RngCore};
 use crate::{
     domain::{
         AgentBindingDraft, AgentBindingMode, AgentConfigHealth, AgentInstallStatus,
-        AgentRuntimeStatus, AgentSummary, ApiProtocol, AppResult, CommandError, ProviderSummary,
+        AgentRuntimeStatus, AgentSummary, ApiProtocol, AppResult, CommandError, ManualRecoveryStep,
+        ProviderSummary,
     },
     infrastructure::{Database, SecretStore, SecretValue, StoredAgentBinding},
     proxy::{ProxySupervisor, RouteSnapshot},
@@ -39,12 +40,16 @@ use self::{
     codebuddy::CodeBuddyAdapter,
     codex::CodexAdapter,
     detection_only::{
-        COZE_ADAPTER, DOUBAO_WORK_ADAPTER, IMA_ADAPTER, KIMI_WORK_ADAPTER, QWEN_WORK_ADAPTER,
+        ACCIO_ADAPTER, COZE_ADAPTER, DOUBAO_WORK_ADAPTER, IMA_ADAPTER, KIMI_WORK_ADAPTER,
+        QWEN_WORK_ADAPTER,
     },
     dumate::DuMateAdapter,
     hermes::HermesAdapter,
     lifecycle::RestartOutcome,
-    locator::{normalized_path_string, DiscoveryContext, Installation, InstallationKind},
+    locator::{
+        collect_system_candidates, normalized_path_string, DiscoveryContext, DiscoveryHints,
+        Installation, InstallationKind,
+    },
     openclaw::{AionClawAdapter, AutoClawAdapter, EasyClawAdapter, QClawAdapter},
     opencode::OpenCodeAdapter,
     trae_family::{TRAECODE_ADAPTER, TRAEWORK_ADAPTER},
@@ -269,6 +274,7 @@ impl AgentDetection {
                     .is_some_and(|installation| installation.kind == InstallationKind::DesktopApp),
             activation_required: false,
             message: self.message.clone(),
+            manual_recovery_steps: None,
         }
     }
 }
@@ -288,6 +294,12 @@ trait AgentAdapter: Send + Sync {
     fn id(&self) -> &'static str;
     fn display_name(&self) -> &'static str;
     fn detect(&self, context: &DiscoveryContext) -> AgentDetection;
+    /// Inputs used to batch system-wide discovery (Spotlight/registry/process
+    /// table) into a single scan. Adapters discovered only via `locate_command`
+    /// keep the default empty hints.
+    fn discovery_hints(&self) -> DiscoveryHints {
+        DiscoveryHints::default()
+    }
     fn source_protocol(
         &self,
         desired_mode: AgentBindingMode,
@@ -398,6 +410,7 @@ impl Default for AgentRegistry {
                 Box::new(TRAECODE_ADAPTER),
                 Box::new(EasyClawAdapter),
                 Box::new(IMA_ADAPTER),
+                Box::new(ACCIO_ADAPTER),
             ],
             context: DiscoveryContext::native(),
         }
@@ -422,11 +435,18 @@ impl AgentRegistry {
         &self,
         custom_paths: &HashMap<String, String>,
     ) -> Vec<AgentDetection> {
+        let mut base = self.context.refreshed();
+        let hints: Vec<DiscoveryHints> = self
+            .adapters
+            .iter()
+            .map(|adapter| adapter.discovery_hints())
+            .collect();
+        base.system_candidates = Some(Arc::new(collect_system_candidates(&hints)));
         self.adapters
             .iter()
             .map(|adapter| {
                 let custom_path = custom_paths.get(adapter.id()).map(PathBuf::from);
-                self.detect_adapter(adapter.as_ref(), custom_path.as_deref())
+                self.detect_adapter(adapter.as_ref(), custom_path.as_deref(), &base)
             })
             .collect()
     }
@@ -435,8 +455,9 @@ impl AgentRegistry {
         &self,
         adapter: &dyn AgentAdapter,
         custom_path: Option<&std::path::Path>,
+        base: &DiscoveryContext,
     ) -> AgentDetection {
-        let mut context = self.context.refreshed();
+        let mut context = base.clone();
         context.custom_installation_path = custom_path.map(PathBuf::from);
         let mut detection = adapter.detect(&context);
         detection.custom_install_path = custom_path.map(PathBuf::from);
@@ -581,6 +602,7 @@ impl AgentService {
         Ok(self.registry.detect_adapter(
             adapter,
             custom_paths.get(adapter.id()).map(std::path::Path::new),
+            &self.registry.context,
         ))
     }
 
@@ -613,7 +635,9 @@ impl AgentService {
                 )
                 .with_recovery("请选择 Agent 主程序或其所在目录后重试。"));
             }
-            let detection = self.registry.detect_adapter(adapter, Some(selected));
+            let detection =
+                self.registry
+                    .detect_adapter(adapter, Some(selected), &self.registry.context);
             if !detection.using_custom_install_path {
                 return Err(CommandError::new(
                     "custom_installation_not_found",
@@ -861,6 +885,34 @@ impl AgentService {
             },
             credential: credential.expose(),
         };
+        // DEBUG: 记录 apply 入口参数，下次切换失败时从此定位根因
+        let debug_base_url = if draft.mode == AgentBindingMode::Proxy {
+            &local_base_url
+        } else {
+            &provider.summary.base_url
+        };
+        let debug_proxy_pref = self
+            .database
+            .agent_proxy_prefs()
+            .ok()
+            .and_then(|prefs| prefs.get(&draft.agent_id).copied())
+            .unwrap_or(false);
+        log::info!(
+            "DEBUG apply: agent={} mode={:?} provider_id={} provider_name={} model_id={} \
+             base_url={} base_url_src={} proxy_pref_enabled={}",
+            draft.agent_id,
+            draft.mode,
+            provider.summary.id,
+            provider.summary.name,
+            model.model_id,
+            debug_base_url,
+            if draft.mode == AgentBindingMode::Proxy {
+                "local_proxy"
+            } else {
+                "provider.summary.base_url"
+            },
+            debug_proxy_pref,
+        );
         if let Err(error) = adapter.validate_binding(&desired) {
             self.cleanup_new_local_token(&local_token_metadata);
             return Err(error);
@@ -1393,6 +1445,12 @@ impl AgentService {
             } else {
                 apply_restart_outcome(&mut summary, desktop_restart);
             }
+        }
+        // 当 baseline 不存在时（用户从未被 AT-Switch 接管过），AT-Switch 无法自动
+        // 恢复出厂默认模型。此时告知用户需要手动在 Agent 内操作。
+        if !baseline.existed {
+            summary.manual_recovery_steps =
+                Some(manual_recovery_steps_for(adapter.id(), &detection));
         }
         self.database.upsert_agent_state(&summary)?;
         Ok(summary)
@@ -2108,9 +2166,11 @@ fn apply_restart_outcome(summary: &mut AgentSummary, outcome: Option<AppResult<R
             ));
         }
         Some(Err(error)) => {
-            log::warn!(
-                "{} configuration was saved but automatic relaunch failed: {}",
+            log::error!(
+                "{} (agent_id={}) configuration saved but automatic relaunch failed: code={}, message={}",
                 summary.display_name,
+                summary.id,
+                error.code,
                 error.message
             );
             summary.needs_restart = true;
@@ -2119,6 +2179,118 @@ fn apply_restart_outcome(summary: &mut AgentSummary, outcome: Option<AppResult<R
                 summary.display_name
             ));
         }
+    }
+}
+
+/// Returns user-facing manual recovery steps when AT-Switch cannot automatically
+/// restore an Agent to its factory default model (because the user was never
+/// taken over by AT-Switch — no baseline snapshot exists on disk).
+fn manual_recovery_steps_for(
+    agent_id: &str,
+    detection: &AgentDetection,
+) -> Vec<ManualRecoveryStep> {
+    use ManualRecoveryStep as Step;
+    match agent_id {
+        "hermes" => vec![
+            Step {
+                title: "在 Hermes 应用内打开设置".into(),
+                detail: "点击左上角菜单 → Settings，打开配置面板。".into(),
+            },
+            Step {
+                title: "选择默认模型".into(),
+                detail: "在设置面板中找到「Default Model」或「Default Provider」，选择你想要的出厂默认模型（如 Anthropic Claude Sonnet 或 OpenAI GPT-4）。".into(),
+            },
+            Step {
+                title: "保存并重启 Hermes".into(),
+                detail: "保存设置后，关闭并重新打开 Hermes，新模型即刻生效。".into(),
+            },
+        ],
+        "workbuddy" => vec![
+            Step {
+                title: "在 WorkBuddy 内打开模型设置".into(),
+                detail: "点击左侧「Models」标签，进入模型管理页面。".into(),
+            },
+            Step {
+                title: "选择默认模型".into(),
+                detail: "在模型列表中选择你想要的出厂默认模型，点击「Set as Default」或对应按钮。".into(),
+            },
+            Step {
+                title: "重启 WorkBuddy".into(),
+                detail: "若 WorkBuddy 正在运行，点击左上角「↻」重新打开，让新模型生效。".into(),
+            },
+        ],
+        "codebuddy" => vec![
+            Step {
+                title: "在 CodeBuddy 内切换模型".into(),
+                detail: "点击工具栏中的模型选择器，或进入「Settings → Model」页面。".into(),
+            },
+            Step {
+                title: "恢复默认模型".into(),
+                detail: "在模型列表中选择你想要的出厂默认模型（如 Claude Sonnet）。".into(),
+            },
+            Step {
+                title: "重新打开工作区（可选）".into(),
+                detail: "若之前的对话仍使用旧模型，可关闭并重新打开对应工作区，新模型会用于新对话。".into(),
+            },
+        ],
+        "openclaw" | "autoclaw" | "qclaw" | "easyclaw" | "aionclaw" => vec![
+            Step {
+                title: "在应用内打开模型/Provider 设置".into(),
+                detail: format!(
+                    "打开 {} 的设置或首选项页面，找到模型或 Provider 相关配置项。",
+                    detection.display_name
+                ),
+            },
+            Step {
+                title: "恢复默认模型".into(),
+                detail: "选择「Default」或你希望恢复的出厂默认模型，保存设置。".into(),
+            },
+            Step {
+                title: "重启应用".into(),
+                detail: "关闭并重新打开应用，让恢复后的默认模型生效。".into(),
+            },
+        ],
+        "zcode" => vec![
+            Step {
+                title: "在 ZCode 内打开模型配置".into(),
+                detail: "点击左侧「Settings」→「Models」或「Providers」标签。".into(),
+            },
+            Step {
+                title: "恢复默认模型".into(),
+                detail: "将「Default Model Selection」改回你希望的出厂默认模型（如 Anthropic Claude）。".into(),
+            },
+            Step {
+                title: "保存并重启 ZCode".into(),
+                detail: "保存后关闭并重新打开 ZCode，新模型即可用于新会话。".into(),
+            },
+        ],
+        "codex" => vec![
+            Step {
+                title: "在 Codex 内切换模型".into(),
+                detail: "打开 Codex 桌面应用，进入设置或模型选择页面。".into(),
+            },
+            Step {
+                title: "恢复默认模型".into(),
+                detail: "选择你希望恢复的出厂默认模型（如 GPT-4o）。".into(),
+            },
+            Step {
+                title: "重启 Codex".into(),
+                detail: "若 Codex 正在运行，重启应用使恢复的默认模型生效。".into(),
+            },
+        ],
+        // trawwork / dumate 等不写磁盘的 Agent 理论上永远有 baseline，
+        // 但以防万一未知 agent_id 也给出通用提示。
+        _ => vec![
+            Step {
+                title: "在应用内手动选择默认模型".into(),
+                detail: format!(
+                    "AT-Switch 无法自动恢复 {} 的出厂默认模型，请在 {} 应用内 \
+                    手动将默认模型改回你需要的选项。",
+                    detection.display_name,
+                    detection.display_name
+                ),
+            },
+        ],
     }
 }
 
@@ -2186,6 +2358,7 @@ mod tests {
                 "traecode",
                 "easyclaw",
                 "ima",
+                "accio",
             ]
         );
     }
@@ -2221,6 +2394,8 @@ mod tests {
                 path_entries: Vec::new(),
                 system_application_search: false,
                 custom_installation_path: None,
+                system_candidates: None,
+                system_candidates: None,
                 local_app_data: Some(local_app_data),
                 program_files: Vec::new(),
             },
@@ -2252,6 +2427,8 @@ mod tests {
                 path_entries: Vec::new(),
                 system_application_search: false,
                 custom_installation_path: None,
+                system_candidates: None,
+                system_candidates: None,
                 local_app_data: None,
                 program_files: Vec::new(),
             },
@@ -2273,7 +2450,8 @@ mod tests {
             fs::write(&executable, b"test executable").expect("executable");
 
             let adapter = registry.adapter(agent_id).expect("adapter");
-            let detection = registry.detect_adapter(adapter, Some(&custom_directory));
+            let detection =
+                registry.detect_adapter(adapter, Some(&custom_directory), &registry.context);
 
             assert!(
                 detection.using_custom_install_path,
@@ -2301,6 +2479,7 @@ mod tests {
                 path_entries: Vec::new(),
                 system_application_search: false,
                 custom_installation_path: None,
+                system_candidates: None,
             },
             ..AgentRegistry::default()
         };
@@ -2319,7 +2498,8 @@ mod tests {
             fs::create_dir_all(app.join("Contents")).expect("custom app bundle");
 
             let adapter = registry.adapter(agent_id).expect("adapter");
-            let detection = registry.detect_adapter(adapter, Some(&custom_directory));
+            let detection =
+                registry.detect_adapter(adapter, Some(&custom_directory), &registry.context);
 
             assert!(
                 detection.using_custom_install_path,
@@ -2361,6 +2541,7 @@ mod tests {
             path_entries: Vec::new(),
             system_application_search: false,
             custom_installation_path: None,
+            system_candidates: None,
         };
 
         let summary = service
@@ -2406,6 +2587,7 @@ mod tests {
             path_entries: Vec::new(),
             system_application_search: false,
             custom_installation_path: None,
+            system_candidates: None,
             local_app_data: None,
             program_files: Vec::new(),
         };
@@ -2446,6 +2628,7 @@ mod tests {
             path_entries: Vec::new(),
             system_application_search: false,
             custom_installation_path: None,
+            system_candidates: None,
             local_app_data: None,
             program_files: Vec::new(),
         };
@@ -2760,6 +2943,7 @@ mod tests {
             path_entries: Vec::new(),
             system_application_search: false,
             custom_installation_path: None,
+            system_candidates: None,
             #[cfg(target_os = "windows")]
             local_app_data: None,
             #[cfg(target_os = "windows")]
@@ -2826,7 +3010,7 @@ mod tests {
             .await
             .expect("apply direct binding");
 
-        assert_eq!(summary.mode, AgentBindingMode::Direct);
+        assert_eq!(summary.mode.as_deref(), Some("direct"));
         assert!(
             !summary.proxy_pref_enabled,
             "切到直连模式后必须关闭代理用量统计开关",
@@ -2897,5 +3081,74 @@ mod tests {
             .message
             .as_deref()
             .is_some_and(|message| message.starts_with("Test ")));
+    }
+
+    #[test]
+    fn manual_recovery_steps_per_agent_contains_known_ids() {
+        let cases = [
+            "hermes",
+            "workbuddy",
+            "codebuddy",
+            "openclaw",
+            "autoclaw",
+            "qclaw",
+            "easyclaw",
+            "aionclaw",
+            "zcode",
+            "codex",
+        ];
+        for agent_id in cases {
+            let detection = AgentDetection {
+                id: agent_id,
+                display_name: agent_id,
+                installation: None,
+                config_path: None,
+                config_health: AgentConfigHealth::Healthy,
+                install_status: AgentInstallStatus::Installed,
+                write_supported: true,
+                needs_restart: false,
+                message: None,
+                custom_install_path: None,
+                using_custom_install_path: false,
+                runtime_data_dir: None,
+            };
+            let steps = manual_recovery_steps_for(agent_id, &detection);
+            assert!(
+                steps.len() >= 2,
+                "{agent_id} 应该有 2 条以上手动恢复步骤，实际 {} 条",
+                steps.len()
+            );
+            for step in &steps {
+                assert!(
+                    !step.title.trim().is_empty(),
+                    "{agent_id} 的手动恢复步骤 title 不能为空"
+                );
+                assert!(
+                    !step.detail.trim().is_empty(),
+                    "{agent_id} 的手动恢复步骤 detail 不能为空"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn manual_recovery_steps_unknown_agent_falls_back_to_generic() {
+        let detection = AgentDetection {
+            id: "totally-unknown",
+            display_name: "Totally Unknown",
+            installation: None,
+            config_path: None,
+            config_health: AgentConfigHealth::Healthy,
+            install_status: AgentInstallStatus::Installed,
+            write_supported: true,
+            needs_restart: false,
+            message: None,
+            custom_install_path: None,
+            using_custom_install_path: false,
+            runtime_data_dir: None,
+        };
+        let steps = manual_recovery_steps_for("totally-unknown", &detection);
+        assert_eq!(steps.len(), 1);
+        assert!(steps[0].detail.contains("Totally Unknown"));
     }
 }

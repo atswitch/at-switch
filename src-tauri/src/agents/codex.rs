@@ -6,7 +6,7 @@ use crate::domain::{AgentBindingMode, ApiProtocol, AppResult, CommandError};
 use crate::services::BaselineSnapshot;
 
 use super::{
-    locator::{locate_command, locate_desktop_app, DiscoveryContext, Installation},
+    locator::{locate_command, locate_desktop_app, DiscoveryContext, DiscoveryHints, Installation},
     AgentAdapter, AgentDetection, DesiredAgentBinding,
 };
 
@@ -19,6 +19,20 @@ impl AgentAdapter for CodexAdapter {
 
     fn display_name(&self) -> &'static str {
         "Codex"
+    }
+
+    fn discovery_hints(&self) -> DiscoveryHints {
+        DiscoveryHints {
+            macos_bundle_identifiers: &["com.openai.codex"],
+            windows_relative_paths: &[
+                "Programs/Codex/Codex.exe",
+                "Codex/Codex.exe",
+                "OpenAI/Codex/Codex.exe",
+                "Programs/ChatGPT/ChatGPT.exe",
+                "ChatGPT/ChatGPT.exe",
+                "OpenAI/ChatGPT/ChatGPT.exe",
+            ],
+        }
     }
 
     fn detect(&self, context: &DiscoveryContext) -> AgentDetection {

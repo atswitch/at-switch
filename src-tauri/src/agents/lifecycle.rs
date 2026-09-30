@@ -538,7 +538,10 @@ fn launch_desktop_app(installation: &Installation, display_name: &str) -> AppRes
         .spawn()
         .map(|_| ())
         .map_err(|error| {
-            log::warn!("{display_name} could not be relaunched: {error}");
+            log::error!(
+                "{display_name} relaunch failed (path={}): {error}",
+                installation.path.display()
+            );
             CommandError::new(
                 "agent_relaunch_failed",
                 format!("{display_name} 配置已经保存，但未能自动重新打开"),
@@ -594,6 +597,10 @@ fn launch_desktop_app(installation: &Installation, display_name: &str) -> AppRes
             }
         }
     }
+    log::error!(
+        "{display_name} relaunch failed after retries (path={}): process not running",
+        installation.path.display()
+    );
     Err(CommandError::new(
         "agent_relaunch_failed",
         format!("{display_name} 配置已经保存，但未能自动重新打开"),

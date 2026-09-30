@@ -73,6 +73,10 @@ export function ProxyUsageByAgent({
                   <dd>{formatTokens(row.inputTokens + row.outputTokens)}</dd>
                 </div>
                 <div>
+                  <dt>{text("缓存", "Cached")}</dt>
+                  <dd>{formatTokens(row.cacheReadTokens)}</dd>
+                </div>
+                <div>
                   <dt>{text("成功率", "Success")}</dt>
                   <dd className={row.successRate < 100 ? "is-warn" : undefined}>
                     {row.successRate}%
@@ -106,6 +110,7 @@ export function ProxyUsageByAgent({
                       <span className="usage-agent-card__model-usage">
                         {formatTokens(model.inputTokens)} in ·{" "}
                         {formatTokens(model.outputTokens)} out ·{" "}
+                        {model.cacheReadTokens > 0 ? `${formatTokens(model.cacheReadTokens)} cache · ` : ""}
                         {model.requests} req
                       </span>
                     </li>

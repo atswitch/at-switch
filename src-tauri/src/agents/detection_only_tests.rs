@@ -30,6 +30,7 @@ fn installed_context(home: &Path) -> DiscoveryContext {
         fs::create_dir_all(applications.join("Coze.app")).expect("coze app");
         fs::create_dir_all(applications.join("AionClaw.app")).expect("aionclaw app");
         fs::create_dir_all(applications.join("ZCode.app")).expect("zcode app");
+        fs::create_dir_all(applications.join("Accio.app")).expect("accio app");
         DiscoveryContext {
             home: home.to_path_buf(),
             application_data_dir: home.join("Library/Application Support"),
@@ -37,6 +38,7 @@ fn installed_context(home: &Path) -> DiscoveryContext {
             path_entries: Vec::new(),
             system_application_search: false,
             custom_installation_path: None,
+            system_candidates: None,
         }
     }
 
@@ -49,6 +51,7 @@ fn installed_context(home: &Path) -> DiscoveryContext {
             "Programs/Coze/Coze.exe",
             "Programs/AionClaw/AionClaw.exe",
             "Programs/ZCode/ZCode.exe",
+            "Programs/Accio/Accio.exe",
         ] {
             let path = local_app_data.join(executable);
             fs::create_dir_all(path.parent().expect("executable parent")).expect("app directory");
@@ -61,6 +64,7 @@ fn installed_context(home: &Path) -> DiscoveryContext {
             path_entries: Vec::new(),
             system_application_search: false,
             custom_installation_path: None,
+            system_candidates: None,
             local_app_data: Some(local_app_data),
             program_files: Vec::new(),
         }
@@ -84,6 +88,8 @@ fn detection_only_agent_metadata_is_stable() {
     assert_eq!(IMA_ADAPTER.display_name(), "ima");
     assert_eq!(KIMI_WORK_ADAPTER.id(), "kimiwork");
     assert_eq!(KIMI_WORK_ADAPTER.display_name(), "Kimi Work");
+    assert_eq!(ACCIO_ADAPTER.id(), "accio");
+    assert_eq!(ACCIO_ADAPTER.display_name(), "Accio");
 }
 
 #[test]
@@ -99,7 +105,12 @@ fn installed_detection_only_agents_stay_read_only() {
     seed_config_candidate(&home, &config_root.join("Coze"));
     let context = installed_context(&home);
 
-    for adapter in [&QWEN_WORK_ADAPTER, &DOUBAO_WORK_ADAPTER, &COZE_ADAPTER] {
+    for adapter in [
+        &QWEN_WORK_ADAPTER,
+        &DOUBAO_WORK_ADAPTER,
+        &COZE_ADAPTER,
+        &ACCIO_ADAPTER,
+    ] {
         let detection = adapter.detect(&context);
         assert_eq!(detection.id, adapter.id());
         assert_eq!(detection.install_status, AgentInstallStatus::Installed);
@@ -135,7 +146,12 @@ fn detection_only_agents_reject_writes_with_stable_errors() {
         using_custom_install_path: false,
     };
 
-    for adapter in [&QWEN_WORK_ADAPTER, &DOUBAO_WORK_ADAPTER, &COZE_ADAPTER] {
+    for adapter in [
+        &QWEN_WORK_ADAPTER,
+        &DOUBAO_WORK_ADAPTER,
+        &COZE_ADAPTER,
+        &ACCIO_ADAPTER,
+    ] {
         let error = adapter
             .validate_binding(&desired())
             .expect_err("unsupported");

@@ -190,7 +190,7 @@ fn build_native_config_restores_baseline_when_present() {
 }
 
 #[test]
-fn build_native_config_provides_default_when_no_baseline() {
+fn build_native_config_leaves_disk_untouched_when_no_baseline() {
     let temp = tempdir().expect("temp");
     let config_path = temp.path().join("config.yaml");
     write_baseline(&config_path, "model: placeholder\nprovider: placeholder\n");
@@ -202,7 +202,8 @@ fn build_native_config_provides_default_when_no_baseline() {
     let restored = HermesAdapter
         .build_native_config(&detection, &baseline)
         .expect("restore");
-    let rendered = std::str::from_utf8(&restored).expect("utf8");
-    assert!(rendered.contains("model: default"));
-    assert!(rendered.contains("provider: openrouter"));
+    // No baseline means AT-Switch never wrote to this Agent. Emit an empty
+    // payload so the disk reverts to its first-run / factory state instead of
+    // being pinned to a hardcoded provider.
+    assert!(restored.is_empty());
 }

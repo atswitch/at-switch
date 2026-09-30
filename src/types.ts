@@ -1,4 +1,14 @@
-export type PageId = "overview" | "agents" | "providers" | "settings";
+/** 顶层页面只有「模型切换首页」和「设置中心」两级。智能体、模型供应商等配置
+ * 全部收纳进设置中心的分类，不再作为独立顶层页面。 */
+export type PageId = "overview" | "settings";
+
+/** 设置中心的分类导航项。 */
+export type SettingsTab =
+  | "agents"
+  | "providers"
+  | "general"
+  | "proxy"
+  | "about";
 
 export type AppLanguage = "zh-CN" | "en";
 
@@ -97,6 +107,17 @@ export interface AgentSummary {
   automaticRestartSupported: boolean;
   activationRequired?: boolean;
   message?: string;
+  /**
+   * 当 Agent 无法被 AT-Switch 自动恢复到出厂默认模型（用户从未被接管过，磁盘
+   * 上没有 baseline）时，由后端给出的人工恢复步骤，前端在弹窗里逐条展示给用户。
+   * 正常情况为 undefined。
+   */
+  manualRecoverySteps?: ManualRecoveryStep[];
+}
+
+export interface ManualRecoveryStep {
+  title: string;
+  detail: string;
 }
 
 export interface AgentBindingDraft {
@@ -141,6 +162,8 @@ export interface ProxyRequestLogEntry {
   status: number;
   inputTokens?: number;
   outputTokens?: number;
+  /** 上游命中 Prompt Cache 的 token 数；未返回或协议不支持时缺省。 */
+  cacheReadTokens?: number;
 }
 
 export interface AppSettings {

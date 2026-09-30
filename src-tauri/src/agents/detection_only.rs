@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use super::{
-    locator::{locate_desktop_app, DiscoveryContext},
+    locator::{locate_desktop_app, DiscoveryContext, DiscoveryHints},
     AgentAdapter, AgentDetection, DesiredAgentBinding,
 };
 use crate::{
@@ -74,6 +74,13 @@ impl AgentAdapter for DetectionOnlyAdapter {
 
     fn display_name(&self) -> &'static str {
         self.display_name
+    }
+
+    fn discovery_hints(&self) -> DiscoveryHints {
+        DiscoveryHints {
+            macos_bundle_identifiers: self.bundle_ids,
+            windows_relative_paths: self.windows_paths,
+        }
     }
 
     fn detect(&self, context: &DiscoveryContext) -> AgentDetection {
@@ -255,6 +262,39 @@ pub const IMA_ADAPTER: DetectionOnlyAdapter = DetectionOnlyAdapter::new(
         "AppData/Local/com.tencent.imamac",
     ],
     "ima 已检测到；其模型由登录态与服务端下发，本地没有用户级模型配置入口，AT-Switch 不修改其配置，当前只显示安装状态。",
+);
+
+/// Accio（`com.accio.desktop`，阿里国际电商 AI Agent 桌面端 "Accio Work"）。
+/// 它是**服务端锁定**的智能体，本地没有任何自定义模型/Provider 写入通道：
+///
+/// 1. 模型清单由服务端下发。`~/.accio/model_cache.json` 里的模型是不透明服务端
+///    编码（例如 `1Nova-Q3xM8vJ1rH6z` 对应 "DeepSeek V4.1 Flash"），本地只是缓存。
+/// 2. 所有 AI 请求走自有网关 `https://phoenix-gw.alibaba.com/...`（MCP proxy、
+///    IM proxy 等），协议与鉴权均为私有闭源，非 OpenAI 兼容。
+/// 3. `~/.accio/settings.jsonc` 只有 theme / language / browser / accounts 等
+///    UI 配置；`domain-config.json` 只是服务域名表；对 `app.asar` 全文检索无
+///    `baseUrl` / `apiKey` / 自定义 Provider 的用户级配置面。
+///
+/// 因此 AT-Switch 只做安装检测与状态展示，不写入任何内容（与 ima / 豆包工作等
+/// 云锁定客户端一致）。
+pub const ACCIO_ADAPTER: DetectionOnlyAdapter = DetectionOnlyAdapter::new(
+    "accio",
+    "Accio",
+    &["Accio.app"],
+    &["com.accio.desktop"],
+    &[
+        "Programs/Accio/Accio.exe",
+        "Accio/Accio.exe",
+        "Programs/AccioWork/AccioWork.exe",
+        "AccioWork/AccioWork.exe",
+    ],
+    &[
+        ".accio",
+        "Library/Application Support/Accio",
+        "AppData/Roaming/Accio",
+        "AppData/Local/Accio",
+    ],
+    "Accio 已检测到；其模型由服务端按账号下发（模型为服务端编码，请求经 Accio 自有网关），本地没有可写入的自定义模型/Provider 配置，AT-Switch 不修改其配置，当前只显示安装状态。",
 );
 
 pub const DOUBAO_WORK_ADAPTER: DetectionOnlyAdapter = DetectionOnlyAdapter::new(

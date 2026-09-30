@@ -6,7 +6,7 @@ use std::{
 use serde_json::{json, Map, Value};
 
 use super::{
-    locator::{locate_desktop_app, DiscoveryContext},
+    locator::{locate_desktop_app, DiscoveryContext, DiscoveryHints},
     AgentAdapter, AgentDetection, DesiredAgentBinding,
 };
 use crate::{
@@ -27,6 +27,19 @@ impl AgentAdapter for DuMateAdapter {
     }
     fn display_name(&self) -> &'static str {
         "百度搭子"
+    }
+
+    fn discovery_hints(&self) -> DiscoveryHints {
+        DiscoveryHints {
+            macos_bundle_identifiers: &["com.baidu.qianfan.desktop"],
+            windows_relative_paths: &[
+                "Programs/DuMate/DuMate.exe",
+                "DuMate/DuMate.exe",
+                "Programs/百度搭子/DuMate.exe",
+                "百度搭子/DuMate.exe",
+                "DuMate.exe",
+            ],
+        }
     }
 
     fn detect(&self, context: &DiscoveryContext) -> AgentDetection {

@@ -50,15 +50,20 @@ export type SwitchableAgentId = (typeof SWITCHABLE_AGENT_IDS)[number];
 // - ima has no user-level provider surface at all: its data directory is plain
 //   Chromium state, and the bundle contains zero occurrences of `baseUrl`,
 //   `apiKey`, `customModel` or `modelProvider`.
+// - Accio (Alibaba's e-commerce AI agent) is server-locked: its model list is
+//   served as opaque server codes and every AI request goes through its own
+//   `phoenix-gw.alibaba.com` gateway, with no local `baseUrl` / `apiKey` /
+//   custom-provider surface.
 export function isDetectionOnlyAgent(
   agentId: string,
-): agentId is "qwenwork" | "doubaowork" | "coze" | "kimiwork" | "ima" {
+): agentId is "qwenwork" | "doubaowork" | "coze" | "kimiwork" | "ima" | "accio" {
   return (
     agentId === "qwenwork" ||
     agentId === "doubaowork" ||
     agentId === "coze" ||
     agentId === "kimiwork" ||
-    agentId === "ima"
+    agentId === "ima" ||
+    agentId === "accio"
   );
 }
 

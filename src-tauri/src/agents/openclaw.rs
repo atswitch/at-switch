@@ -6,7 +6,7 @@ use crate::domain::{AgentBindingMode, ApiProtocol, AppResult, CommandError};
 use crate::services::BaselineSnapshot;
 
 use super::{
-    locator::{locate_desktop_app, DiscoveryContext},
+    locator::{locate_desktop_app, DiscoveryContext, DiscoveryHints},
     AgentAdapter, AgentDetection, DesiredAgentBinding,
 };
 
@@ -26,6 +26,17 @@ impl AgentAdapter for QClawAdapter {
 
     fn display_name(&self) -> &'static str {
         "QClaw"
+    }
+
+    fn discovery_hints(&self) -> DiscoveryHints {
+        DiscoveryHints {
+            macos_bundle_identifiers: &["com.tencent.qclaw"],
+            windows_relative_paths: &[
+                "Programs/QClaw/QClaw.exe",
+                "QClaw/QClaw.exe",
+                "Tencent/QClaw/QClaw.exe",
+            ],
+        }
     }
 
     fn detect(&self, context: &DiscoveryContext) -> AgentDetection {
@@ -94,6 +105,17 @@ impl AgentAdapter for AutoClawAdapter {
         "AutoClaw"
     }
 
+    fn discovery_hints(&self) -> DiscoveryHints {
+        DiscoveryHints {
+            macos_bundle_identifiers: &["com.zhipuai.autoclaw"],
+            windows_relative_paths: &[
+                "Programs/AutoClaw/AutoClaw.exe",
+                "AutoClaw/AutoClaw.exe",
+                "ZhipuAI/AutoClaw/AutoClaw.exe",
+            ],
+        }
+    }
+
     fn detect(&self, context: &DiscoveryContext) -> AgentDetection {
         let installation = locate_desktop_app(
             context,
@@ -158,6 +180,13 @@ impl AgentAdapter for AionClawAdapter {
 
     fn display_name(&self) -> &'static str {
         "AionClaw"
+    }
+
+    fn discovery_hints(&self) -> DiscoveryHints {
+        DiscoveryHints {
+            macos_bundle_identifiers: &["com.quyuanai.aionclaw"],
+            windows_relative_paths: &["Programs/AionClaw/AionClaw.exe", "AionClaw/AionClaw.exe"],
+        }
     }
 
     fn detect(&self, context: &DiscoveryContext) -> AgentDetection {
@@ -229,6 +258,13 @@ impl AgentAdapter for EasyClawAdapter {
 
     fn display_name(&self) -> &'static str {
         "EasyClaw"
+    }
+
+    fn discovery_hints(&self) -> DiscoveryHints {
+        DiscoveryHints {
+            macos_bundle_identifiers: &["ai.easyclawcn.desktop"],
+            windows_relative_paths: &["Programs/EasyClaw/EasyClaw.exe", "EasyClaw/EasyClaw.exe"],
+        }
     }
 
     fn detect(&self, context: &DiscoveryContext) -> AgentDetection {
@@ -455,9 +491,15 @@ fn build_native_autoclaw_settings(
     }
     if let Some(primary) = baseline_value.pointer("/models/primary").cloned() {
         models.insert("primary".to_owned(), primary);
-    } else {
-        models.remove("primary");
+    } else if let Some(primary) = models.get("primary").cloned() {
+        // No baseline means AT-Switch never wrote anything to this Agent. The
+        // current `models.primary` belongs to the user (or AutoClaw's first-run
+        // default). Keep it so AutoClaw launches against its factory selection
+        // instead of a cleared `primary`.
+        models.insert("primary".to_owned(), primary);
     }
+    // Else: `primary` is still absent. That's the genuine factory state where
+    // AutoClaw derives its default model from the catalog.
 
     serialize_json_object(current, "无法生成 AutoClaw 原始设置")
 }
@@ -677,13 +719,34 @@ fn build_native_openclaw_config(
         )
     })?;
 
-    if let Some(providers) = object
+    let providers_map = object
         .get_mut("models")
         .and_then(Value::as_object_mut)
         .and_then(|models| models.get_mut("providers"))
-        .and_then(Value::as_object_mut)
-    {
+        .and_then(Value::as_object_mut);
+    if let Some(providers) = providers_map {
         providers.retain(|key, _| key != "at-switch" && !key.starts_with("at-switch"));
+        // Restore baseUrl / api for every provider that existed in the baseline so a
+        // managed provider that pointed to the upstream endpoint does not leave the
+        // user's pre-existing provider record pointing at the same upstream endpoint.
+        if let Some(baseline_providers) = baseline_value
+            .pointer("/models/providers")
+            .and_then(Value::as_object)
+        {
+            for (key, baseline_entry) in baseline_providers {
+                if key == "at-switch" || key.starts_with("at-switch") {
+                    continue;
+                }
+                if let Some(entry) = providers.get_mut(key).and_then(Value::as_object_mut) {
+                    if let Some(baseline_url) = baseline_entry.get("baseUrl").cloned() {
+                        entry.insert("baseUrl".to_owned(), baseline_url);
+                    }
+                    if let Some(baseline_api) = baseline_entry.get("api").cloned() {
+                        entry.insert("api".to_owned(), baseline_api);
+                    }
+                }
+            }
+        }
     }
 
     let original_primary = baseline_value
@@ -695,15 +758,26 @@ fn build_native_openclaw_config(
             "model",
         )?
         .insert("primary".to_owned(), primary);
-    } else if let Some(model) = object
-        .get_mut("agents")
-        .and_then(Value::as_object_mut)
-        .and_then(|agents| agents.get_mut("defaults"))
-        .and_then(Value::as_object_mut)
-        .and_then(|defaults| defaults.get_mut("model"))
-        .and_then(Value::as_object_mut)
-    {
-        model.remove("primary");
+    } else {
+        let current_primary = object
+            .get("agents")
+            .and_then(|agents| agents.get("defaults"))
+            .and_then(|defaults| defaults.get("model"))
+            .and_then(|model| model.get("primary"))
+            .cloned();
+        if let Some(primary) = current_primary {
+            // No baseline means AT-Switch never managed this Agent. Keep the
+            // current factory/default primary so OpenClaw starts with its own
+            // selection instead of a blank model.
+            nested_object(
+                nested_object(nested_object(object, "agents")?, "defaults")?,
+                "model",
+            )?
+            .insert("primary".to_owned(), primary);
+        }
+        // If current primary is also absent, leave the object untouched — that
+        // is the genuine factory state where OpenClaw derives its default from
+        // catalog.
     }
 
     serde_json::to_vec_pretty(&current)
@@ -957,6 +1031,7 @@ mod tests {
             path_entries: Vec::new(),
             system_application_search: false,
             custom_installation_path: None,
+            system_candidates: None,
         };
         let detection = EasyClawAdapter.detect(&context);
 
@@ -1001,6 +1076,7 @@ mod tests {
             path_entries: Vec::new(),
             system_application_search: false,
             custom_installation_path: None,
+            system_candidates: None,
             #[cfg(target_os = "windows")]
             local_app_data,
             #[cfg(target_os = "windows")]
@@ -1227,6 +1303,82 @@ mod tests {
         assert_eq!(
             root.pointer("/models/primary/model"),
             Some(&Value::String("glm-next".to_owned()))
+        );
+    }
+
+    #[test]
+    fn openclaw_native_restore_rewrites_baseline_provider_endpoint() {
+        let temp = tempfile::tempdir().expect("temp");
+        let path = temp.path().join("openclaw.json");
+        // The user's native configuration pointed OpenClaw at the Z.ai endpoint.
+        let native = br#"{
+          "models": {
+            "mode": "merge",
+            "providers": {
+              "zai": {
+                "baseUrl": "https://api.z.ai/api/paas/v4",
+                "apiKey": "user-key",
+                "api": "openai-completions",
+                "models": [{"id": "glm-4.7", "name": "glm-4.7"}]
+              }
+            }
+          },
+          "agents": {"defaults": {"model": {"primary": "zai/glm-4.7"}}}
+        }"#;
+        fs::write(&path, native).expect("seed");
+
+        let detection = AgentDetection {
+            id: "qclaw",
+            display_name: "QClaw",
+            installation: None,
+            config_path: Some(path.clone()),
+            runtime_data_dir: None,
+            install_status: AgentInstallStatus::Installed,
+            config_health: AgentConfigHealth::Healthy,
+            write_supported: true,
+            needs_restart: true,
+            message: None,
+            custom_install_path: None,
+            using_custom_install_path: false,
+        };
+
+        // Apply the managed switch: QClaw is now routed to a different upstream.
+        let managed = desired();
+        fs::write(
+            &path,
+            build_openclaw_config(&detection, &managed).expect("managed config"),
+        )
+        .expect("write managed");
+        verify_openclaw_config(&detection, &managed).expect("verify managed");
+
+        // Restore from the baseline; the zai provider must point back at the
+        // endpoint it had before the switch, not at the managed upstream.
+        let restored = build_native_openclaw_config(
+            &detection,
+            &BaselineSnapshot {
+                existed: true,
+                content: native.to_vec(),
+            },
+        )
+        .expect("restore");
+        fs::write(&path, &restored).expect("write restored");
+
+        let root: Value = serde_json::from_slice(&restored).expect("json");
+        assert_eq!(
+            root.pointer("/agents/defaults/model/primary"),
+            Some(&Value::String("zai/glm-4.7".to_owned()))
+        );
+        assert!(root
+            .pointer("/models/providers")
+            .and_then(Value::as_object)
+            .is_some_and(|providers| !providers.contains_key("at-switch")));
+        assert_eq!(
+            root.pointer("/models/providers/zai/baseUrl"),
+            Some(&Value::String("https://api.z.ai/api/paas/v4".to_owned()))
+        );
+        assert_eq!(
+            root.pointer("/models/providers/zai/api"),
+            Some(&Value::String("openai-completions".to_owned()))
         );
     }
 }

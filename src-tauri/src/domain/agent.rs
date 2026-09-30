@@ -93,6 +93,21 @@ pub struct AgentSummary {
     pub activation_required: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// 当 Agent 无法被 AT-Switch 自动恢复到出厂默认模型（用户从未被 AT-Switch
+    /// 接管过，磁盘上没有原始 baseline）时，由后端给出的人工恢复步骤，前端在
+    /// 弹窗里逐条展示给用户。每条对应一行可执行的 UI 提示（如「打开 Hermes 设置
+    /// → 选择默认模型」）。仅在恢复路径真正需要人工介入时填写，正常情况为 None。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manual_recovery_steps: Option<Vec<ManualRecoveryStep>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualRecoveryStep {
+    /// 简短标题，例如「打开 Hermes 设置面板」。
+    pub title: String,
+    /// 可执行的详细说明，例如「在 Hermes 应用内点击左上角菜单 → Settings → Default Model」。
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

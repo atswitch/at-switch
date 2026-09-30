@@ -16,6 +16,7 @@ export interface AgentUsageRow {
   displayName: string;
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number;
   requests: number;
   successful: number;
   /** 请求已 2xx 完成但后端没有读到 token（流式 + usage 事件缺失）。 */
@@ -28,6 +29,7 @@ export interface AgentUsageRow {
     modelId: string;
     inputTokens: number;
     outputTokens: number;
+    cacheReadTokens: number;
     requests: number;
   }>;
 }
@@ -83,6 +85,7 @@ export function buildAgentUsage(
       displayName: agent.displayName,
       inputTokens: 0,
       outputTokens: 0,
+      cacheReadTokens: 0,
       requests: 0,
       successful: 0,
       unknownRequests: 0,
@@ -97,6 +100,7 @@ export function buildAgentUsage(
     target.requests += 1;
     if (row.inputTokens != null) target.inputTokens += row.inputTokens;
     if (row.outputTokens != null) target.outputTokens += row.outputTokens;
+    if (row.cacheReadTokens != null) target.cacheReadTokens += row.cacheReadTokens;
     const isSuccess = row.status >= 200 && row.status < 300;
     const hasUsage = row.inputTokens != null || row.outputTokens != null;
     if (isSuccess) {
@@ -123,6 +127,7 @@ export function buildAgentUsage(
           modelId: row.model,
           inputTokens: 0,
           outputTokens: 0,
+          cacheReadTokens: 0,
           requests: 0,
         };
         modelMap.set(key, entry);
@@ -130,6 +135,7 @@ export function buildAgentUsage(
       entry.requests += 1;
       if (row.inputTokens != null) entry.inputTokens += row.inputTokens;
       if (row.outputTokens != null) entry.outputTokens += row.outputTokens;
+      if (row.cacheReadTokens != null) entry.cacheReadTokens += row.cacheReadTokens;
     }
     target.models = [...modelMap.values()].sort(
       (a, b) => b.inputTokens + b.outputTokens - (a.inputTokens + a.outputTokens),

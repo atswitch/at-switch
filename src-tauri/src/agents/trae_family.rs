@@ -8,7 +8,7 @@ use rusqlite::{params, types::Value as SqlValue, Connection, OpenFlags, Optional
 use serde_json::Value;
 
 use super::{
-    locator::{locate_desktop_app, DiscoveryContext},
+    locator::{locate_desktop_app, DiscoveryContext, DiscoveryHints},
     AgentAdapter, AgentDetection, DesiredAgentBinding,
 };
 use crate::domain::{
@@ -266,6 +266,13 @@ impl AgentAdapter for TraeFamilyAdapter {
 
     fn display_name(&self) -> &'static str {
         self.display_name
+    }
+
+    fn discovery_hints(&self) -> DiscoveryHints {
+        DiscoveryHints {
+            macos_bundle_identifiers: self.bundle_ids,
+            windows_relative_paths: self.windows_paths,
+        }
     }
 
     fn detect(&self, context: &DiscoveryContext) -> AgentDetection {

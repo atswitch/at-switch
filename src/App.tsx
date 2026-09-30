@@ -14,17 +14,16 @@ import {
   supportsDirectBinding,
 } from "./lib/agentCapabilities";
 import { api, getActiveMockSnapshot } from "./lib/api";
-import { AgentsPage } from "./pages/AgentsPage";
-import { ProvidersPage } from "./pages/ProvidersPage";
 import { SettingsPage, type SettingsTab } from "./pages/SettingsPage";
 import { SwitchboardPage } from "./pages/SwitchboardPage";
-import { parsePageId } from "./lib/navigation";
+import { parseSettingsTab } from "./lib/navigation";
 import type {
   AppSettings,
   AppSnapshot,
   AgentBindingDraft,
   AgentSummary,
   CommandError,
+  ManualRecoveryStep,
   PageId,
   ModelSummary,
   ProviderDraft,
@@ -48,6 +47,11 @@ type PendingAgentAction =
   | {
       kind: "restore";
       agent: AgentSummary;
+    }
+  | {
+      kind: "manual_recovery";
+      agent: AgentSummary;
+      steps: ManualRecoveryStep[];
     };
 
 type BindingTarget = {
@@ -84,14 +88,20 @@ function AppContent() {
   const isRealData = searchParams.get("real_data") === "true";
   const showWindowFrame = searchParams.get("window_frame") === "true";
   const requestedPage = searchParams.get("page");
-  // 独立「本地代理」页已合并到设置页，旧深链仍然落到同一处。
+  const requestedTab = searchParams.get("tab");
+  // 智能体、模型供应商、本地代理等独立页面已全部合并进设置中心；旧深链
+  // （page=agents / providers / proxy）统一落到设置中心的对应分类。
   const initialPage: PageId =
-    parsePageId(requestedPage) ??
-    (requestedPage === "proxy" ? "settings" : "overview");
-  const initialSettingsTab: SettingsTab =
-    requestedPage === "proxy" || searchParams.get("tab") === "proxy"
-      ? "proxy"
-      : "general";
+    requestedPage === "settings" ||
+    requestedPage === "agents" ||
+    requestedPage === "providers" ||
+    requestedPage === "proxy"
+      ? "settings"
+      : "overview";
+  const initialSettingsTab: SettingsTab = parseSettingsTab(
+    requestedPage,
+    requestedTab,
+  );
   const initialAgent =
     searchParams.get("agent") ||
     (typeof window !== "undefined"
@@ -101,11 +111,12 @@ function AppContent() {
   const [page, setPage] = useState<PageId>(initialPage);
   const [pageHistory, setPageHistory] = useState<PageId[]>([]);
   const [activeAgentId, setActiveAgentId] = useState(initialAgent);
+  // 设置中心当前分类；从首页「模型」入口跳转时定向到对应分类。
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>(initialSettingsTab);
   const [snapshot, setSnapshot] = useState<AppSnapshot | undefined>(() =>
     isRealData ? getActiveMockSnapshot() : undefined,
   );
   const [loading, setLoading] = useState(!isRealData);
-  const [refreshing, setRefreshing] = useState(false);
   const [installPathBusyAgentId, setInstallPathBusyAgentId] = useState<string>();
   const [providerModal, setProviderModal] = useState(false);
   const [bindingTarget, setBindingTarget] = useState<BindingTarget>();
@@ -179,6 +190,15 @@ function AppContent() {
     });
   }, []);
 
+  // 跳转到设置中心的指定分类（例如首页「模型」入口直达模型供应商）。
+  const navigateToSettings = useCallback(
+    (tab: SettingsTab) => {
+      setSettingsTab(tab);
+      navigateTo("settings");
+    },
+    [navigateTo],
+  );
+
   const goBack = useCallback(() => {
     setPageHistory((history) => {
       setPage(history.at(-1) ?? "overview");
@@ -214,7 +234,6 @@ function AppContent() {
 
   const loadSnapshot = useCallback(
     async (refresh = false) => {
-      if (refresh) setRefreshing(true);
       try {
         const next = refresh ? await api.refresh() : await api.bootstrap();
         setSnapshot(next);
@@ -229,7 +248,6 @@ function AppContent() {
         );
       } finally {
         setLoading(false);
-        setRefreshing(false);
       }
     },
     [notify],
@@ -355,6 +373,15 @@ function AppContent() {
               "The AT-Switch-managed route was removed. Built-in agent models remain available.",
             )),
       );
+      // 用户从未被 AT-Switch 接管过，AT-Switch 无法自动恢复出厂默认模型；
+      // 展示用户需要手动执行的操作步骤。
+      if (restored.manualRecoverySteps?.length) {
+        setPendingAgentAction({
+          kind: "manual_recovery",
+          agent: restored,
+          steps: restored.manualRecoverySteps,
+        });
+      }
     } catch (error) {
       notify(
         "bad",
@@ -437,6 +464,8 @@ function AppContent() {
     setPendingAgentAction(undefined);
     if (pending.kind === "restore") {
       void executeRestoreAgentNative(pending.agent);
+    } else if (pending.kind === "manual_recovery") {
+      // 用户已查看手动恢复步骤，弹窗只用于告知，无需调用后端。
     } else {
       void executeApplyAgentBinding(pending.draft, pending.modelKey);
     }
@@ -756,15 +785,12 @@ function AppContent() {
       <AppShell
         page={page}
         onNavigate={navigateTo}
+        onNavigateToModel={() => navigateToSettings("providers")}
+        onToggleLanguage={(language) => void updateSettings({ language })}
         onBack={goBack}
         agents={snapshot.agents}
         activeAgentId={activeAgent?.id ?? "workbuddy"}
-        refreshing={refreshing}
         onSelectAgent={selectAgent}
-        onRefresh={() => void loadSnapshot(true)}
-        onToggleLanguage={(nextLanguage) =>
-          void updateSettings({ language: nextLanguage })
-        }
       >
         {page === "overview" && activeAgent && (
           <SwitchboardPage
@@ -798,48 +824,23 @@ function AppContent() {
             onClearInstallPath={() => void clearAgentInstallPath(activeAgent)}
           />
         )}
-        {page === "agents" && (
-          <AgentsPage
-            agents={snapshot.agents}
-            onRefresh={() => void loadSnapshot(true)}
-            onConfigure={(agent) =>
-              setBindingTarget({ agent, mode: "direct" })
-            }
-            platform={snapshot.platform}
-            installPathBusyAgentId={installPathBusyAgentId}
-            onSelectInstallPath={(agent) => void selectAgentInstallPath(agent)}
-            onClearInstallPath={(agent) => void clearAgentInstallPath(agent)}
-          />
-        )}
-        {page === "providers" && (
-          <ProvidersPage
-            providers={snapshot.providers}
-            testingId={testingId}
-            onCreate={() => {
-              setEditingProvider(undefined);
-              setProviderModal(true);
-            }}
-            onEdit={(provider) => {
-              setEditingProvider(provider);
-              setProviderModal(true);
-            }}
-            onDelete={(provider) => setDeletingProvider(provider)}
-            onTest={(id, modelId) => void testProvider(id, modelId)}
-          />
-        )}
         {page === "settings" && (
           <SettingsPage
+            key={settingsTab}
             appVersion={snapshot.appVersion}
             platform={snapshot.platform}
             settings={snapshot.settings}
             proxy={snapshot.proxy}
             agents={snapshot.agents}
+            providers={snapshot.providers}
+            testingId={testingId}
             proxyAgentCount={snapshot.agents.filter(
               (agent) => Boolean(agent.proxyPrefEnabled),
             ).length}
             proxyBusy={proxyBusy}
             proxyBusyAgentId={proxyPrefBusyAgentId}
-            initialTab={initialSettingsTab}
+            installPathBusyAgentId={installPathBusyAgentId}
+            initialTab={settingsTab}
             onUpdate={(settings) => void updateSettings(settings)}
             onStartProxy={() => void mutateProxy("start")}
             onStopProxy={() => void mutateProxy("stop")}
@@ -850,6 +851,22 @@ function AppContent() {
             onConfigureProxy={(agent) =>
               setBindingTarget({ agent, mode: "proxy" })
             }
+            onRefresh={() => void loadSnapshot(true)}
+            onConfigure={(agent) =>
+              setBindingTarget({ agent, mode: "direct" })
+            }
+            onSelectInstallPath={(agent) => void selectAgentInstallPath(agent)}
+            onClearInstallPath={(agent) => void clearAgentInstallPath(agent)}
+            onCreateProvider={() => {
+              setEditingProvider(undefined);
+              setProviderModal(true);
+            }}
+            onEditProvider={(provider) => {
+              setEditingProvider(provider);
+              setProviderModal(true);
+            }}
+            onDeleteProvider={(provider) => setDeletingProvider(provider)}
+            onTestProvider={(id, modelId) => void testProvider(id, modelId)}
           />
         )}
       </AppShell>
@@ -1101,6 +1118,11 @@ function AppContent() {
       <AgentRestartConfirmation
         agent={pendingAgentAction?.agent}
         operation={pendingAgentAction?.kind ?? "apply"}
+        manualRecoverySteps={
+          pendingAgentAction?.kind === "manual_recovery"
+            ? pendingAgentAction.steps
+            : undefined
+        }
         onCancel={() => setPendingAgentAction(undefined)}
         onConfirm={confirmPendingAgentAction}
       />

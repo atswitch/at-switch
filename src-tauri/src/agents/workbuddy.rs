@@ -14,7 +14,7 @@ use crate::services::BaselineSnapshot;
 
 use super::{
     lifecycle,
-    locator::{locate_desktop_app, DiscoveryContext},
+    locator::{locate_desktop_app, DiscoveryContext, DiscoveryHints},
     AgentAdapter, AgentDetection, DesiredAgentBinding,
 };
 
@@ -56,6 +56,17 @@ impl AgentAdapter for WorkBuddyAdapter {
 
     fn display_name(&self) -> &'static str {
         "WorkBuddy"
+    }
+
+    fn discovery_hints(&self) -> DiscoveryHints {
+        DiscoveryHints {
+            macos_bundle_identifiers: &["com.workbuddy.workbuddy"],
+            windows_relative_paths: &[
+                "Programs/WorkBuddy/WorkBuddy.exe",
+                "WorkBuddy/WorkBuddy.exe",
+                "Tencent/WorkBuddy/WorkBuddy.exe",
+            ],
+        }
     }
 
     fn detect(&self, context: &DiscoveryContext) -> AgentDetection {

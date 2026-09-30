@@ -1,6 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSummary } from "../types";
 import { AgentSwitcher } from "./AgentSwitcher";
 
@@ -23,7 +23,11 @@ function agent(
 }
 
 describe("AgentSwitcher", () => {
-  it("shows every Agent directly instead of collapsing them into a menu", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("shows every Agent directly when within the visible limit", () => {
     const user = userEvent.setup();
     const onSwitch = vi.fn();
     render(
@@ -77,5 +81,40 @@ describe("AgentSwitcher", () => {
 
     await user.click(uninstalledTab);
     expect(onSwitch).toHaveBeenCalledWith("codebuddy");
+  });
+
+  it("collapses overflow Agents behind a more button", async () => {
+    const user = userEvent.setup();
+    const onSwitch = vi.fn();
+    render(
+      <AgentSwitcher
+        agents={[
+          agent("workbuddy", "WorkBuddy", "installed"),
+          agent("codebuddy", "CodeBuddy", "installed"),
+          agent("qclaw", "QClaw", "installed"),
+          agent("autoclaw", "AutoClaw", "installed"),
+          agent("codex", "Codex", "installed"),
+          agent("dumate", "百度搭子", "installed"),
+          agent("hermes", "Hermes", "installed"),
+          agent("opencode", "OpenCode", "installed"),
+        ]}
+        activeAgentId="workbuddy"
+        onSwitch={onSwitch}
+      />,
+    );
+
+    const tablist = screen.getByRole("tablist", { name: "选择智能体" });
+    // 只直接展示前 6 个，其余收进「更多」。
+    expect(within(tablist).getAllByRole("tab")).toHaveLength(6);
+    expect(
+      within(tablist).queryByRole("tab", { name: /Hermes/ }),
+    ).not.toBeInTheDocument();
+
+    await user.click(
+      within(tablist).getByRole("button", { name: "更多智能体" }),
+    );
+    const dialog = screen.getByRole("dialog", { name: "选择智能体" });
+    await user.click(within(dialog).getByRole("button", { name: /Hermes/ }));
+    expect(onSwitch).toHaveBeenCalledWith("hermes");
   });
 });

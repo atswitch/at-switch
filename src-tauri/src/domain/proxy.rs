@@ -148,4 +148,7 @@ pub struct ProxyRequestLogEntry {
     pub input_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_tokens: Option<u64>,
+    /// 上游命中 Prompt Cache 的 token 数；未返回或协议不支持时为 None。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<u64>,
 }

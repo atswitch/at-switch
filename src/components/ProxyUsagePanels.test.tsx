@@ -26,6 +26,7 @@ const request = {
   status: 200,
   inputTokens: 12_000,
   outputTokens: 8_000,
+  cacheReadTokens: 10_000,
 };
 
 const runningProxy: ProxyStatus = {
@@ -104,8 +105,9 @@ describe("ProxyRecentRequests", () => {
     expect(within(table).getByText("502")).toHaveClass("status-chip--warn");
     expect(within(table).getByText("12000")).toBeInTheDocument();
     expect(within(table).getByText("8000")).toBeInTheDocument();
-    // 两类没有 usage 的请求（用量未知 2xx 与失败请求）都显示「未知」。
-    expect(within(table).getAllByText("未知")).toHaveLength(2);
+    // 没有 input/output 的请求：input / output 两列都显示 "—"；缓存有值仍显示数字。
+    expect(within(table).getAllByText("—")).toHaveLength(4);
+    expect(within(table).getAllByText("10000")).toHaveLength(3);
   });
 
   it("renders an empty state when nothing has been logged", () => {

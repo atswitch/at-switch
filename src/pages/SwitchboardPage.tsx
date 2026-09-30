@@ -319,6 +319,10 @@ export function SwitchboardPage({
                 configured &&
                 !agent.activationRequired &&
                 isProxyRoutedModel(agent, provider.id, model.modelId, proxyRunning);
+              // 当前已绑定的模型：无论直连/代理、是否待重启、代理是否运行，只要
+              // providerId/modelId 匹配且配置健康即视为"已选择"，让首页始终能指认
+              // 当前绑定（与配置弹窗口径一致），避免出现"首页没选中但已绑定"的脱节。
+              const selected = agentReady && configured;
               const key = `${provider.id}:${model.modelId}`;
               const switching = switchingKey === key;
               const canSwitch =
@@ -334,6 +338,7 @@ export function SwitchboardPage({
                     "model-row",
                     active && "is-active",
                     proxyActive && "is-proxy",
+                    selected && "is-selected",
                   )}
                   key={key}
                 >
@@ -399,6 +404,29 @@ export function SwitchboardPage({
                       <span className="verification-copy">
                         {text("直连需要", "Direct mode requires")} {" "}
                         {directBindingRequirement(agent.id, language)}
+                      </span>
+                    )}
+                    {selected && !active && !proxyActive && !pendingVerification && directCompatible && (
+                      <span
+                        className="verification-copy verification-copy--selected"
+                        title={text(
+                          agent.activationRequired
+                            ? "已选择该模型，重启智能体后生效"
+                            : !proxyRunning && agent.mode === "proxy"
+                              ? "已选择该模型，本地代理未运行，暂未接管流量"
+                              : "已选择该模型，等待生效",
+                          agent.activationRequired
+                            ? "Selected; takes effect after the agent restarts"
+                            : !proxyRunning && agent.mode === "proxy"
+                              ? "Selected; the local proxy is stopped, so it is not routing traffic yet"
+                              : "Selected; pending activation",
+                        )}
+                      >
+                        {agent.activationRequired
+                          ? text("已选择 · 待重启生效", "Selected · after restart")
+                          : !proxyRunning && agent.mode === "proxy"
+                            ? text("已选择 · 代理未运行", "Selected · proxy off")
+                            : text("已选择", "Selected")}
                       </span>
                     )}
                   </div>

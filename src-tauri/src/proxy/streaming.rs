@@ -83,6 +83,7 @@ pub struct StreamUsageProbe {
     protocol: Option<ApiProtocol>,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
+    cache_read_tokens: Option<u64>,
 }
 
 impl StreamUsageProbe {
@@ -136,7 +137,8 @@ impl StreamUsageProbe {
                 ),
             ),
             ApiProtocol::AnthropicMessages => match event_name {
-                // Anthropic 把 input 放在 message_start，output 放在 message_delta。
+                // Anthropic 把 input 放在 message_start，output 放在 message_delta，
+                // 缓存读 tokens 嵌套在 message.usage.cache_read_input_tokens。
                 Some("message_start") | None if value.get("message").is_some() => {
                     (usage_number(&value, &["/message/usage/input_tokens"]), None)
                 }
@@ -150,17 +152,37 @@ impl StreamUsageProbe {
                 _ => (None, None),
             },
         };
+        // 缓存读 tokens：OpenAI 放在 prompt_tokens_details.cached_tokens；
+        // Anthropic 放在 usage.cache_read_input_tokens，部分 Beta 还在
+        // input_tokens_details.cached_tokens。SSE 上各协议触发时机不同，这里
+        // 兼容三个路径，重复值会被后到达的相同值覆盖，不会重复累加。
+        let cache = usage_number(
+            &value,
+            &[
+                "/usage/prompt_tokens_details/cached_tokens",
+                "/usage/input_tokens_details/cached_tokens",
+                "/usage/cache_read_input_tokens",
+                "/message/usage/cache_read_input_tokens",
+            ],
+        );
         if let Some(input) = input {
             self.input_tokens = Some(input);
         }
         if let Some(output) = output {
             self.output_tokens = Some(output);
         }
+        if let Some(cache) = cache {
+            self.cache_read_tokens = Some(cache);
+        }
     }
 
     /// Token counts observed so far; `None` when the upstream never sent usage.
-    pub fn usage(&self) -> (Option<u64>, Option<u64>) {
-        (self.input_tokens, self.output_tokens)
+    pub fn usage(&self) -> (Option<u64>, Option<u64>, Option<u64>) {
+        (
+            self.input_tokens,
+            self.output_tokens,
+            self.cache_read_tokens,
+        )
     }
 }
 
@@ -860,15 +882,15 @@ mod tests {
     fn usage_probe_reads_openai_chat_terminal_usage() {
         let mut probe = StreamUsageProbe::new(ApiProtocol::OpenaiChatCompletions);
         probe.observe_frame(r#"data: {"choices":[{"delta":{"content":"hi"}}]}"#);
-        assert_eq!(probe.usage(), (None, None));
+        assert_eq!(probe.usage(), (None, None, None));
         probe.observe_frame(
             r#"data: {"choices":[],"usage":{"prompt_tokens":120,"completion_tokens":34}}"#,
         );
-        assert_eq!(probe.usage(), (Some(120), Some(34)));
+        assert_eq!(probe.usage(), (Some(120), Some(34), None));
         // 上游不发 usage 时保持"未知"，不伪造 0。
         let mut silent = StreamUsageProbe::new(ApiProtocol::OpenaiChatCompletions);
         silent.observe_frame(r#"data: [DONE]"#);
-        assert_eq!(silent.usage(), (None, None));
+        assert_eq!(silent.usage(), (None, None, None));
     }
 
     #[test]
@@ -877,9 +899,9 @@ mod tests {
         probe.observe_frame(
             "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":900,\"output_tokens\":1}}}",
         );
-        assert_eq!(probe.usage(), (Some(900), None));
+        assert_eq!(probe.usage(), (Some(900), None, None));
         probe.observe_frame("event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":77}}");
-        assert_eq!(probe.usage(), (Some(900), Some(77)));
+        assert_eq!(probe.usage(), (Some(900), Some(77), None));
     }
 
     #[test]
@@ -888,7 +910,7 @@ mod tests {
         probe.observe_frame(
             "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":55,\"output_tokens\":12}}}",
         );
-        assert_eq!(probe.usage(), (Some(55), Some(12)));
+        assert_eq!(probe.usage(), (Some(55), Some(12), None));
     }
 
     #[test]
@@ -896,7 +918,23 @@ mod tests {
         let mut probe = StreamUsageProbe::new(ApiProtocol::OpenaiChatCompletions);
         probe.observe_frame("data: {not-json}");
         probe.observe_frame(": keep-alive comment");
-        assert_eq!(probe.usage(), (None, None));
+        assert_eq!(probe.usage(), (None, None, None));
+    }
+
+    #[test]
+    fn usage_probe_reads_cached_tokens_openai() {
+        let mut probe = StreamUsageProbe::new(ApiProtocol::OpenaiChatCompletions);
+        probe.observe_frame(r#"data: {"choices":[],"usage":{"prompt_tokens":200,"completion_tokens":50,"prompt_tokens_details":{"cached_tokens":150}}}"#);
+        assert_eq!(probe.usage(), (Some(200), Some(50), Some(150)));
+    }
+
+    #[test]
+    fn usage_probe_reads_cached_tokens_anthropic() {
+        let mut probe = StreamUsageProbe::new(ApiProtocol::AnthropicMessages);
+        probe.observe_frame(
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":100,\"output_tokens\":0,\"cache_read_input_tokens\":80}}}",
+        );
+        assert_eq!(probe.usage(), (Some(100), None, Some(80)));
     }
 
     #[test]

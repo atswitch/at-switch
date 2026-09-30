@@ -4,7 +4,8 @@ use serde_yaml::Value;
 
 use super::{
     locator::{
-        locate_command, locate_desktop_app, DiscoveryContext, Installation, InstallationKind,
+        locate_command, locate_desktop_app, DiscoveryContext, DiscoveryHints, Installation,
+        InstallationKind,
     },
     AgentAdapter, AgentDetection, BaselineSnapshot, DesiredAgentBinding,
 };
@@ -46,6 +47,17 @@ impl AgentAdapter for HermesAdapter {
 
     fn display_name(&self) -> &'static str {
         DISPLAY_NAME
+    }
+
+    fn discovery_hints(&self) -> DiscoveryHints {
+        DiscoveryHints {
+            macos_bundle_identifiers: &["com.hermes.agent"],
+            windows_relative_paths: &[
+                "Programs/Hermes/Hermes.exe",
+                "Hermes/Hermes.exe",
+                "Hermes.exe",
+            ],
+        }
     }
 
     fn detect(&self, context: &DiscoveryContext) -> AgentDetection {
@@ -108,13 +120,18 @@ impl AgentAdapter for HermesAdapter {
 
     fn build_native_config(
         &self,
-        _detection: &AgentDetection,
+        detection: &AgentDetection,
         baseline: &BaselineSnapshot,
     ) -> AppResult<Vec<u8>> {
         if baseline.existed {
             return Ok(baseline.content.clone());
         }
-        Ok(b"model: default\nprovider: openrouter\n".to_vec())
+        // No baseline means the user has never been managed by AT-Switch. We
+        // never wrote to their disk, so the disk is already in its factory
+        // state (or the file simply doesn't exist yet). Returning empty bytes
+        // lets Hermes fall back to its built-in default model/provider.
+        let _ = detection;
+        Ok(Vec::new())
     }
 
     fn verify_config(

@@ -1,11 +1,4 @@
-import {
-  ArrowLeft,
-  Bot,
-  Boxes,
-  Globe,
-  RefreshCw,
-  Settings,
-} from "lucide-react";
+import { ArrowLeft, Boxes, Globe, Settings } from "lucide-react";
 import clsx from "clsx";
 import { useLanguage } from "../i18n";
 import type { AgentSummary, AppLanguage, PageId } from "../types";
@@ -15,54 +8,33 @@ import { BrandLogo } from "./BrandLogo";
 interface AppShellProps {
   page: PageId;
   onNavigate: (page: PageId) => void;
+  onNavigateToModel: () => void;
+  onToggleLanguage: (language: AppLanguage) => void;
   onBack: () => void;
   agents: AgentSummary[];
   activeAgentId: string;
-  refreshing: boolean;
   onSelectAgent: (agentId: string) => void;
-  onRefresh: () => void;
-  onToggleLanguage?: (language: AppLanguage) => void;
   children: React.ReactNode;
 }
 
 export function AppShell({
   page,
   onNavigate,
+  onNavigateToModel,
+  onToggleLanguage,
   onBack,
   agents,
   activeAgentId,
-  refreshing,
   onSelectAgent,
-  onRefresh,
-  onToggleLanguage,
   children,
 }: AppShellProps) {
   const { language, setLanguage, text } = useLanguage();
-  const navigation: Array<{
-    id: PageId;
-    label: string;
-    tooltip: string;
-    icon: typeof Bot;
-  }> = [
-    {
-      id: "agents",
-      label: text("智能体状态", "Agent status"),
-      tooltip: text("查看智能体状态", "View agent status"),
-      icon: Bot,
-    },
-    {
-      id: "providers",
-      label: text("模型供应商与大模型", "Model providers & LLMs"),
-      tooltip: text("管理模型供应商与大模型", "Manage model providers & LLMs"),
-      icon: Boxes,
-    },
-    {
-      id: "settings",
-      label: text("高级设置", "Advanced settings"),
-      tooltip: text("打开高级设置", "Open advanced settings"),
-      icon: Settings,
-    },
-  ];
+
+  const toggleLanguage = () => {
+    const next = language === "zh-CN" ? "en" : "zh-CN";
+    setLanguage(next);
+    onToggleLanguage(next);
+  };
 
   return (
     <div className="desktop-shell">
@@ -103,59 +75,44 @@ export function AppShell({
           >
             <button
               type="button"
-              className="toolbar-icon-button"
-              onClick={onRefresh}
-              aria-label={text("刷新状态", "Refresh status")}
-              title={text("刷新状态", "Refresh status")}
-              disabled={refreshing}
+              className={clsx(
+                "desktop-action",
+                page === "settings" && "is-active",
+              )}
+              onClick={onNavigateToModel}
+              title={text("模型供应商与大模型", "Model providers & LLMs")}
             >
-              <RefreshCw
-                size={25}
-                className={refreshing ? "is-spinning" : undefined}
-              />
+              <Boxes size={17} strokeWidth={1.8} aria-hidden="true" />
+              <span>{text("模型", "Models")}</span>
             </button>
-            {navigation.map((item) => {
-              const Icon = item.icon;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={clsx(
-                    "toolbar-icon-button",
-                    page === item.id && "is-active",
-                  )}
-                  onClick={() => onNavigate(item.id)}
-                  aria-label={item.label}
-                  title={item.tooltip}
-                >
-                  <Icon size={25} strokeWidth={1.8} />
-                </button>
-              );
-            })}
+            <span className="desktop-actions__sep" aria-hidden="true" />
+            <button
+              type="button"
+              className={clsx(
+                "desktop-action",
+                page === "settings" && "is-active",
+              )}
+              onClick={() => onNavigate("settings")}
+              title={text("打开设置中心", "Open settings")}
+            >
+              <Settings size={17} strokeWidth={1.8} aria-hidden="true" />
+              <span>{text("设置", "Settings")}</span>
+            </button>
+            <span className="desktop-actions__sep" aria-hidden="true" />
+            <button
+              type="button"
+              className="desktop-action"
+              onClick={toggleLanguage}
+              title={
+                language === "zh-CN"
+                  ? "切换界面语言为 English"
+                  : "Switch language to 简体中文"
+              }
+            >
+              <Globe size={17} strokeWidth={1.8} aria-hidden="true" />
+              <span>{language === "zh-CN" ? "中文" : "EN"}</span>
+            </button>
           </nav>
-
-          <button
-            type="button"
-            className="standalone-language-switch"
-            onClick={() => {
-              const nextLanguage = language === "zh-CN" ? "en" : "zh-CN";
-              setLanguage(nextLanguage);
-              onToggleLanguage?.(nextLanguage);
-            }}
-            aria-label={
-              language === "zh-CN"
-                ? "切换界面语言为 English"
-                : "Switch language to 简体中文"
-            }
-            title={
-              language === "zh-CN"
-                ? "切换界面语言为 English"
-                : "Switch language to 简体中文"
-            }
-          >
-            <Globe size={14} />
-            <span>{language === "zh-CN" ? "中文" : "EN"}</span>
-          </button>
         </div>
       </header>
 

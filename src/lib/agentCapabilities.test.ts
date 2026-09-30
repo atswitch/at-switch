@@ -119,6 +119,11 @@ describe("Agent protocol capabilities", () => {
     expect(isSwitchableAgent(agent("ima"))).toBe(false);
   });
 
+  it("treats Accio as read-only because its models are server-locked behind its own gateway", () => {
+    expect(isDetectionOnlyAgent("accio")).toBe(true);
+    expect(isSwitchableAgent(agent("accio"))).toBe(false);
+  });
+
   // Daimon 每次启动都会用服务端下发的默认模型覆盖 `model.current`，连官方模型名也一
   // 样被重置，所以本地写入无法生效——即便运行态 TOML 里确实出现了我们的 Provider。
   it("treats Kimi Work as read-only because Daimon rebuilds the selected model on startup", () => {

@@ -131,6 +131,7 @@ impl ProxyMetrics {
         status: u16,
         input_tokens: Option<u64>,
         output_tokens: Option<u64>,
+        cache_read_tokens: Option<u64>,
     ) {
         let entry = ProxyRequestLogEntry {
             at: Utc::now().to_rfc3339(),
@@ -141,6 +142,7 @@ impl ProxyMetrics {
             status,
             input_tokens,
             output_tokens,
+            cache_read_tokens,
         };
         let mut log = self.recent_requests.write().await;
         if log.len() >= REQUEST_LOG_LIMIT {
@@ -163,9 +165,9 @@ impl ProxyMetrics {
 
 /// 尽力从上游响应体里取用量，兼容 OpenAI（prompt/completion）与
 /// Anthropic（input/output）两种字段名。取不到就返回 `(None, None)`。
-fn usage_from_json(body: &[u8]) -> (Option<u64>, Option<u64>) {
+fn usage_from_json(body: &[u8]) -> (Option<u64>, Option<u64>, Option<u64>) {
     let Ok(value) = serde_json::from_slice::<Value>(body) else {
-        return (None, None);
+        return (None, None, None);
     };
     let input = value
         .pointer("/usage/prompt_tokens")
@@ -179,7 +181,22 @@ fn usage_from_json(body: &[u8]) -> (Option<u64>, Option<u64>) {
                 .pointer("/usage/output_tokens")
                 .and_then(Value::as_u64)
         });
-    (input, output)
+    // OpenAI: usage.prompt_tokens_details.cached_tokens
+    // Anthropic: usage.cache_read_input_tokens（部分 Beta 也放在 input_tokens_details.cached_tokens）。
+    let cache = value
+        .pointer("/usage/prompt_tokens_details/cached_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            value
+                .pointer("/usage/input_tokens_details/cached_tokens")
+                .and_then(Value::as_u64)
+        })
+        .or_else(|| {
+            value
+                .pointer("/usage/cache_read_input_tokens")
+                .and_then(Value::as_u64)
+        });
+    (input, output, cache)
 }
 
 struct ProxyRuntime {
@@ -557,7 +574,7 @@ async fn handle_proxy_request(
                 .fetch_add(1, Ordering::Relaxed);
             state
                 .metrics
-                .record_request(&route, StatusCode::BAD_GATEWAY.as_u16(), None, None)
+                .record_request(&route, StatusCode::BAD_GATEWAY.as_u16(), None, None, None)
                 .await;
             return proxy_error(
                 StatusCode::BAD_GATEWAY,
@@ -575,7 +592,7 @@ async fn handle_proxy_request(
             .fetch_add(1, Ordering::Relaxed);
         state
             .metrics
-            .record_request(&route, status.as_u16(), None, None)
+            .record_request(&route, status.as_u16(), None, None, None)
             .await;
         return proxy_error(status, "upstream_rejected", "上游 Provider 拒绝了请求");
     }
@@ -632,9 +649,15 @@ async fn passthrough_non_stream_response(
     };
     metrics.completed_requests.fetch_add(1, Ordering::Relaxed);
     metrics.successful_requests.fetch_add(1, Ordering::Relaxed);
-    let (input_tokens, output_tokens) = usage_from_json(&body);
+    let (input_tokens, output_tokens, cache_read_tokens) = usage_from_json(&body);
     metrics
-        .record_request(route, status.as_u16(), input_tokens, output_tokens)
+        .record_request(
+            route,
+            status.as_u16(),
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+        )
         .await;
     let mut response = Response::new(Body::from(body));
     *response.status_mut() = status;
@@ -696,7 +719,7 @@ fn passthrough_stream_response(
         if !failed && upstream_status.is_success() {
             metrics.successful_requests.fetch_add(1, Ordering::Relaxed);
         }
-        let (input_tokens, output_tokens) = probe.usage();
+        let (input_tokens, output_tokens, cache_read_tokens) = probe.usage();
         let recorded_status = if failed {
             StatusCode::BAD_GATEWAY
         } else if upstream_status.is_success() {
@@ -710,6 +733,7 @@ fn passthrough_stream_response(
                 recorded_status.as_u16(),
                 input_tokens,
                 output_tokens,
+                cache_read_tokens,
             )
             .await;
     };
@@ -767,6 +791,7 @@ async fn non_stream_response(
             StatusCode::OK.as_u16(),
             canonical.usage.input_tokens,
             canonical.usage.output_tokens,
+            canonical.usage.cache_read_tokens,
         )
         .await;
     (StatusCode::OK, axum::Json(source_value)).into_response()
@@ -850,6 +875,7 @@ fn stream_response(
                 status.as_u16(),
                 final_usage.input_tokens,
                 final_usage.output_tokens,
+                final_usage.cache_read_tokens,
             )
             .await;
     };
@@ -1003,9 +1029,9 @@ mod tests {
         let route = test_route();
 
         metrics
-            .record_request(&route, 200, Some(120), Some(30))
+            .record_request(&route, 200, Some(120), Some(30), Some(80))
             .await;
-        metrics.record_request(&route, 401, None, None).await;
+        metrics.record_request(&route, 401, None, None, None).await;
 
         let recent = metrics.recent_requests(10).await;
         assert_eq!(recent.len(), 2);
@@ -1025,7 +1051,7 @@ mod tests {
         let route = test_route();
 
         for _ in 0..REQUEST_LOG_LIMIT + 20 {
-            metrics.record_request(&route, 200, None, None).await;
+            metrics.record_request(&route, 200, None, None, None).await;
         }
 
         assert_eq!(
@@ -1038,13 +1064,33 @@ mod tests {
     #[tokio::test]
     async fn usage_from_json_reads_both_openai_and_anthropic_shapes() {
         let openai = br#"{"usage":{"prompt_tokens":11,"completion_tokens":22}}"#;
-        assert_eq!(usage_from_json(openai), (Some(11), Some(22)));
+        assert_eq!(usage_from_json(openai), (Some(11), Some(22), None));
 
         let anthropic = br#"{"usage":{"input_tokens":33,"output_tokens":44}}"#;
-        assert_eq!(usage_from_json(anthropic), (Some(33), Some(44)));
+        assert_eq!(usage_from_json(anthropic), (Some(33), Some(44), None));
 
-        assert_eq!(usage_from_json(br#"{"choices":[]}"#), (None, None));
-        assert_eq!(usage_from_json(b"not json"), (None, None));
+        // OpenAI: cached tokens 走 prompt_tokens_details.cached_tokens。
+        let openai_cached = br#"{"usage":{"prompt_tokens":100,"completion_tokens":20,"prompt_tokens_details":{"cached_tokens":70}}}"#;
+        assert_eq!(
+            usage_from_json(openai_cached),
+            (Some(100), Some(20), Some(70))
+        );
+
+        // Anthropic: cache_read_input_tokens 顶层字段 + input_tokens_details.cached_tokens 都支持。
+        let anthropic_cached =
+            br#"{"usage":{"input_tokens":50,"output_tokens":10,"cache_read_input_tokens":40}}"#;
+        assert_eq!(
+            usage_from_json(anthropic_cached),
+            (Some(50), Some(10), Some(40))
+        );
+        let anthropic_cached_beta = br#"{"usage":{"input_tokens":50,"output_tokens":10,"input_tokens_details":{"cached_tokens":40}}}"#;
+        assert_eq!(
+            usage_from_json(anthropic_cached_beta),
+            (Some(50), Some(10), Some(40))
+        );
+
+        assert_eq!(usage_from_json(br#"{"choices":[]}"#), (None, None, None));
+        assert_eq!(usage_from_json(b"not json"), (None, None, None));
     }
 
     #[tokio::test]

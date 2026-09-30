@@ -6,7 +6,7 @@ use std::{
 use serde_json::{json, Value};
 
 use super::{
-    locator::{locate_desktop_app, DiscoveryContext},
+    locator::{locate_desktop_app, DiscoveryContext, DiscoveryHints},
     AgentAdapter, AgentDetection, DesiredAgentBinding,
 };
 use crate::{
@@ -27,6 +27,17 @@ impl AgentAdapter for OpenCodeAdapter {
 
     fn display_name(&self) -> &'static str {
         "OpenCode"
+    }
+
+    fn discovery_hints(&self) -> DiscoveryHints {
+        DiscoveryHints {
+            macos_bundle_identifiers: &["ai.opencode.desktop"],
+            windows_relative_paths: &[
+                "Programs/OpenCode/OpenCode.exe",
+                "OpenCode/OpenCode.exe",
+                "OpenCode.exe",
+            ],
+        }
     }
 
     fn detect(&self, context: &DiscoveryContext) -> AgentDetection {

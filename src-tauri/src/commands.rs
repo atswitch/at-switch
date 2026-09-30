@@ -96,7 +96,26 @@ pub async fn apply_agent_binding(
     state: State<'_, AppState>,
     draft: AgentBindingDraft,
 ) -> AppResult<AgentSummary> {
-    state.agents.apply(draft).await
+    let agent_id = draft.agent_id.clone();
+    let mode = draft.mode;
+    let provider_id = draft.provider_id.clone();
+    let model_id = draft.model_id.clone();
+    match state.agents.apply(draft).await {
+        Ok(summary) => Ok(summary),
+        Err(error) => {
+            log::error!(
+                "agent model switch failed: agent_id={}, mode={}, provider_id={}, model_id={}, code={}, message={}, recovery={:?}",
+                agent_id,
+                mode.as_str(),
+                provider_id,
+                model_id,
+                error.code,
+                error.message,
+                error.recovery,
+            );
+            Err(error)
+        }
+    }
 }
 
 #[tauri::command]

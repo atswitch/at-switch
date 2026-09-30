@@ -10,7 +10,7 @@ use rusty_leveldb::{LdbIterator, Options as LevelDbOptions, DB as LevelDb};
 use serde_json::{json, Map, Value};
 
 use super::{
-    locator::{locate_desktop_app, DiscoveryContext},
+    locator::{locate_desktop_app, DiscoveryContext, DiscoveryHints},
     AgentAdapter, AgentDetection, DesiredAgentBinding,
 };
 use crate::{
@@ -191,6 +191,13 @@ impl AgentAdapter for ZCodeAdapter {
 
     fn display_name(&self) -> &'static str {
         "ZCode"
+    }
+
+    fn discovery_hints(&self) -> DiscoveryHints {
+        DiscoveryHints {
+            macos_bundle_identifiers: &["dev.zcode.app"],
+            windows_relative_paths: &["Programs/ZCode/ZCode.exe", "ZCode/ZCode.exe"],
+        }
     }
 
     fn detect(&self, context: &DiscoveryContext) -> AgentDetection {

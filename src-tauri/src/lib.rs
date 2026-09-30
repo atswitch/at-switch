@@ -15,7 +15,7 @@ use commands::{
     update_proxy_port, update_settings,
 };
 use domain::{AppResult, CommandError};
-use infrastructure::{Database, NativeSecretStore, SecretStore};
+use infrastructure::{logger, Database, NativeSecretStore, SecretStore};
 use proxy::ProxySupervisor;
 use services::{ProviderService, UsageLog};
 use tauri::{
@@ -40,6 +40,14 @@ impl AppState {
             CommandError::internal("无法确定应用数据目录")
         })?;
         std::fs::create_dir_all(&app_data)?;
+        // 文件日志：切换失败 / 本地启动失败的详细信息写入 <app_data>/logs/at-switch.log
+        match logger::init_logging(&app_data) {
+            Ok(()) => log::info!(
+                "AT-Switch starting; log file at {}/logs/at-switch.log",
+                app_data.display()
+            ),
+            Err(error) => log::warn!("file logger init failed, stderr only: {error}"),
+        }
         let database = Arc::new(Database::open(&app_data.join("at-switch.db"))?);
         // On non-macOS targets `NativeSecretStore` is a unit struct, so prefer
         // direct construction over `Default::default()` to satisfy clippy.
