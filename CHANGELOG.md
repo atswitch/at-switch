@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- DuMate switching now verifies every native model alias in the effective account override, preventing a stale route from being reported as successfully applied.
+- macOS release builds now require a complete Developer ID signing configuration and remain draft-only until signature, notarization, and clean-machine checks are complete.
+
 ## [v3.14.2] - 2026-09-08
 
 ### Added

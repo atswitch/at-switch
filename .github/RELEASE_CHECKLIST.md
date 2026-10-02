@@ -4,14 +4,14 @@ Complete this checklist before publishing a GitHub Release from its draft.
 
 ## Signing configuration
 
-Configure either every Secret in a platform group or none of them. A partial group
-fails the workflow instead of silently creating a partially signed build.
+Configure every Secret in a platform group. A missing or partial macOS group fails
+the release job instead of silently creating an ad-hoc-signed build.
 
 - macOS: `APPLE_CERTIFICATE` is a base64-encoded `.p12` containing a valid
   **Developer ID Application** identity; `APPLE_CERTIFICATE_PASSWORD` unlocks that
-  file; `KEYCHAIN_PASSWORD` is a temporary CI keychain password; `APPLE_ID`,
-  `APPLE_PASSWORD` (an app-specific password), and `APPLE_TEAM_ID` are used for
-  notarization.
+  file; `APPLE_SIGNING_IDENTITY` is that certificate's full identity name;
+  `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password), and `APPLE_TEAM_ID` are
+  used for notarization.
 - Windows: `WINDOWS_CERTIFICATE` is a base64-encoded, currently valid code-signing
   `.pfx`; `WINDOWS_CERTIFICATE_PASSWORD` unlocks it.
 
@@ -81,6 +81,5 @@ Actions Secrets.
       identification asset is still valid.
 - [ ] A clean machine can download, install, launch, and remove each public package.
 
-If signing Secrets are absent, the workflow still builds a Draft Release for
-internal verification but never publishes it automatically. Do not manually publish
-an unsigned or ad-hoc-signed draft.
+Every workflow artifact remains in a Draft Release until the checks above are
+complete. Do not manually publish an unsigned or ad-hoc-signed draft.
