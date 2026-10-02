@@ -93,6 +93,11 @@ pub(crate) struct DesktopAppPause {
     display_name: &'static str,
     was_running: bool,
     resumed: bool,
+    /// Environment variables to publish into the user launchd domain before
+    /// the Agent is relaunched. macOS GUI Apps inherit launchd's environment
+    /// when `open` re-executes them, which is the only delivery channel dsh
+    /// accepts for keys it reserves as "launching environment variables".
+    launch_env: Vec<(String, String)>,
 }
 
 impl DesktopAppPause {
@@ -102,11 +107,25 @@ impl DesktopAppPause {
             return Ok(RestartOutcome::ManualRequired);
         };
         if self.was_running {
+            publish_launchd_env(&self.launch_env)?;
             launch_desktop_app(installation, self.display_name)?;
             Ok(RestartOutcome::Relaunched)
         } else {
             Ok(RestartOutcome::WasNotRunning)
         }
+    }
+
+    /// Registers environment variables that must be visible to the Agent's
+    /// process when it is relaunched. dsh reserves `DSH_AT_SWITCH_API_KEY` as a
+    /// launching-environment variable and aborts startup if it finds the same
+    /// name in its profile `.env`, so the managed credential can only be
+    /// delivered here.
+    pub(crate) fn with_launch_env(mut self, variables: &[(&str, &str)]) -> Self {
+        self.launch_env = variables
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect();
+        self
     }
 }
 
@@ -116,6 +135,13 @@ impl Drop for DesktopAppPause {
             return;
         }
         if let Some(installation) = &self.installation {
+            if let Err(error) = publish_launchd_env(&self.launch_env) {
+                log::warn!(
+                    "unable to publish launchd environment for {}: {}",
+                    self.display_name,
+                    error.message
+                );
+            }
             if let Err(error) = launch_desktop_app(installation, self.display_name) {
                 log::warn!(
                     "unable to relaunch {} after interrupted configuration: {}",
@@ -145,6 +171,7 @@ pub(crate) fn pause_for_config_update(detection: &AgentDetection) -> AppResult<D
             display_name: detection.display_name,
             was_running: false,
             resumed: false,
+            launch_env: Vec::new(),
         });
     }
 
@@ -154,6 +181,7 @@ pub(crate) fn pause_for_config_update(detection: &AgentDetection) -> AppResult<D
         display_name: detection.display_name,
         was_running,
         resumed: false,
+        launch_env: Vec::new(),
     })
 }
 
@@ -698,6 +726,39 @@ fn launch_desktop_app(_installation: &Installation, _display_name: &str) -> AppR
 fn process_error(code: &str, display_name: &str, detail: &str) -> CommandError {
     CommandError::new(code, format!("{display_name}：{detail}"))
         .with_recovery(format!("请手动完全退出 {display_name} 后重试。"))
+}
+
+/// Publishes environment variables into the user's launchd domain. A macOS GUI
+/// App launched via `open` inherits launchd's environment at exec time, so
+/// `launchctl setenv` is the only way to hand a variable to a bundle that
+/// refuses to read it from a file inside its own data directory.
+#[cfg(target_os = "macos")]
+fn publish_launchd_env(variables: &[(String, String)]) -> AppResult<()> {
+    if variables.is_empty() {
+        return Ok(());
+    }
+    let mut command = Command::new("/bin/launchctl");
+    command.arg("setenv");
+    for (name, value) in variables {
+        command.arg(name).arg(value);
+    }
+    let output = command
+        .output()
+        .map_err(|error| process_error("agent_env_publish_failed", "系统", &error.to_string()))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        return Err(process_error(
+            "agent_env_publish_failed",
+            "系统",
+            &format!("无法设置启动环境变量：{detail}"),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn publish_launchd_env(_variables: &[(String, String)]) -> AppResult<()> {
+    Ok(())
 }
 
 #[cfg(test)]

@@ -120,6 +120,7 @@ const mockAgentDisplayNames = {
   traecode: "TRAE SOLO CN",
   easyclaw: "EasyClaw",
   ima: "ima",
+  dsh: "DeepSeek Harness",
 } as const;
 
 const mockSnapshotTemplate: AppSnapshot = {

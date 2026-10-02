@@ -15,6 +15,7 @@ export const SWITCHABLE_AGENT_IDS = [
   "hermes",
   "opencode",
   "zcode",
+  "dsh",
   // AionClaw embeds the OpenClaw runtime inside a macOS sandbox container, so it
   // uses the same `models.providers` / `agents.defaults.model` shape as QClaw.
   "aionclaw",
@@ -80,7 +81,8 @@ export function supportsDirectBinding(
   if (
     agentId === "dumate" ||
     agentId === "hermes" ||
-    agentId === "opencode"
+    agentId === "opencode" ||
+    agentId === "dsh"
   ) {
     return providerSupportedProtocols(provider).includes("openai_chat_completions");
   }
@@ -141,7 +143,8 @@ export function directBindingRequirement(
     agentId === "codebuddy" ||
     agentId === "dumate" ||
     agentId === "hermes" ||
-    agentId === "opencode"
+    agentId === "opencode" ||
+    agentId === "dsh"
   )
     return "OpenAI Chat";
   if (agentId === "codex") return "OpenAI Responses";

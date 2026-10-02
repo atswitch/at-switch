@@ -2,6 +2,7 @@ mod aionclaw;
 mod codebuddy;
 mod codex;
 mod detection_only;
+mod dsh;
 mod dumate;
 mod hermes;
 mod lifecycle;
@@ -43,6 +44,7 @@ use self::{
         ACCIO_ADAPTER, COZE_ADAPTER, DOUBAO_WORK_ADAPTER, IMA_ADAPTER, KIMI_WORK_ADAPTER,
         QWEN_WORK_ADAPTER,
     },
+    dsh::DshAdapter,
     dumate::DuMateAdapter,
     hermes::HermesAdapter,
     lifecycle::RestartOutcome,
@@ -290,6 +292,12 @@ pub struct DesiredAgentBinding<'a> {
     pub credential: &'a str,
 }
 
+/// Environment variables an adapter needs in the Agent's launching
+/// environment. The name is `'static` (it is a reserved variable the vendor
+/// reads out of its own process environment); the value borrows from the
+/// binding so adapters can hand over a reference instead of a copy.
+pub type LaunchEnv<'a> = Vec<(&'static str, &'a str)>;
+
 trait AgentAdapter: Send + Sync {
     fn id(&self) -> &'static str;
     fn display_name(&self) -> &'static str;
@@ -352,6 +360,18 @@ trait AgentAdapter: Send + Sync {
     ) -> AppResult<Vec<u8>> {
         Ok(Vec::new())
     }
+    /// Environment variables that must be published to launchd before a desktop
+    /// Agent is relaunched. Only adapters that use "launching environment"
+    /// variables (variables that control process startup, not file-based config)
+    /// override this. The default empty list means no injection is needed.
+    ///
+    /// dsh uses `DSH_AT_SWITCH_API_KEY` this way and refuses to read it from
+    /// profile-level `.env` files; only `launchctl setenv` satisfies dsh's
+    /// startup guard.
+    #[allow(dead_code)]
+    fn launch_env<'a>(&self, _desired: &'a DesiredAgentBinding<'a>) -> LaunchEnv<'a> {
+        Vec::new()
+    }
     #[allow(dead_code)]
     fn restore_companion(
         &self,
@@ -411,6 +431,7 @@ impl Default for AgentRegistry {
                 Box::new(EasyClawAdapter),
                 Box::new(IMA_ADAPTER),
                 Box::new(ACCIO_ADAPTER),
+                Box::new(DshAdapter),
             ],
             context: DiscoveryContext::native(),
         }
@@ -943,7 +964,12 @@ impl AgentService {
         };
         let desktop_pause = if detection.needs_restart && draft.agent_id != "workbuddy" {
             match lifecycle::pause_for_config_update(&detection) {
-                Ok(pause) => Some(pause),
+                Ok(pause) => {
+                    // dsh reserves its API-key variable for the launching
+                    // environment, so the credential must ride along on the
+                    // resume path. Other adapters return an empty list here.
+                    Some(pause.with_launch_env(&adapter.launch_env(&desired)))
+                }
                 Err(error) => {
                     log::warn!(
                         "{} could not be stopped before configuration write: {}; \
@@ -1236,6 +1262,8 @@ impl AgentService {
             } else {
                 apply_restart_outcome(&mut summary, desktop_restart);
             }
+            // dsh 的会话模型选择不受 patch 影响，需新建会话才能用新模型。
+            append_dsh_session_hint(&mut summary);
         }
         Ok(summary)
     }
@@ -2182,6 +2210,20 @@ fn apply_restart_outcome(summary: &mut AgentSummary, outcome: Option<AppResult<R
     }
 }
 
+/// dsh 把「UI 下拉里选的模型」持久化到当前会话的 projcache 里，
+/// `agent-default-model` 补丁只影响新会话默认模型，对已打开会话不生效。
+/// 把这条约束附加在 message 后面，避免用户误以为切换后当前会话也跟着换了。
+fn append_dsh_session_hint(summary: &mut AgentSummary) {
+    if summary.id != "dsh" {
+        return;
+    }
+    let suffix = "dsh 会把当前会话的模型选择持久化在本地，请新建一个会话以使用新模型。";
+    summary.message = Some(match summary.message.take() {
+        Some(existing) => format!("{existing} {suffix}"),
+        None => suffix.to_owned(),
+    });
+}
+
 /// Returns user-facing manual recovery steps when AT-Switch cannot automatically
 /// restore an Agent to its factory default model (because the user was never
 /// taken over by AT-Switch — no baseline snapshot exists on disk).
@@ -2278,6 +2320,20 @@ fn manual_recovery_steps_for(
                 detail: "若 Codex 正在运行，重启应用使恢复的默认模型生效。".into(),
             },
         ],
+        "dsh" => vec![
+            Step {
+                title: "在 dsh Web UI 中打开设置".into(),
+                detail: "打开 http://127.0.0.1:3080，点击右上角齿轮图标进入 Settings。".into(),
+            },
+            Step {
+                title: "切换到默认 Provider".into(),
+                detail: "在 Settings → Models 页面，找到 DeepSeek 官方 Provider，选择你需要的默认模型。".into(),
+            },
+            Step {
+                title: "重启 dsh".into(),
+                detail: "关闭并重新运行 `npx @deepseek-ai/dsh web`，或点击 UI 内的重启按钮。".into(),
+            },
+        ],
         // trawwork / dumate 等不写磁盘的 Agent 理论上永远有 baseline，
         // 但以防万一未知 agent_id 也给出通用提示。
         _ => vec![
@@ -2359,6 +2415,7 @@ mod tests {
                 "easyclaw",
                 "ima",
                 "accio",
+                "dsh",
             ]
         );
     }
