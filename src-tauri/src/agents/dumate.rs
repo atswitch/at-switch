@@ -20,6 +20,7 @@ const MANAGED_PROVIDER: &str = "at-switch";
 const NATIVE_PROVIDER: &str = "QianfanPersonalQuota";
 const MANAGED_NAME: &str = "AT-Switch · 百度搭子";
 const MODEL_TARGET_HEADER: &str = "X-Dumate-Model-Target";
+const REQUIRED_NATIVE_ALIASES: [&str; 3] = ["glm-5", "model-text", "model-artifact-validate"];
 
 impl AgentAdapter for DuMateAdapter {
     fn id(&self) -> &'static str {
@@ -117,32 +118,7 @@ impl AgentAdapter for DuMateAdapter {
         // Existing conversations and DuMate's artifact validator can explicitly
         // request native aliases instead of the top-level default. Overlay those
         // aliases in this account override; keep the generated native source intact.
-        let native = detection
-            .runtime_data_dir
-            .as_ref()
-            .map(|dir| read_config(&dir.join("config/opencode/opencode.json")))
-            .transpose()?;
-        let mut aliases = vec![
-            "glm-5".to_owned(),
-            "model-text".to_owned(),
-            "model-artifact-validate".to_owned(),
-        ];
-        for source in [
-            native
-                .as_ref()
-                .and_then(|v| v.get("provider"))
-                .and_then(|v| v.get(NATIVE_PROVIDER)),
-            providers.get(NATIVE_PROVIDER),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            if let Some(models) = source.get("models").and_then(Value::as_object) {
-                aliases.extend(models.keys().cloned());
-            }
-        }
-        aliases.sort();
-        aliases.dedup();
+        let aliases = native_model_aliases(detection, providers)?;
         providers.insert(
             NATIVE_PROVIDER.to_owned(),
             provider_config(desired, &aliases),
@@ -245,17 +221,24 @@ impl AgentAdapter for DuMateAdapter {
         let models_match = ["model", "small_model"]
             .iter()
             .all(|key| value.get(key).and_then(Value::as_str) == Some(expected_model.as_str()));
+        let providers = value.get("provider").and_then(Value::as_object);
+        let native_aliases = match providers {
+            Some(providers) => native_model_aliases(detection, providers)?,
+            None => Vec::new(),
+        };
         let providers_match = [MANAGED_PROVIDER, NATIVE_PROVIDER].iter().all(|id| {
-            let Some(provider) = value.get("provider").and_then(|v| v.get(id)) else {
+            let Some(provider) = providers.and_then(|providers| providers.get(*id)) else {
                 return false;
             };
             let Some(models) = provider.get("models").and_then(Value::as_object) else {
                 return false;
             };
-            let required = if *id == MANAGED_PROVIDER {
-                desired.model_id
+            let required_aliases_match = if *id == MANAGED_PROVIDER {
+                models.contains_key(desired.model_id)
             } else {
-                "glm-5"
+                native_aliases
+                    .iter()
+                    .all(|alias| models.contains_key(alias))
             };
             is_managed_provider(provider)
                 && provider.get("npm").and_then(Value::as_str) == Some("@ai-sdk/openai-compatible")
@@ -263,8 +246,7 @@ impl AgentAdapter for DuMateAdapter {
                     == Some(desired.base_url.trim_end_matches('/'))
                 && provider.pointer("/options/apiKey").and_then(Value::as_str)
                     == Some(desired.credential)
-                && models.contains_key(required)
-                && (*id != NATIVE_PROVIDER || models.contains_key("model-artifact-validate"))
+                && required_aliases_match
                 && models.values().all(|m| {
                     m.get("id").and_then(Value::as_str) == Some(desired.model_id)
                         && m.get("headers")
@@ -282,6 +264,38 @@ impl AgentAdapter for DuMateAdapter {
             ))
         }
     }
+}
+
+fn native_model_aliases(
+    detection: &AgentDetection,
+    override_providers: &Map<String, Value>,
+) -> AppResult<Vec<String>> {
+    let native = detection
+        .runtime_data_dir
+        .as_ref()
+        .map(|dir| read_config(&dir.join("config/opencode/opencode.json")))
+        .transpose()?;
+    let mut aliases = REQUIRED_NATIVE_ALIASES
+        .iter()
+        .map(|alias| (*alias).to_owned())
+        .collect::<Vec<_>>();
+    for source in [
+        native
+            .as_ref()
+            .and_then(|value| value.get("provider"))
+            .and_then(|providers| providers.get(NATIVE_PROVIDER)),
+        override_providers.get(NATIVE_PROVIDER),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Some(models) = source.get("models").and_then(Value::as_object) {
+            aliases.extend(models.keys().cloned());
+        }
+    }
+    aliases.sort();
+    aliases.dedup();
+    Ok(aliases)
 }
 
 fn provider_config(desired: &DesiredAgentBinding<'_>, aliases: &[String]) -> Value {
