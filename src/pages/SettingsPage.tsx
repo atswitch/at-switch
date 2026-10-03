@@ -10,6 +10,8 @@ import type { AppSettings, ProxyStatus } from "../types";
 import { PageHeader } from "../components/PageHeader";
 
 interface SettingsPageProps {
+  appVersion: string;
+  platform: string;
   settings: AppSettings;
   proxy: ProxyStatus;
   proxyAgentCount: number;
@@ -18,6 +20,8 @@ interface SettingsPageProps {
 }
 
 export function SettingsPage({
+  appVersion,
+  platform,
   settings,
   proxy,
   proxyAgentCount,
@@ -26,6 +30,12 @@ export function SettingsPage({
 }: SettingsPageProps) {
   const proxyRunning = proxy.status === "running";
   const { text } = useLanguage();
+  const platformLabel =
+    platform === "macos"
+      ? "macOS"
+      : platform === "windows"
+        ? "Windows"
+        : text("浏览器预览", "Browser preview");
 
   return (
     <>
@@ -158,8 +168,8 @@ export function SettingsPage({
 
       <footer className="about-strip">
         <span>AT-SWITCH / LOCAL FIRST</span>
-        <strong>v3.14.2</strong>
-        <span>Windows x64 · macOS Universal</span>
+        <strong>v{appVersion}</strong>
+        <span>{platformLabel}</span>
       </footer>
     </>
   );
