@@ -1,0 +1,146 @@
+name: Build desktop package
+
+# Manual packaging workflow: produces installers as workflow artifacts only.
+# It never creates a git tag or a GitHub Release.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch, tag or commit to build'
+        required: true
+        default: 'main'
+      platform:
+        description: 'Target platform'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - both
+          - macos
+          - windows
+      run_checks:
+        description: 'Run tests and lints before packaging'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos:
+    name: macOS universal (dmg)
+    if: ${{ inputs.platform == 'macos' || inputs.platform == 'both' }}
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Check frontend
+        if: ${{ inputs.run_checks }}
+        run: npm test -- --run
+
+      - name: Check Rust formatting
+        if: ${{ inputs.run_checks }}
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Lint Rust
+        if: ${{ inputs.run_checks }}
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Test Rust core
+        if: ${{ inputs.run_checks }}
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Package macOS dmg
+        run: npm run tauri:build -- --target universal-apple-darwin --bundles app,dmg
+
+      - name: Collect artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg artifacts/
+          shasum -a 256 artifacts/*.dmg > artifacts/checksums.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: at-switch-macos-${{ github.run_number }}
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
+
+  build-windows:
+    name: Windows x64 (nsis)
+    if: ${{ inputs.platform == 'windows' || inputs.platform == 'both' }}
+    runs-on: windows-2022
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Check frontend
+        if: ${{ inputs.run_checks }}
+        run: npm test -- --run
+
+      - name: Lint Rust
+        if: ${{ inputs.run_checks }}
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Test Rust core
+        if: ${{ inputs.run_checks }}
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Package Windows installer
+        run: npm run tauri:build -- --target x86_64-pc-windows-msvc --bundles nsis
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          Copy-Item -Path 'src-tauri\target\x86_64-pc-windows-msvc\release\bundle\nsis\*.exe' -Destination artifacts
+          Get-ChildItem -Path artifacts\*.exe | ForEach-Object {
+            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash)  $($_.Name)"
+          } | Out-File -FilePath artifacts\checksums.txt -Encoding utf8NoBOM
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: at-switch-windows-${{ github.run_number }}
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 14
