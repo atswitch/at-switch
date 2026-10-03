@@ -1,8 +1,14 @@
 name: Build desktop package
 
-# Manual packaging workflow: produces installers as workflow artifacts only.
+# Packaging workflow: produces installers as workflow artifacts only.
 # It never creates a git tag or a GitHub Release.
+# `push` lets the packaging run on this branch before it reaches the default
+# branch; dispatch inputs are empty on push runs, so every `inputs.*` use below
+# falls back to the pushed ref and to building both platforms.
 on:
+  push:
+    branches:
+      - release-workflow
   workflow_dispatch:
     inputs:
       ref:
@@ -30,13 +36,13 @@ permissions:
 jobs:
   build-macos:
     name: macOS universal (dmg)
-    if: ${{ inputs.platform == 'macos' || inputs.platform == 'both' }}
+    if: ${{ inputs.platform == 'macos' || inputs.platform == 'both' || inputs.platform == '' }}
     runs-on: macos-14
 
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.ref || github.ref }}
 
       - uses: actions/setup-node@v4
         with:
@@ -89,13 +95,13 @@ jobs:
 
   build-windows:
     name: Windows x64 (nsis)
-    if: ${{ inputs.platform == 'windows' || inputs.platform == 'both' }}
+    if: ${{ inputs.platform == 'windows' || inputs.platform == 'both' || inputs.platform == '' }}
     runs-on: windows-2022
 
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.ref || github.ref }}
 
       - uses: actions/setup-node@v4
         with:
