@@ -771,6 +771,8 @@ function AppContent() {
         )}
         {page === "settings" && (
           <SettingsPage
+            appVersion={snapshot.appVersion}
+            platform={snapshot.platform}
             settings={snapshot.settings}
             proxy={snapshot.proxy}
             proxyAgentCount={snapshot.agents.filter(
