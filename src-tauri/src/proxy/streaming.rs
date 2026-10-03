@@ -72,6 +72,126 @@ pub fn encode_stream_event(
     Ok(encoder.encode(event)?.concat())
 }
 
+/// Read-only usage probe for byte-for-byte SSE passthrough.
+///
+/// Same-protocol streams are forwarded without decoding, so the proxy used to
+/// record `None` tokens for every streamed request. The probe only *observes*
+/// the frames that are already on the wire and never rewrites them, so the
+/// forwarded bytes stay identical to the upstream response.
+#[derive(Debug, Default, Clone)]
+pub struct StreamUsageProbe {
+    protocol: Option<ApiProtocol>,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    cache_read_tokens: Option<u64>,
+}
+
+impl StreamUsageProbe {
+    pub fn new(protocol: ApiProtocol) -> Self {
+        Self {
+            protocol: Some(protocol),
+            ..Self::default()
+        }
+    }
+
+    /// Inspect one complete SSE frame (without the terminating blank line).
+    pub fn observe_frame(&mut self, frame: &str) {
+        let Some(protocol) = self.protocol else {
+            return;
+        };
+        let mut event_name = None;
+        let mut data_lines: Vec<&str> = Vec::new();
+        for line in frame.lines() {
+            if let Some(value) = line.strip_prefix("event:") {
+                event_name = Some(value.trim());
+            } else if let Some(value) = line.strip_prefix("data:") {
+                data_lines.push(value.trim_start());
+            }
+        }
+        if data_lines.is_empty() {
+            return;
+        }
+        let data = data_lines.join("\n");
+        if data.trim() == "[DONE]" {
+            return;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(&data) else {
+            return;
+        };
+        let (input, output) = match protocol {
+            ApiProtocol::OpenaiChatCompletions => (
+                usage_number(&value, &["/usage/prompt_tokens", "/usage/input_tokens"]),
+                usage_number(
+                    &value,
+                    &["/usage/completion_tokens", "/usage/output_tokens"],
+                ),
+            ),
+            ApiProtocol::OpenaiResponses => (
+                usage_number(
+                    &value,
+                    &["/response/usage/input_tokens", "/usage/input_tokens"],
+                ),
+                usage_number(
+                    &value,
+                    &["/response/usage/output_tokens", "/usage/output_tokens"],
+                ),
+            ),
+            ApiProtocol::AnthropicMessages => match event_name {
+                // Anthropic 把 input 放在 message_start，output 放在 message_delta，
+                // 缓存读 tokens 嵌套在 message.usage.cache_read_input_tokens。
+                Some("message_start") | None if value.get("message").is_some() => {
+                    (usage_number(&value, &["/message/usage/input_tokens"]), None)
+                }
+                Some("message_delta") => (
+                    None,
+                    usage_number(
+                        &value,
+                        &["/usage/output_tokens", "/delta/usage/output_tokens"],
+                    ),
+                ),
+                _ => (None, None),
+            },
+        };
+        // 缓存读 tokens：OpenAI 放在 prompt_tokens_details.cached_tokens；
+        // Anthropic 放在 usage.cache_read_input_tokens，部分 Beta 还在
+        // input_tokens_details.cached_tokens。SSE 上各协议触发时机不同，这里
+        // 兼容三个路径，重复值会被后到达的相同值覆盖，不会重复累加。
+        let cache = usage_number(
+            &value,
+            &[
+                "/usage/prompt_tokens_details/cached_tokens",
+                "/usage/input_tokens_details/cached_tokens",
+                "/usage/cache_read_input_tokens",
+                "/message/usage/cache_read_input_tokens",
+            ],
+        );
+        if let Some(input) = input {
+            self.input_tokens = Some(input);
+        }
+        if let Some(output) = output {
+            self.output_tokens = Some(output);
+        }
+        if let Some(cache) = cache {
+            self.cache_read_tokens = Some(cache);
+        }
+    }
+
+    /// Token counts observed so far; `None` when the upstream never sent usage.
+    pub fn usage(&self) -> (Option<u64>, Option<u64>, Option<u64>) {
+        (
+            self.input_tokens,
+            self.output_tokens,
+            self.cache_read_tokens,
+        )
+    }
+}
+
+fn usage_number(value: &Value, pointers: &[&str]) -> Option<u64> {
+    pointers
+        .iter()
+        .find_map(|pointer| value.pointer(pointer).and_then(Value::as_u64))
+}
+
 /// Stateful SSE encoder used for one upstream response stream.
 ///
 /// OpenAI Responses text and tool deltas are only meaningful after a matching
@@ -82,6 +202,10 @@ pub fn encode_stream_event(
 pub struct StreamEncoder {
     protocol: ApiProtocol,
     responses: ResponsesStreamState,
+    /// Accumulated token usage observed across every `CanonicalStreamEvent::Usage`
+    /// decoded during this stream. Used by the proxy to surface token counts even
+    /// when the upstream only emits usage in a terminal chunk.
+    usage: CanonicalUsage,
 }
 
 impl StreamEncoder {
@@ -89,15 +213,31 @@ impl StreamEncoder {
         Self {
             protocol,
             responses: ResponsesStreamState::default(),
+            usage: CanonicalUsage::default(),
         }
     }
 
     pub fn encode(&mut self, event: &CanonicalStreamEvent) -> AppResult<Vec<String>> {
+        if let CanonicalStreamEvent::Usage { usage } = event {
+            // Keep the most informative value: once a provider sends a non-null
+            // input/output token count, never overwrite it with `None`.
+            if usage.input_tokens.is_some() || usage.output_tokens.is_some() {
+                self.usage.input_tokens = usage.input_tokens.or(self.usage.input_tokens);
+                self.usage.output_tokens = usage.output_tokens.or(self.usage.output_tokens);
+                self.usage.cache_read_tokens =
+                    usage.cache_read_tokens.or(self.usage.cache_read_tokens);
+            }
+        }
         match self.protocol {
             ApiProtocol::OpenaiChatCompletions => Ok(vec![encode_chat_event(event)?]),
             ApiProtocol::OpenaiResponses => self.responses.encode(event),
             ApiProtocol::AnthropicMessages => Ok(vec![encode_anthropic_event(event)?]),
         }
+    }
+
+    /// Snapshot of the token usage accumulated so far for this stream.
+    pub fn usage(&self) -> &CanonicalUsage {
+        &self.usage
     }
 }
 
@@ -737,6 +877,65 @@ fn string_at(value: &Value, pointer: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn usage_probe_reads_openai_chat_terminal_usage() {
+        let mut probe = StreamUsageProbe::new(ApiProtocol::OpenaiChatCompletions);
+        probe.observe_frame(r#"data: {"choices":[{"delta":{"content":"hi"}}]}"#);
+        assert_eq!(probe.usage(), (None, None, None));
+        probe.observe_frame(
+            r#"data: {"choices":[],"usage":{"prompt_tokens":120,"completion_tokens":34}}"#,
+        );
+        assert_eq!(probe.usage(), (Some(120), Some(34), None));
+        // 上游不发 usage 时保持"未知"，不伪造 0。
+        let mut silent = StreamUsageProbe::new(ApiProtocol::OpenaiChatCompletions);
+        silent.observe_frame(r#"data: [DONE]"#);
+        assert_eq!(silent.usage(), (None, None, None));
+    }
+
+    #[test]
+    fn usage_probe_reads_anthropic_start_and_delta_usage() {
+        let mut probe = StreamUsageProbe::new(ApiProtocol::AnthropicMessages);
+        probe.observe_frame(
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":900,\"output_tokens\":1}}}",
+        );
+        assert_eq!(probe.usage(), (Some(900), None, None));
+        probe.observe_frame("event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":77}}");
+        assert_eq!(probe.usage(), (Some(900), Some(77), None));
+    }
+
+    #[test]
+    fn usage_probe_reads_responses_completed_usage() {
+        let mut probe = StreamUsageProbe::new(ApiProtocol::OpenaiResponses);
+        probe.observe_frame(
+            "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":55,\"output_tokens\":12}}}",
+        );
+        assert_eq!(probe.usage(), (Some(55), Some(12), None));
+    }
+
+    #[test]
+    fn usage_probe_ignores_unparsable_frames() {
+        let mut probe = StreamUsageProbe::new(ApiProtocol::OpenaiChatCompletions);
+        probe.observe_frame("data: {not-json}");
+        probe.observe_frame(": keep-alive comment");
+        assert_eq!(probe.usage(), (None, None, None));
+    }
+
+    #[test]
+    fn usage_probe_reads_cached_tokens_openai() {
+        let mut probe = StreamUsageProbe::new(ApiProtocol::OpenaiChatCompletions);
+        probe.observe_frame(r#"data: {"choices":[],"usage":{"prompt_tokens":200,"completion_tokens":50,"prompt_tokens_details":{"cached_tokens":150}}}"#);
+        assert_eq!(probe.usage(), (Some(200), Some(50), Some(150)));
+    }
+
+    #[test]
+    fn usage_probe_reads_cached_tokens_anthropic() {
+        let mut probe = StreamUsageProbe::new(ApiProtocol::AnthropicMessages);
+        probe.observe_frame(
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":100,\"output_tokens\":0,\"cache_read_input_tokens\":80}}}",
+        );
+        assert_eq!(probe.usage(), (Some(100), None, Some(80)));
+    }
 
     #[test]
     fn text_delta_converts_across_all_nine_stream_directions() {

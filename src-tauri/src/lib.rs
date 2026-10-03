@@ -9,14 +9,15 @@ use std::sync::Arc;
 
 use agents::AgentService;
 use commands::{
-    apply_agent_binding, bootstrap, delete_provider, get_provider_api_key_mask, refresh_snapshot,
-    restore_agent_native, reveal_provider_api_key, save_provider, set_agent_install_path,
-    start_proxy, stop_proxy, test_provider, update_proxy_port, update_settings,
+    apply_agent_binding, bootstrap, check_update, delete_provider, get_provider_api_key_mask,
+    refresh_snapshot, restore_agent_native, reveal_provider_api_key, save_provider,
+    set_agent_install_path, set_agent_proxy_pref, start_proxy, stop_proxy, test_provider,
+    update_proxy_port, update_settings,
 };
 use domain::{AppResult, CommandError};
-use infrastructure::{Database, NativeSecretStore, SecretStore};
+use infrastructure::{logger, Database, NativeSecretStore, SecretStore};
 use proxy::ProxySupervisor;
-use services::ProviderService;
+use services::{ProviderService, UsageLog};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -28,6 +29,8 @@ pub struct AppState {
     providers: Arc<ProviderService>,
     agents: Arc<AgentService>,
     proxy: Arc<ProxySupervisor>,
+    /// 代理请求之外的操作记录（切换等），与代理请求合并后构成完整使用日志。
+    usage_log: Arc<UsageLog>,
 }
 
 impl AppState {
@@ -37,6 +40,14 @@ impl AppState {
             CommandError::internal("无法确定应用数据目录")
         })?;
         std::fs::create_dir_all(&app_data)?;
+        // 文件日志：切换失败 / 本地启动失败的详细信息写入 <app_data>/logs/at-switch.log
+        match logger::init_logging(&app_data) {
+            Ok(()) => log::info!(
+                "AT-Switch starting; log file at {}/logs/at-switch.log",
+                app_data.display()
+            ),
+            Err(error) => log::warn!("file logger init failed, stderr only: {error}"),
+        }
         let database = Arc::new(Database::open(&app_data.join("at-switch.db"))?);
         // On non-macOS targets `NativeSecretStore` is a unit struct, so prefer
         // direct construction over `Default::default()` to satisfy clippy.
@@ -61,6 +72,7 @@ impl AppState {
             providers,
             agents,
             proxy,
+            usage_log: Arc::new(UsageLog::default()),
         })
     }
 }
@@ -83,6 +95,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             bootstrap,
+            check_update,
             refresh_snapshot,
             set_agent_install_path,
             save_provider,
@@ -95,7 +108,8 @@ pub fn run() {
             start_proxy,
             stop_proxy,
             update_proxy_port,
-            update_settings
+            update_settings,
+            set_agent_proxy_pref
         ])
         .run(tauri::generate_context!())
         .expect("AT-Switch failed to start");

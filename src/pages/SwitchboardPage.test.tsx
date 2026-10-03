@@ -301,11 +301,14 @@ describe("SwitchboardPage", () => {
     const newRow = screen.getByText("新增模型").closest("article");
     expect(oldRow).not.toBeNull();
     expect(newRow).not.toBeNull();
+    // 历史已验证模型不受新增模型影响，仍然可切换。
     expect(within(oldRow!).getByRole("button", { name: "切换" })).toBeEnabled();
-    expect(within(newRow!).queryByText("未验证")).not.toBeInTheDocument();
+    expect(within(oldRow!).queryByText("未验证")).not.toBeInTheDocument();
+    // 新增模型未验证：给出标记并阻止切换，直到它自己通过连接测试。
+    expect(within(newRow!).getByText("未验证")).toBeInTheDocument();
     expect(
       within(newRow!).getByRole("button", { name: "切换" }),
-    ).toBeEnabled();
+    ).toBeDisabled();
   });
 
   it("does not show verification controls for non-text models", async () => {
@@ -471,5 +474,327 @@ describe("SwitchboardPage", () => {
     expect(screen.queryByText("尚未配置模型")).not.toBeInTheDocument();
     // 显示引导文案
     expect(screen.getByText("还没有可切换的模型")).toBeInTheDocument();
+  });
+
+  it("groups models by provider and collapses them independently", async () => {
+    const user = userEvent.setup();
+    const agent: AgentSummary = {
+      id: "workbuddy",
+      displayName: "WorkBuddy",
+      installStatus: "installed",
+      runtimeStatus: "not_running",
+      configHealth: "healthy",
+      adapterVerified: true,
+      needsRestart: false,
+      automaticRestartSupported: false,
+    };
+    const makeProvider = (name: string, modelIds: string[]) => ({
+      id: `provider-${name}`,
+      name,
+      kind: "custom" as const,
+      protocol: "openai_chat_completions" as const,
+      baseUrl: `https://${name}.example.test/v1`,
+      isRecommended: false,
+      isEnabled: true,
+      hasApiKey: true,
+      verificationStatus: "verified" as const,
+      models: modelIds.map((modelId) => ({
+        id: `provider-${name}:${modelId}`,
+        providerId: `provider-${name}`,
+        modelId,
+        displayName: `${name} ${modelId}`,
+        outputModality: "text" as const,
+        supportsStreaming: true,
+        supportsTools: true,
+        source: "custom" as const,
+        verificationStatus: "verified" as const,
+      })),
+    });
+
+    render(
+      <SwitchboardPage
+        agent={agent}
+        providers={[
+          makeProvider("蒙云智算", ["glm-5.2", "glm-5.1"]),
+          makeProvider("DeepSeek", ["deepseek-v4"]),
+        ]}
+        onCreateProvider={vi.fn()}
+        onEditProvider={vi.fn()}
+        onTestProvider={vi.fn()}
+        onSwitchModel={vi.fn()}
+        onRestoreNative={vi.fn()}
+      />,
+    );
+
+    // 每个供应商一个分组头，默认全部展开。
+    const toggle = screen.getByRole("button", { name: "蒙云智算 的模型" });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("2 个模型")).toBeInTheDocument();
+    expect(screen.getByText("蒙云智算 glm-5.2")).toBeInTheDocument();
+
+    await user.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("蒙云智算 glm-5.2")).not.toBeInTheDocument();
+    expect(screen.queryByText("蒙云智算 glm-5.1")).not.toBeInTheDocument();
+    // 其他分组不受影响。
+    expect(screen.getByText("DeepSeek deepseek-v4")).toBeInTheDocument();
+
+    await user.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("蒙云智算 glm-5.2")).toBeInTheDocument();
+  });
+
+  it("blocks switching to a text model until its connection test passes", async () => {
+    const user = userEvent.setup();
+    const agent: AgentSummary = {
+      id: "workbuddy",
+      displayName: "WorkBuddy",
+      installStatus: "installed",
+      runtimeStatus: "not_running",
+      configHealth: "healthy",
+      adapterVerified: true,
+      needsRestart: false,
+      automaticRestartSupported: false,
+    };
+    const unverified: ProviderSummary = {
+      id: "provider-pending",
+      name: "蒙云智算",
+      kind: "mongyun",
+      protocol: "openai_chat_completions",
+      baseUrl: "https://mongyun.example.test/v1",
+      isRecommended: false,
+      isEnabled: true,
+      hasApiKey: true,
+      verificationStatus: "draft_unverified",
+      defaultModelId: "glm-5.2",
+      models: [
+        {
+          id: "provider-pending:glm-5.2",
+          providerId: "provider-pending",
+          modelId: "glm-5.2",
+          displayName: "GLM-5.2",
+          outputModality: "text",
+          supportsStreaming: true,
+          supportsTools: true,
+          source: "custom",
+          verificationStatus: "draft_unverified",
+        },
+      ],
+    };
+    const onTestProvider = vi.fn();
+    render(
+      <SwitchboardPage
+        agent={agent}
+        providers={[unverified]}
+        onCreateProvider={vi.fn()}
+        onEditProvider={vi.fn()}
+        onTestProvider={onTestProvider}
+        onSwitchModel={vi.fn()}
+        onRestoreNative={vi.fn()}
+      />,
+    );
+
+    // 未验证文本模型有明确标记，且不能切换。
+    expect(screen.getByText("未验证")).toBeInTheDocument();
+    const switchButton = screen.getByRole("button", { name: "切换" });
+    expect(switchButton).toBeDisabled();
+    expect(switchButton).toHaveAttribute(
+      "title",
+      "该模型尚未通过连接验证，请先点击右侧连接测试",
+    );
+
+    // 验证图标改为「点击验证」的可访问名，提示用户点它。
+    await user.click(screen.getByRole("button", { name: "点击验证 GLM-5.2" }));
+    expect(onTestProvider).toHaveBeenCalledWith("provider-pending", "glm-5.2");
+
+    // 徽标本身就是同一个入口，点它也能开始验证。
+    await user.click(screen.getByRole("button", { name: /未验证/ }));
+    expect(onTestProvider).toHaveBeenCalledTimes(2);
+  });
+
+  it("allows switching once the text model verification passes", () => {
+    const agent: AgentSummary = {
+      id: "workbuddy",
+      displayName: "WorkBuddy",
+      installStatus: "installed",
+      runtimeStatus: "not_running",
+      configHealth: "healthy",
+      adapterVerified: true,
+      needsRestart: false,
+      automaticRestartSupported: false,
+    };
+    const verified: ProviderSummary = {
+      id: "provider-verified",
+      name: "蒙云智算",
+      kind: "mongyun",
+      protocol: "openai_chat_completions",
+      baseUrl: "https://mongyun.example.test/v1",
+      isRecommended: false,
+      isEnabled: true,
+      hasApiKey: true,
+      verificationStatus: "verified",
+      defaultModelId: "glm-5.2",
+      models: [
+        {
+          id: "provider-verified:glm-5.2",
+          providerId: "provider-verified",
+          modelId: "glm-5.2",
+          displayName: "GLM-5.2",
+          outputModality: "text",
+          supportsStreaming: true,
+          supportsTools: true,
+          source: "custom",
+          verificationStatus: "verified",
+        },
+        {
+          id: "provider-verified:image",
+          providerId: "provider-verified",
+          modelId: "image-1",
+          displayName: "图片模型",
+          outputModality: "image",
+          supportsStreaming: false,
+          supportsTools: false,
+          source: "custom",
+          verificationStatus: "draft_unverified",
+        },
+      ],
+    };
+    render(
+      <SwitchboardPage
+        agent={agent}
+        providers={[verified]}
+        onCreateProvider={vi.fn()}
+        onEditProvider={vi.fn()}
+        onTestProvider={vi.fn()}
+        onSwitchModel={vi.fn()}
+        onRestoreNative={vi.fn()}
+      />,
+    );
+
+    // 已验证文本模型无需标记且可切换；非文本模型免验证，同样可切换。
+    expect(screen.queryByText("未验证")).not.toBeInTheDocument();
+    const buttons = screen.getAllByRole("button", { name: "切换" });
+    expect(buttons).toHaveLength(2);
+    for (const button of buttons) expect(button).toBeEnabled();
+  });
+
+  it("hides the proxy badge when proxyPrefEnabled is set but proxy is not running", () => {
+    // 模拟代理偏好已开启但代理服务已停止：根因场景
+    const agent: AgentSummary = {
+      id: "workbuddy",
+      displayName: "WorkBuddy",
+      installStatus: "installed",
+      runtimeStatus: "not_running",
+      configHealth: "healthy",
+      adapterVerified: true,
+      needsRestart: false,
+      automaticRestartSupported: false,
+      providerId: "provider-minimax",
+      modelId: "minimax-model",
+      mode: "direct",
+      proxyPrefEnabled: true,
+    };
+    const provider: ProviderSummary = {
+      id: "provider-minimax",
+      name: "MiniMax",
+      kind: "custom",
+      protocol: "openai_chat_completions",
+      baseUrl: "https://api.minimax.chat/v1",
+      isRecommended: false,
+      isEnabled: true,
+      hasApiKey: true,
+      verificationStatus: "verified",
+      models: [
+        {
+          id: "provider-minimax:minimax-model",
+          providerId: "provider-minimax",
+          modelId: "minimax-model",
+          displayName: "MiniMax 模型",
+          outputModality: "text",
+          supportsStreaming: true,
+          supportsTools: true,
+          source: "builtin",
+          verificationStatus: "verified",
+        },
+      ],
+    };
+
+    render(
+      <SwitchboardPage
+        agent={agent}
+        providers={[provider]}
+        onCreateProvider={vi.fn()}
+        onEditProvider={vi.fn()}
+        onTestProvider={vi.fn()}
+        onSwitchModel={vi.fn()}
+        onRestoreNative={vi.fn()}
+        proxyRunning={false}
+      />,
+    );
+
+    // proxyRunning=false 时即使 proxyPrefEnabled=true，"代理接管"标签也不显示
+    expect(screen.queryByText("代理接管")).not.toBeInTheDocument();
+    expect(screen.queryByText("Proxied")).not.toBeInTheDocument();
+    // Provider 组徽章也不显示
+    expect(document.querySelector(".model-group__badge--proxy")).toBeNull();
+  });
+
+  it("shows the proxy badge when proxy is running and proxyPrefEnabled is set", () => {
+    const agent: AgentSummary = {
+      id: "workbuddy",
+      displayName: "WorkBuddy",
+      installStatus: "installed",
+      runtimeStatus: "running",
+      configHealth: "healthy",
+      adapterVerified: true,
+      needsRestart: false,
+      automaticRestartSupported: false,
+      providerId: "provider-minimax",
+      modelId: "minimax-model",
+      mode: "proxy",
+      proxyPrefEnabled: true,
+    };
+    const provider: ProviderSummary = {
+      id: "provider-minimax",
+      name: "MiniMax",
+      kind: "custom",
+      protocol: "openai_chat_completions",
+      baseUrl: "https://api.minimax.chat/v1",
+      isRecommended: false,
+      isEnabled: true,
+      hasApiKey: true,
+      verificationStatus: "verified",
+      models: [
+        {
+          id: "provider-minimax:minimax-model",
+          providerId: "provider-minimax",
+          modelId: "minimax-model",
+          displayName: "MiniMax 模型",
+          outputModality: "text",
+          supportsStreaming: true,
+          supportsTools: true,
+          source: "builtin",
+          verificationStatus: "verified",
+        },
+      ],
+    };
+
+    render(
+      <SwitchboardPage
+        agent={agent}
+        providers={[provider]}
+        onCreateProvider={vi.fn()}
+        onEditProvider={vi.fn()}
+        onTestProvider={vi.fn()}
+        onSwitchModel={vi.fn()}
+        onRestoreNative={vi.fn()}
+        proxyRunning={true}
+      />,
+    );
+
+    // proxyRunning=true 且 proxyPrefEnabled=true 时显示"代理接管"标签
+    expect(screen.getByText("代理接管")).toBeInTheDocument();
   });
 });

@@ -93,6 +93,11 @@ pub(crate) struct DesktopAppPause {
     display_name: &'static str,
     was_running: bool,
     resumed: bool,
+    /// Environment variables to publish into the user launchd domain before
+    /// the Agent is relaunched. macOS GUI Apps inherit launchd's environment
+    /// when `open` re-executes them, which is the only delivery channel dsh
+    /// accepts for keys it reserves as "launching environment variables".
+    launch_env: Vec<(String, String)>,
 }
 
 impl DesktopAppPause {
@@ -102,11 +107,25 @@ impl DesktopAppPause {
             return Ok(RestartOutcome::ManualRequired);
         };
         if self.was_running {
+            publish_launchd_env(&self.launch_env)?;
             launch_desktop_app(installation, self.display_name)?;
             Ok(RestartOutcome::Relaunched)
         } else {
             Ok(RestartOutcome::WasNotRunning)
         }
+    }
+
+    /// Registers environment variables that must be visible to the Agent's
+    /// process when it is relaunched. dsh reserves `DSH_AT_SWITCH_API_KEY` as a
+    /// launching-environment variable and aborts startup if it finds the same
+    /// name in its profile `.env`, so the managed credential can only be
+    /// delivered here.
+    pub(crate) fn with_launch_env(mut self, variables: &[(&str, &str)]) -> Self {
+        self.launch_env = variables
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect();
+        self
     }
 }
 
@@ -116,6 +135,13 @@ impl Drop for DesktopAppPause {
             return;
         }
         if let Some(installation) = &self.installation {
+            if let Err(error) = publish_launchd_env(&self.launch_env) {
+                log::warn!(
+                    "unable to publish launchd environment for {}: {}",
+                    self.display_name,
+                    error.message
+                );
+            }
             if let Err(error) = launch_desktop_app(installation, self.display_name) {
                 log::warn!(
                     "unable to relaunch {} after interrupted configuration: {}",
@@ -145,6 +171,7 @@ pub(crate) fn pause_for_config_update(detection: &AgentDetection) -> AppResult<D
             display_name: detection.display_name,
             was_running: false,
             resumed: false,
+            launch_env: Vec::new(),
         });
     }
 
@@ -154,6 +181,7 @@ pub(crate) fn pause_for_config_update(detection: &AgentDetection) -> AppResult<D
         display_name: detection.display_name,
         was_running,
         resumed: false,
+        launch_env: Vec::new(),
     })
 }
 
@@ -220,13 +248,21 @@ fn macos_bundle_executable(app_path: &Path, display_name: &str) -> AppResult<Pat
 
 #[cfg(target_os = "macos")]
 fn macos_main_process_ids(process_list: &str, executable: &str) -> Vec<u32> {
+    // Some desktop Agents (ZCode, for one) launch with `argv[0]` set to the
+    // bare executable name rather than the full bundle path. Matching only the
+    // absolute path makes those Agents look stopped, so AT-Switch writes the
+    // config while they are still running and they overwrite it on exit.
+    let file_name = Path::new(executable)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(executable);
     process_list
         .lines()
         .filter_map(|line| {
             let mut parts = line.trim().splitn(2, char::is_whitespace);
             let pid = parts.next()?.parse::<u32>().ok()?;
             let command = parts.next()?.trim_start();
-            (command == executable).then_some(pid)
+            (command == executable || command == file_name).then_some(pid)
         })
         .collect()
 }
@@ -530,7 +566,10 @@ fn launch_desktop_app(installation: &Installation, display_name: &str) -> AppRes
         .spawn()
         .map(|_| ())
         .map_err(|error| {
-            log::warn!("{display_name} could not be relaunched: {error}");
+            log::error!(
+                "{display_name} relaunch failed (path={}): {error}",
+                installation.path.display()
+            );
             CommandError::new(
                 "agent_relaunch_failed",
                 format!("{display_name} 配置已经保存，但未能自动重新打开"),
@@ -586,6 +625,10 @@ fn launch_desktop_app(installation: &Installation, display_name: &str) -> AppRes
             }
         }
     }
+    log::error!(
+        "{display_name} relaunch failed after retries (path={}): process not running",
+        installation.path.display()
+    );
     Err(CommandError::new(
         "agent_relaunch_failed",
         format!("{display_name} 配置已经保存，但未能自动重新打开"),
@@ -683,6 +726,39 @@ fn launch_desktop_app(_installation: &Installation, _display_name: &str) -> AppR
 fn process_error(code: &str, display_name: &str, detail: &str) -> CommandError {
     CommandError::new(code, format!("{display_name}：{detail}"))
         .with_recovery(format!("请手动完全退出 {display_name} 后重试。"))
+}
+
+/// Publishes environment variables into the user's launchd domain. A macOS GUI
+/// App launched via `open` inherits launchd's environment at exec time, so
+/// `launchctl setenv` is the only way to hand a variable to a bundle that
+/// refuses to read it from a file inside its own data directory.
+#[cfg(target_os = "macos")]
+fn publish_launchd_env(variables: &[(String, String)]) -> AppResult<()> {
+    if variables.is_empty() {
+        return Ok(());
+    }
+    let mut command = Command::new("/bin/launchctl");
+    command.arg("setenv");
+    for (name, value) in variables {
+        command.arg(name).arg(value);
+    }
+    let output = command
+        .output()
+        .map_err(|error| process_error("agent_env_publish_failed", "系统", &error.to_string()))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        return Err(process_error(
+            "agent_env_publish_failed",
+            "系统",
+            &format!("无法设置启动环境变量：{detail}"),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn publish_launchd_env(_variables: &[(String, String)]) -> AppResult<()> {
+    Ok(())
 }
 
 #[cfg(test)]
@@ -830,5 +906,35 @@ mod tests {
             windows_launch_working_directory(&executable, "QClaw"),
             Some(install_dir)
         );
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_tests {
+    use super::macos_main_process_ids;
+
+    #[test]
+    fn matches_agents_that_report_only_the_executable_name() {
+        let executable = "/Applications/ZCode.app/Contents/MacOS/ZCode";
+        let process_list = concat!(
+            "24858 ZCode\n",
+            "24865 /Applications/ZCode.app/Contents/Frameworks/ZCode Helper.app/Contents/MacOS/ZCode Helper --type=gpu-process\n",
+            "24900 /Applications/Other.app/Contents/MacOS/ZCode\n"
+        );
+
+        // argv[0] may be the bare name, so the main process is still detected
+        // while helper processes are not.
+        assert_eq!(
+            macos_main_process_ids(process_list, executable),
+            vec![24858]
+        );
+    }
+
+    #[test]
+    fn still_matches_the_full_bundle_path() {
+        let executable = "/Applications/Codex.app/Contents/MacOS/Codex";
+        let process_list = "1200 /Applications/Codex.app/Contents/MacOS/Codex\n1201 Codex Helper\n";
+
+        assert_eq!(macos_main_process_ids(process_list, executable), vec![1200]);
     }
 }

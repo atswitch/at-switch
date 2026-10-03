@@ -2,6 +2,7 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
     process::Command,
+    sync::Arc,
 };
 
 #[cfg(target_os = "windows")]
@@ -25,8 +26,89 @@ pub enum InstallationKind {
     Command,
 }
 
-/// Resolves platform paths at runtime instead of baking the developer's home
-/// directory into the application. Tests can inject an isolated context.
+/// Discovery inputs an adapter needs for system-wide lookups so the registry can
+/// batch them into a single Spotlight/registry/process-table scan instead of one
+/// per adapter.
+#[derive(Clone, Default)]
+#[allow(dead_code)]
+pub struct DiscoveryHints {
+    pub macos_bundle_identifiers: &'static [&'static str],
+    pub windows_relative_paths: &'static [&'static str],
+}
+
+/// Precomputed, system-wide discovery candidates collected once per scan. When
+/// `None` is set on a `DiscoveryContext`, `locate_desktop_app` falls back to its
+/// original per-call discovery behavior (used by tests and ad-hoc detection).
+#[derive(Debug, Clone, Default)]
+pub struct SystemCandidates {
+    #[cfg(target_os = "macos")]
+    pub spotlight: Vec<PathBuf>,
+    #[cfg(target_os = "macos")]
+    pub running: Vec<PathBuf>,
+    #[cfg(target_os = "windows")]
+    pub windows_app_paths: Vec<PathBuf>,
+    #[cfg(target_os = "windows")]
+    pub windows_running: Vec<PathBuf>,
+}
+
+/// Collects every system-wide discovery candidate exactly once for a whole scan.
+#[cfg(target_os = "macos")]
+pub fn collect_system_candidates(hints: &[DiscoveryHints]) -> SystemCandidates {
+    let bundle_ids: Vec<&str> = hints
+        .iter()
+        .flat_map(|hint| hint.macos_bundle_identifiers.iter())
+        .copied()
+        .collect();
+    SystemCandidates {
+        spotlight: collect_macos_spotlight(&bundle_ids),
+        running: macos_running_app_candidates(),
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn collect_system_candidates(hints: &[DiscoveryHints]) -> SystemCandidates {
+    let executable_names: Vec<&str> = hints
+        .iter()
+        .flat_map(|hint| hint.windows_relative_paths.iter())
+        .copied()
+        .filter_map(|relative| {
+            Path::new(relative)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| name.to_ascii_lowercase().ends_with(".exe"))
+        })
+        .collect();
+    SystemCandidates {
+        windows_app_paths: windows_app_path_candidates(&executable_names),
+        windows_running: windows_running_app_candidates(&executable_names),
+    }
+}
+
+/// Runs a single Spotlight query for every known bundle identifier, collapsing
+/// what used to be one `mdfind` invocation per adapter into a single scan.
+#[cfg(target_os = "macos")]
+fn collect_macos_spotlight(bundle_ids: &[&str]) -> Vec<PathBuf> {
+    if bundle_ids.is_empty() {
+        return Vec::new();
+    }
+    let query = bundle_ids
+        .iter()
+        .map(|id| format!("kMDItemCFBundleIdentifier == '{id}'"))
+        .collect::<Vec<_>>()
+        .join(" || ");
+    let Ok(output) = Command::new("/usr/bin/mdfind").arg(query).output() else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let path = PathBuf::from(line.trim());
+        if !line.trim().is_empty() && !candidates.contains(&path) {
+            candidates.push(path);
+        }
+    }
+    candidates
+}
+
 #[derive(Debug, Clone)]
 pub struct DiscoveryContext {
     pub home: PathBuf,
@@ -47,6 +129,9 @@ pub struct DiscoveryContext {
     /// User-selected installation file or directory for the adapter currently
     /// being detected. Native scans set this per adapter from the local database.
     pub custom_installation_path: Option<PathBuf>,
+    /// When set, `locate_desktop_app` reuses these precomputed system-wide
+    /// candidates instead of spawning its own Spotlight/registry/process scans.
+    pub system_candidates: Option<Arc<SystemCandidates>>,
     #[cfg(target_os = "windows")]
     pub local_app_data: Option<PathBuf>,
     #[cfg(target_os = "windows")]
@@ -99,6 +184,7 @@ impl DiscoveryContext {
             path_entries,
             system_application_search: true,
             custom_installation_path: None,
+            system_candidates: None,
             #[cfg(target_os = "windows")]
             local_app_data: env::var_os("LOCALAPPDATA").map(PathBuf::from),
             #[cfg(target_os = "windows")]
@@ -177,10 +263,17 @@ pub fn locate_desktop_app(
             // Spotlight covers apps installed in Downloads, custom folders and
             // mounted volumes. The process table provides a reliable fallback
             // for a running app when Spotlight indexing is disabled or stale.
-            for path in macos_spotlight_app_candidates(_mac_bundle_identifiers)
-                .into_iter()
-                .chain(macos_running_app_candidates())
-            {
+            // When the registry precomputed candidates for the whole scan we
+            // reuse them; otherwise fall back to the original per-call lookup.
+            let spotlight = match &context.system_candidates {
+                Some(candidates) => candidates.spotlight.clone(),
+                None => macos_spotlight_app_candidates(_mac_bundle_identifiers),
+            };
+            let running = match &context.system_candidates {
+                Some(candidates) => candidates.running.clone(),
+                None => macos_running_app_candidates(),
+            };
+            for path in spotlight.into_iter().chain(running) {
                 if let Some(installation) =
                     macos_installation_if_matching(&path, _mac_app_names, _mac_bundle_identifiers)
                 {
@@ -248,10 +341,17 @@ pub fn locate_desktop_app(
                 .filter_map(|relative| Path::new(relative).file_name())
                 .filter_map(|name| name.to_str())
                 .collect::<Vec<_>>();
-            for path in windows_app_path_candidates(&executable_names)
-                .into_iter()
-                .chain(windows_running_app_candidates(&executable_names))
-            {
+            let (app_paths, running) = match &context.system_candidates {
+                Some(candidates) => (
+                    candidates.windows_app_paths.clone(),
+                    candidates.windows_running.clone(),
+                ),
+                None => (
+                    windows_app_path_candidates(&executable_names),
+                    windows_running_app_candidates(&executable_names),
+                ),
+            };
+            for path in app_paths.into_iter().chain(running) {
                 if path.is_file()
                     && path
                         .file_name()
@@ -732,6 +832,7 @@ mod tests {
             path_entries: vec![temp.path().to_path_buf()],
             system_application_search: false,
             custom_installation_path: None,
+            system_candidates: None,
             #[cfg(target_os = "windows")]
             local_app_data: None,
             #[cfg(target_os = "windows")]
@@ -770,6 +871,7 @@ mod tests {
             path_entries: Vec::new(),
             system_application_search: false,
             custom_installation_path: None,
+            system_candidates: None,
         };
 
         let installation = locate_desktop_app(
@@ -812,6 +914,7 @@ mod tests {
             path_entries: Vec::new(),
             system_application_search: false,
             custom_installation_path: Some(selected_directory),
+            system_candidates: None,
         };
 
         let installation = locate_desktop_app(
@@ -839,6 +942,7 @@ mod tests {
             path_entries: Vec::new(),
             system_application_search: false,
             custom_installation_path: Some(selected_directory),
+            system_candidates: None,
         };
 
         assert!(locate_desktop_app(
@@ -865,6 +969,7 @@ mod tests {
             path_entries: Vec::new(),
             system_application_search: false,
             custom_installation_path: None,
+            system_candidates: None,
             local_app_data: Some(local_app_data),
             program_files: Vec::new(),
         };
@@ -896,6 +1001,7 @@ mod tests {
             path_entries: Vec::new(),
             system_application_search: false,
             custom_installation_path: None,
+            system_candidates: None,
             local_app_data: None,
             program_files: vec![program_files],
         };
@@ -927,6 +1033,7 @@ mod tests {
             path_entries: Vec::new(),
             system_application_search: false,
             custom_installation_path: Some(custom_directory),
+            system_candidates: None,
             local_app_data: Some(standard_root),
             program_files: Vec::new(),
         };
@@ -953,6 +1060,7 @@ mod tests {
             path_entries: Vec::new(),
             system_application_search: false,
             custom_installation_path: Some(custom_directory),
+            system_candidates: None,
             local_app_data: None,
             program_files: Vec::new(),
         };

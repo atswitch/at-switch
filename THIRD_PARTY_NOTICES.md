@@ -24,6 +24,8 @@ confirmed their redistribution status on 2026-09-04.
 | Mongyun | `src/assets/providers/mongyun.png` | Maintainer-provided product asset | Maintainer-confirmed permission |
 | Qwen | `src/assets/providers/qwen.svg` | Maintainer-provided product asset | Maintainer-confirmed permission |
 | Zhipu AI | `src/assets/providers/zhipu.svg` | Maintainer-provided product asset | Maintainer-confirmed permission |
+| AionClaw | `src/assets/agents/aionclaw.png` | Official macOS application icon | Maintainer-confirmed permission |
+| ZCode | `src/assets/agents/zcode.png` | Official macOS application icon | Maintainer-confirmed permission |
 
 These names, logos, and trademarks remain the property of their respective owners.
 They are not relicensed under the repository's MIT License. Redistribution and use

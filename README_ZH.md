@@ -2,7 +2,7 @@
 
 # AT-Switch
 
-### WorkBuddy、CodeBuddy、QClaw、AutoClaw、Codex 和百度搭子的全方位管理与模型切换工具
+### WorkBuddy、CodeBuddy、QClaw、AutoClaw、Codex、百度搭子、Hermes、OpenCode、Kimi Work、AionClaw 与 ZCode 的全方位管理与模型切换工具
 
 [![Version](https://img.shields.io/github/v/release/atswitch/at-switch?color=blue&label=version)](https://github.com/atswitch/at-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/atswitch/at-switch/releases)
@@ -80,6 +80,18 @@
 | **AutoClaw** | macOS / Windows | ✅ 支持 | OpenAI Chat Completions | 更新 Electron 用户数据目录中的权威模型设定 |
 | **Codex** | macOS / Windows | ✅ 支持 | OpenAI Responses | 精确更新 `$CODEX_HOME/config.toml` 或 `~/.codex/config.toml`，保留原有注释 |
 | **百度搭子（DuMate）** | macOS / Windows | ✅ 支持 | OpenAI Chat Completions | 更新当前账号的 XDG 持久覆盖配置，兼容所有会话目录和内置模型别名 |
+| **Hermes Agent** | macOS / Windows | ✅ 支持 | OpenAI Chat Completions | 更新 `$HERMES_HOME/config.yaml` 或 `~/.hermes/config.yaml`，保留其余 YAML 字段 |
+| **OpenCode** | macOS / Windows | ✅ 支持 | OpenAI Chat Completions | 更新用户配置中的受管 Provider 与默认模型，保留 JSONC 注释、尾逗号和第三方 Provider |
+| **ZCode** | macOS / Windows | ✅ 支持 | OpenAI Chat Completions / OpenAI Responses / Anthropic Messages | 更新 `~/.zcode/v2/provider_config.json` 中的受管 Provider、模型规则与默认模型，保留其他 Provider 与未知字段 |
+| **Trae CN** | macOS / Windows | ✅ 支持 | OpenAI Chat Completions | 在用户已配置于 Trae 内的自定义模型之间切换（改写 `state.vscdb` 的选中记录）；凭据由 Trae 加密自管，AT-Switch 不读取也不写入 |
+| **TRAE SOLO CN** | macOS / Windows | ✅ 支持 | OpenAI Chat Completions | 0.1.69 起选中模型已回到明文 `state.vscdb`，可像 Trae CN 一样在应用内已配置的自定义模型间切换；0.1.66 曾把选中态放在加密库，故需 0.1.69+ |
+| **千问办公** | macOS / Windows | 🟡 仅检测 | — | 自定义模型是"客户端开关 + 服务端授权"双重门控：本地只能解除前者，模型能被选中但实际调用仍被服务端以 403 拒绝（`You do not have access to this model service`），因此不写入其配置 |
+| **豆包工作** | macOS / Windows | 🟡 仅检测 | — | 未发现用户级 Provider / BYOK 配置入口，暂仅展示安装状态 |
+| **扣子** | macOS / Windows | 🟡 仅检测 | — | 本地数据为运行态与登录态，不是模型供应商配置，暂仅展示安装状态 |
+| **Kimi Work** | macOS / Windows | 🟡 仅检测 | — | Daimon 会在每次启动时用服务端下发的默认模型覆盖 `model.current`（实测连官方模型名 `k3-agent` 也会被重置为 `k2d8-preview`），运行态 TOML 的 `default_model` 因此永远回落到官方模型。写入的自有 Provider 虽会出现在运行态 TOML 中，但不会被选中，本地无可用写入通道，故不修改其配置 |
+| **AionClaw** | macOS / Windows | ✅ 支持 | OpenAI Chat Completions / OpenAI Responses / Anthropic Messages | 更新沙盒内 `openclaw/state/openclaw.json` 的受管 Provider 与默认模型，与 QClaw 复用同一套实现 |
+| **EasyClaw** | macOS / Windows | ✅ 支持 | OpenAI Chat Completions / OpenAI Responses / Anthropic Messages | 同样基于 OpenClaw 内核（应用内 `gateway.asar/openclaw.mjs`），更新 `~/.easyclaw/easyclaw.json` 的受管 Provider 与 `agents.defaults.model.primary`；该文件即权威配置（`EASYCLAW_CONFIG_DIR` 指向 `~/.easyclaw`），无需再写第二处 |
+| **ima** | macOS / Windows | 🟡 仅检测 | — | ima 确有自定义模型入口（`Default/Preferences` 的 `kExtraSettingInfo`，含用户添加的 `NMauto`），但**外部写入留不住**：在 ima 关闭时改写选中态，它启动 11 秒即重写并改回原值；该模型 UUID 在本地除 `Preferences` 外无任何副本，权威态在服务端，故不写入 |
 
 ---
 

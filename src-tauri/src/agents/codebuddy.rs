@@ -11,7 +11,7 @@ use crate::domain::{AgentBindingMode, ApiProtocol, AppResult, CommandError};
 use crate::services::{write_atomic, BaselineSnapshot};
 
 use super::{
-    locator::{locate_desktop_app, DiscoveryContext},
+    locator::{locate_desktop_app, DiscoveryContext, DiscoveryHints},
     AgentAdapter, AgentDetection, DesiredAgentBinding,
 };
 
@@ -58,6 +58,20 @@ impl AgentAdapter for CodeBuddyAdapter {
 
     fn display_name(&self) -> &'static str {
         "CodeBuddy"
+    }
+
+    fn discovery_hints(&self) -> DiscoveryHints {
+        DiscoveryHints {
+            macos_bundle_identifiers: &["com.tencent.codebuddycn"],
+            windows_relative_paths: &[
+                "Programs/CodeBuddy CN/CodeBuddy CN.exe",
+                "Programs/CodeBuddy CN/CodeBuddy.exe",
+                "CodeBuddy CN/CodeBuddy CN.exe",
+                "CodeBuddy CN/CodeBuddy.exe",
+                "Tencent/CodeBuddy CN/CodeBuddy CN.exe",
+                "Tencent/CodeBuddy CN/CodeBuddy.exe",
+            ],
+        }
     }
 
     fn detect(&self, context: &DiscoveryContext) -> AgentDetection {
@@ -1489,6 +1503,7 @@ mod tests {
             path_entries: Vec::new(),
             system_application_search: false,
             custom_installation_path: None,
+            system_candidates: None,
         };
         let detected = CodeBuddyAdapter.detect(&context);
 
@@ -1525,6 +1540,7 @@ mod tests {
             path_entries: Vec::new(),
             system_application_search: false,
             custom_installation_path: None,
+            system_candidates: None,
             local_app_data: Some(local_app_data),
             program_files: Vec::new(),
         };
@@ -1568,6 +1584,7 @@ mod tests {
             path_entries: Vec::new(),
             system_application_search: false,
             custom_installation_path: None,
+            system_candidates: None,
         };
 
         let detected = CodeBuddyAdapter.detect(&context);

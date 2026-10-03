@@ -1,11 +1,39 @@
 import { describe, expect, it } from "vitest";
 import {
+  directBindingRequirement,
+  isDetectionOnlyAgent,
+  isProxyRoutedModel,
+  isProxyRoutedProvider,
+  isSwitchableAgent,
   providerSupportedProtocols,
   supportsDirectBinding,
 } from "./agentCapabilities";
-import type { ProviderSummary } from "../types";
+import type { AgentSummary, ProviderSummary } from "../types";
 
 type ProtocolProfile = Pick<ProviderSummary, "kind" | "protocol">;
+
+function agent(id: string): AgentSummary {
+  return {
+    id,
+    displayName: id,
+    installStatus: "installed",
+    runtimeStatus: "not_running",
+    configHealth: "healthy",
+    adapterVerified: true,
+    needsRestart: false,
+    automaticRestartSupported: false,
+  };
+}
+
+function proxyAgent(id: string, providerId: string, modelId: string): AgentSummary {
+  return {
+    ...agent(id),
+    mode: "proxy",
+    providerId,
+    modelId,
+    proxyPrefEnabled: true,
+  };
+}
 
 describe("Agent protocol capabilities", () => {
   const mongyun: ProtocolProfile = {
@@ -54,6 +82,69 @@ describe("Agent protocol capabilities", () => {
     expect(supportsDirectBinding("dumate", mongyun)).toBe(true);
   });
 
+  it("keeps Hermes direct bindings on OpenAI Chat providers", () => {
+    expect(
+      supportsDirectBinding("hermes", {
+        kind: "custom",
+        protocol: "openai_chat_completions",
+      }),
+    ).toBe(true);
+    expect(
+      supportsDirectBinding("hermes", {
+        kind: "custom",
+        protocol: "openai_responses",
+      }),
+    ).toBe(false);
+    expect(supportsDirectBinding("hermes", mongyun)).toBe(true);
+    expect(directBindingRequirement("hermes")).toBe("OpenAI Chat");
+  });
+
+  it("treats ZCode as switchable after the personal config channel landed", () => {
+    expect(isSwitchableAgent(agent("zcode"))).toBe(true);
+    expect(isDetectionOnlyAgent("zcode")).toBe(false);
+  });
+
+  it("treats AionClaw as switchable through its embedded OpenClaw config", () => {
+    expect(isSwitchableAgent(agent("aionclaw"))).toBe(true);
+    expect(isDetectionOnlyAgent("aionclaw")).toBe(false);
+  });
+
+  it("treats EasyClaw as switchable through its OpenClaw-format config", () => {
+    expect(isSwitchableAgent(agent("easyclaw"))).toBe(true);
+    expect(isDetectionOnlyAgent("easyclaw")).toBe(false);
+  });
+
+  it("treats ima as read-only because it exposes no provider configuration", () => {
+    expect(isDetectionOnlyAgent("ima")).toBe(true);
+    expect(isSwitchableAgent(agent("ima"))).toBe(false);
+  });
+
+  it("treats Accio as read-only because its models are server-locked behind its own gateway", () => {
+    expect(isDetectionOnlyAgent("accio")).toBe(true);
+    expect(isSwitchableAgent(agent("accio"))).toBe(false);
+  });
+
+  // Daimon 每次启动都会用服务端下发的默认模型覆盖 `model.current`，连官方模型名也一
+  // 样被重置，所以本地写入无法生效——即便运行态 TOML 里确实出现了我们的 Provider。
+  it("treats Kimi Work as read-only because Daimon rebuilds the selected model on startup", () => {
+    expect(isDetectionOnlyAgent("kimiwork")).toBe(true);
+    expect(isSwitchableAgent(agent("kimiwork"))).toBe(false);
+  });
+
+  it("keeps the cloud-first clients read-only because their models are server-authorized", () => {
+    for (const id of ["qwenwork", "doubaowork", "coze"]) {
+      expect(isDetectionOnlyAgent(id)).toBe(true);
+      expect(isSwitchableAgent(agent(id))).toBe(false);
+    }
+  });
+
+  it("treats both Trae apps as switchable between models configured inside them", () => {
+    for (const id of ["traework", "traecode"]) {
+      expect(isSwitchableAgent(agent(id))).toBe(true);
+      expect(isDetectionOnlyAgent(id)).toBe(false);
+    }
+  });
+
   it("allows OpenClaw-based Agents to use configured protocols directly", () => {
     const anthropic: ProtocolProfile = {
       kind: "custom",
@@ -61,5 +152,39 @@ describe("Agent protocol capabilities", () => {
     };
     expect(supportsDirectBinding("qclaw", anthropic)).toBe(true);
     expect(supportsDirectBinding("autoclaw", anthropic)).toBe(true);
+  });
+});
+
+describe("Proxy routing badge", () => {
+  const routedAgent = proxyAgent("workbuddy", "provider-1", "model-a");
+
+  it("marks the bound provider as proxy routed while the proxy runs", () => {
+    expect(isProxyRoutedProvider(routedAgent, "provider-1", true)).toBe(true);
+    expect(
+      isProxyRoutedModel(routedAgent, "provider-1", "model-a", true),
+    ).toBe(true);
+  });
+
+  it("hides the proxy routing badge when the proxy is stopped", () => {
+    // 回归：总开关关闭后代理未运行，偏好开关仍为 true，标记必须消失。
+    expect(isProxyRoutedProvider(routedAgent, "provider-1", false)).toBe(false);
+    expect(
+      isProxyRoutedModel(routedAgent, "provider-1", "model-a", false),
+    ).toBe(false);
+  });
+
+  it("keeps the badge hidden when the proxy preference is off", () => {
+    const directAgent = agent("workbuddy");
+    expect(isProxyRoutedProvider(directAgent, "provider-1", true)).toBe(false);
+    expect(
+      isProxyRoutedModel(directAgent, "provider-1", "model-a", true),
+    ).toBe(false);
+  });
+
+  it("only marks the provider the agent is actually bound to", () => {
+    expect(isProxyRoutedProvider(routedAgent, "provider-2", true)).toBe(false);
+    expect(
+      isProxyRoutedModel(routedAgent, "provider-1", "model-b", true),
+    ).toBe(false);
   });
 });

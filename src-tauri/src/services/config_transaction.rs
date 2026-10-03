@@ -131,6 +131,23 @@ impl ConfigTransaction {
         self.restore_payload(&payload)
     }
 
+    /// Restore one companion resource (for example an `.env` sidecar) to the
+    /// state captured by its path-scoped baseline. A companion that did not
+    /// exist before AT-Switch first wrote it is removed again, so restoring an
+    /// Agent never leaves an AT-Switch-only file behind.
+    #[allow(dead_code)]
+    pub fn restore_or_remove(&self, agent_id: &str, path: &Path) -> AppResult<()> {
+        validate_agent_id(agent_id)?;
+        let baseline = self.baseline(agent_id, path)?;
+        let payload = BackupPayload {
+            path: path.to_string_lossy().into_owned(),
+            existed: baseline.existed,
+            original_sha256: sha256(&baseline.content),
+            original_content: baseline.content,
+        };
+        self.restore_payload(&payload)
+    }
+
     /// Returns the configuration that existed before AT-Switch first managed
     /// this Agent. The baseline is encrypted with the same OS-keystore-backed
     /// key as normal rollback backups.

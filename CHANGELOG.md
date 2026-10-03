@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Seven new switchable agents**:
+  - **Hermes Agent** (macOS / Windows): Updates `$HERMES_HOME/config.yaml` or `~/.hermes/config.yaml`, preserving other YAML fields. Requires OpenAI Chat Completions for Direct mode.
+  - **OpenCode** (macOS / Windows): Updates managed Provider and default model in user config, preserving JSONC comments, trailing commas, and third-party providers. Supports OpenAI Chat Completions.
+  - **ZCode** (macOS / Windows): Updates `~/.zcode/v2/provider_config.json` managed Provider, model rules, and default model. Supports OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages.
+  - **Trae CN** (macOS / Windows): Switches between user-configured custom models by rewriting `state.vscdb` selection records. Credentials are encrypted and managed by Trae; AT-Switch never reads or writes them.
+  - **TRAE SOLO CN** (macOS / Windows): Same mechanism as Trae CN. Requires version 0.1.69+ (0.1.66 stored selection in an encrypted database, read-only).
+  - **AionClaw** (macOS / Windows): Updates managed Provider and default model in sandbox `openclaw/state/openclaw.json`, sharing the QClaw implementation. Supports OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages.
+  - **EasyClaw** (macOS / Windows): Updates `~/.easyclaw/easyclaw.json` managed Provider and `agents.defaults.model.primary`. Supports OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages.
+- **Five detection-only agents** (installation status only, no config writing):
+  - **QWEN Work** (千问办公): Custom models require server-side authorization; local toggle alone results in 403 rejection, so no configuration is written.
+  - **Doubao Work** (豆包工作): No user-level Provider / BYOK configuration entry found.
+  - **Coze** (扣子): Local data is runtime and login state, not model provider configuration.
+  - **Kimi Work**: Daimon overwrites `model.current` with server-pushed default on every launch, making local writes ineffective.
+  - **ima**: External writes to `kExtraSettingInfo` are reverted by ima within 11 seconds of launch; authoritative state is server-side.
+- **Token usage logging**: In-memory usage log (cleared on process exit) records proxied request summaries and switch operations, with per-agent breakdown. Supports token extraction from OpenAI (`prompt_tokens` / `completion_tokens`), Anthropic (`input_tokens` / `output_tokens`), and streaming SSE responses.
+- **Agent routing grid**: Per-agent proxy preference toggle. Enabling usage logging for an agent automatically switches it to Local Proxy mode.
+- **GitHub Releases update check**: Automatic version comparison against the latest GitHub release, with semver-aware comparison including prerelease suffixes.
+- **Proxy management UI**: Merged the standalone Local Proxy page into Settings. New components: `ProxyStatusBar`, `ProxyListenerSettings`, `AgentRoutingGrid`, `ProxyUsageByAgent`, `ProxyRecentRequests`, and `ProviderModelGroup`. Deep links to `?page=proxy` redirect to the Settings proxy tab.
+- **Agent read-only details panel**: Displays detection-only agent status and configuration constraints.
+- **`serde_yaml` dependency**: Added for Hermes `config.yaml` parsing.
+- **THIRD_PARTY_NOTICES**: Added AionClaw and ZCode macOS application icons with maintainer-confirmed permission.
+
+### Changed
+- **Agent registry expanded** from 6 to 18 adapters (13 switchable, 5 detection-only).
+- **README agent matrix** updated across all five language variants (Chinese, English, Japanese, Arabic, and default) to include the new agents with platform, protocol, and config-path details.
+- **Settings page** restructured into tabs (`general` and `proxy`), replacing the removed standalone `ProxyPage`.
+- **Switchboard page** enhanced with proxy usage panels and agent routing grid integration.
+- **Proxy server** now extracts token usage from upstream JSON and streaming responses, recording per-agent summaries.
+- **Streaming codec** gained a `CanonicalStreamEvent::Usage` variant and a `StreamUsageProbe` for transparent same-protocol usage tracking.
+
+### Removed
+- Standalone `ProxyPage.tsx` — functionality merged into `SettingsPage` under the `proxy` tab.
+
 ## [v3.14.2] - 2026-09-08
 
 ### Added

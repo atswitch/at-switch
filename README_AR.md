@@ -2,7 +2,7 @@
 
 # AT-Switch
 
-### أداة شاملة لإدارة وتبديل النماذج لـ WorkBuddy و CodeBuddy و QClaw و AutoClaw و Codex و DuMate
+### أداة شاملة لإدارة وتبديل النماذج لـ WorkBuddy و CodeBuddy و QClaw و AutoClaw و Codex و DuMate و Hermes و OpenCode و Kimi Work و AionClaw و ZCode
 
 [![Version](https://img.shields.io/github/v/release/atswitch/at-switch?color=blue&label=version)](https://github.com/atswitch/at-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/atswitch/at-switch/releases)
@@ -80,6 +80,18 @@
 | **AutoClaw** | macOS / Windows | ✅ مدعوم | OpenAI Chat Completions | إدارة إعدادات النماذج في دليل بيانات Electron |
 | **Codex** | macOS / Windows | ✅ مدعوم | OpenAI Responses | تحديث `$CODEX_HOME/config.toml` أو `~/.codex/config.toml` بدقة |
 | **Baidu DuMate** | macOS / Windows | ✅ مدعوم | OpenAI Chat Completions | تحديث تجاوز XDG الدائم للحساب النشط ليشمل جميع جلسات العمل وأسماء النماذج المدمجة |
+| **Hermes Agent** | macOS / Windows | ✅ مدعوم | OpenAI Chat Completions | تحديث `$HERMES_HOME/config.yaml` أو `~/.hermes/config.yaml` مع الاحتفاظ ببقية حقول YAML |
+| **OpenCode** | macOS / Windows | ✅ مدعوم | OpenAI Chat Completions | تحديث المزوّد المُدار والنموذج الافتراضي في تكوين المستخدم مع الحفاظ على تعليقات JSONC والفواصل الزائدة ومزوّدي الطرف الثالث |
+| **ZCode** | macOS / Windows | ✅ مدعوم | OpenAI Chat Completions / OpenAI Responses / Anthropic Messages | تحديث المزوّد المُدار وقواعد النموذج والنموذج الافتراضي في `~/.zcode/v2/provider_config.json` مع الحفاظ على المزوّدين الآخرين والحقول غير المعروفة |
+| **Trae CN** | macOS / Windows | ✅ مدعوم | OpenAI Chat Completions | التبديل بين النماذج المخصّصة المُعدّة داخل Trae عبر إعادة كتابة سجلات الاختيار في `state.vscdb`؛ تبقى بيانات الاعتماد مشفّرة ولا يقرؤها AT-Switch أو يكتبها |
+| **TRAE SOLO CN** | macOS / Windows | ✅ مدعوم | OpenAI Chat Completions | بدءًا من 0.1.69 أصبح النموذج النشط يُكتب في `state.vscdb` غير المشفّرة، لذا يمكن التبديل بين النماذج المخصّصة المُعدّة داخل التطبيق كما في Trae CN؛ الإصدار 0.1.66 كان يحفظه في قاعدة مشفّرة، لذلك يلزم 0.1.69 أو أحدث |
+| **QwenWork** | macOS / Windows | 🟡 اكتشاف فقط | — | النماذج المخصّصة محكومة ببوّابتين: مفتاح العميل وتعويل الخادم لكل نموذج. يمكن فتح الأولى محليًا فقط، فيصبح النموذج قابلًا للاختيار لكن الطلب يُرفض برمز 403 (`You do not have access to this model service`)؛ لذلك لا يُكتب أي شيء |
+| **DoubaoWork** | macOS / Windows | 🟡 اكتشاف فقط | — | لم يتم العثور على إعداد مزوّد أو BYOK على مستوى المستخدم؛ يتم عرض حالة التثبيت فقط |
+| **Coze** | macOS / Windows | 🟡 اكتشاف فقط | — | البيانات المحلية هي حالة تشغيل وتسجيل دخول وليست إعداد مزوّد؛ يتم عرض حالة التثبيت فقط |
+| **Kimi Work** | macOS / Windows | 🟡 اكتشاف فقط | — | يعيد Daimon كتابة `model.current` عند كل تشغيل بالنموذج الافتراضي القادم من الخادم (حتى اسم نموذج رسمي مثل `k3-agent` يُعاد إلى `k2d8-preview`)، لذا يبقى `default_model` في TOML الخاص بالتشغيل على النموذج الرسمي؛ ومزوّد مخصّص يظهر في TOML لكنه لا يُختار أبدًا. لا توجد قناة كتابة محلية، لذا لا تُعدَّل إعداداته |
+| **AionClaw** | macOS / Windows | ✅ مدعوم | OpenAI Chat Completions / OpenAI Responses / Anthropic Messages | تحديث المزوّد المُدار والنموذج الافتراضي في `openclaw/state/openclaw.json` داخل البيئة المعزولة، بمشاركة التنفيذ نفسه مع QClaw |
+| **EasyClaw** | macOS / Windows | ✅ مدعوم | OpenAI Chat Completions / OpenAI Responses / Anthropic Messages | يعمل أيضًا بنواة OpenClaw (`gateway.asar/openclaw.mjs`)؛ يحدّث المزوّد المُدار و`agents.defaults.model.primary` في `~/.easyclaw/easyclaw.json` وهو الإعداد المرجعي (`EASYCLAW_CONFIG_DIR` يشير إلى `~/.easyclaw`)، فلا حاجة لملف ثانٍ |
+| **ima** | macOS / Windows | 🟡 اكتشاف فقط | — | يمتلك ima مدخلًا للنماذج المخصّصة (`kExtraSettingInfo` في `Default/Preferences`، ويشمل `NMauto` الذي أضافه المستخدم)، لكن **الكتابة الخارجية لا تثبت**: بعد كتابة اختيار مختلف وima مغلق، أعاد ima كتابة الملف بعد 11 ثانية من التشغيل وأعاد القيمة الأصلية؛ ولا يظهر معرّف النموذج محليًا إلا في `Preferences`، فالحالة المرجعية على الخادم، لذلك لا يُكتب أي شيء |
 
 ---
 

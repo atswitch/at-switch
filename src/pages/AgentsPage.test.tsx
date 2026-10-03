@@ -99,4 +99,47 @@ describe("AgentsPage", () => {
 
     expect(screen.getByText("自定义位置失效，已自动发现")).toBeInTheDocument();
   });
+
+  it("keeps Details clickable for detection-only agents", async () => {
+    const user = userEvent.setup();
+    const onConfigure = vi.fn();
+    const detectionOnly: AgentSummary = {
+      ...agents[0]!,
+      id: "aionclaw",
+      displayName: "AionClaw",
+      adapterVerified: false,
+      message:
+        "AionClaw 已检测到；AT-Switch 当前只显示安装状态，不修改其内置模型配置。",
+    };
+    render(
+      <AgentsPage
+        agents={[detectionOnly]}
+        onRefresh={vi.fn()}
+        onConfigure={onConfigure}
+      />,
+    );
+
+    const details = screen.getByRole("button", { name: "详情" });
+    expect(details).toBeEnabled();
+
+    await user.click(details);
+
+    expect(onConfigure).toHaveBeenCalledWith(detectionOnly);
+  });
+
+  it("keeps Details clickable when the agent is not installed", async () => {
+    const user = userEvent.setup();
+    const onConfigure = vi.fn();
+    render(
+      <AgentsPage
+        agents={[{ ...agents[0]!, installStatus: "not_installed" }]}
+        onRefresh={vi.fn()}
+        onConfigure={onConfigure}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "详情" }));
+
+    expect(onConfigure).toHaveBeenCalledOnce();
+  });
 });

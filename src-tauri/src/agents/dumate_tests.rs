@@ -71,6 +71,7 @@ fn detects_the_active_accounts_persistent_xdg_override() {
             path_entries: Vec::new(),
             system_application_search: false,
             custom_installation_path: None,
+            system_candidates: None,
         }
     };
 
@@ -88,6 +89,7 @@ fn detects_the_active_accounts_persistent_xdg_override() {
             path_entries: Vec::new(),
             system_application_search: false,
             custom_installation_path: None,
+            system_candidates: None,
             local_app_data: Some(local_app_data),
             program_files: Vec::new(),
         }

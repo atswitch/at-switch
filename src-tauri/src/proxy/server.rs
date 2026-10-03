@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     convert::Infallible,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -28,14 +28,16 @@ use tokio::{
 };
 
 use crate::{
-    domain::{ApiProtocol, AppResult, CommandError, ProxyRuntimeStatus, ProxyStatus},
+    domain::{
+        ApiProtocol, AppResult, CommandError, ProxyRequestLogEntry, ProxyRuntimeStatus, ProxyStatus,
+    },
     infrastructure::SecretStore,
     services::endpoint_url,
 };
 
 use super::{
     decode_request, decode_response, decode_stream_event, encode_request, encode_response,
-    StreamEncoder,
+    StreamEncoder, StreamUsageProbe,
 };
 
 /// Immutable routing data used by in-flight requests.
@@ -45,6 +47,8 @@ use super::{
 #[derive(Debug, Clone)]
 pub struct RouteSnapshot {
     pub agent_id: String,
+    pub provider_id: String,
+    pub provider_name: String,
     pub source_protocol: ApiProtocol,
     pub upstream_protocol: ApiProtocol,
     pub upstream_base_url: String,
@@ -82,6 +86,19 @@ impl RouteStore {
             .remove(&hash_local_token(local_token));
     }
 
+    /// 收集所有已注册路由的 agent_id。重复会出现，按调用方需要去重即可。
+    async fn proxied_agent_ids(&self) -> Vec<String> {
+        let map = self.by_token_hash.read().await;
+        let mut seen = std::collections::HashSet::new();
+        let mut ids = Vec::new();
+        for route in map.values() {
+            if seen.insert(route.agent_id.clone()) {
+                ids.push(route.agent_id.clone());
+            }
+        }
+        ids
+    }
+
     async fn resolve(&self, local_token: &str) -> Option<Arc<RouteSnapshot>> {
         self.by_token_hash
             .read()
@@ -98,6 +115,88 @@ struct ProxyMetrics {
     successful_requests: AtomicU64,
     conversion_failures: AtomicU64,
     upstream_failures: AtomicU64,
+    /// 最近的请求摘要，新的在后。容量固定，超出后丢弃最旧的。
+    recent_requests: RwLock<VecDeque<ProxyRequestLogEntry>>,
+}
+
+/// 单条日志的保留上限。日志只用于排障与用量观察，不落盘，因此必须设上限。
+const REQUEST_LOG_LIMIT: usize = 200;
+
+impl ProxyMetrics {
+    /// 追加一条请求摘要。`usage` 只在能拿到的路径（非流式）里传入；流式响应没有
+    /// usage 汇总，记为 `None`，界面上显示"—"。
+    async fn record_request(
+        &self,
+        route: &RouteSnapshot,
+        status: u16,
+        input_tokens: Option<u64>,
+        output_tokens: Option<u64>,
+        cache_read_tokens: Option<u64>,
+    ) {
+        let entry = ProxyRequestLogEntry {
+            at: Utc::now().to_rfc3339(),
+            agent_id: route.agent_id.clone(),
+            provider_id: route.provider_id.clone(),
+            provider_name: route.provider_name.clone(),
+            model: route.upstream_model.clone(),
+            status,
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+        };
+        let mut log = self.recent_requests.write().await;
+        if log.len() >= REQUEST_LOG_LIMIT {
+            log.pop_front();
+        }
+        log.push_back(entry);
+    }
+
+    async fn recent_requests(&self, limit: usize) -> Vec<ProxyRequestLogEntry> {
+        self.recent_requests
+            .read()
+            .await
+            .iter()
+            .rev()
+            .take(limit)
+            .cloned()
+            .collect()
+    }
+}
+
+/// 尽力从上游响应体里取用量，兼容 OpenAI（prompt/completion）与
+/// Anthropic（input/output）两种字段名。取不到就返回 `(None, None)`。
+fn usage_from_json(body: &[u8]) -> (Option<u64>, Option<u64>, Option<u64>) {
+    let Ok(value) = serde_json::from_slice::<Value>(body) else {
+        return (None, None, None);
+    };
+    let input = value
+        .pointer("/usage/prompt_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| value.pointer("/usage/input_tokens").and_then(Value::as_u64));
+    let output = value
+        .pointer("/usage/completion_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            value
+                .pointer("/usage/output_tokens")
+                .and_then(Value::as_u64)
+        });
+    // OpenAI: usage.prompt_tokens_details.cached_tokens
+    // Anthropic: usage.cache_read_input_tokens（部分 Beta 也放在 input_tokens_details.cached_tokens）。
+    let cache = value
+        .pointer("/usage/prompt_tokens_details/cached_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            value
+                .pointer("/usage/input_tokens_details/cached_tokens")
+                .and_then(Value::as_u64)
+        })
+        .or_else(|| {
+            value
+                .pointer("/usage/cache_read_input_tokens")
+                .and_then(Value::as_u64)
+        });
+    (input, output, cache)
 }
 
 struct ProxyRuntime {
@@ -158,7 +257,7 @@ impl ProxySupervisor {
         {
             let mut runtime = self.runtime.lock().await;
             if runtime.status == ProxyRuntimeStatus::Running && runtime.port == port {
-                return Ok(self.status_from(&runtime));
+                return Ok(self.status_from(&runtime).await);
             }
             if runtime.status != ProxyRuntimeStatus::Stopped
                 && runtime.status != ProxyRuntimeStatus::Error
@@ -222,14 +321,14 @@ impl ProxySupervisor {
         runtime.started_at = Some(Utc::now().to_rfc3339());
         runtime.shutdown = Some(shutdown_tx);
         runtime.task = Some(task);
-        Ok(self.status_from(&runtime))
+        Ok(self.status_from(&runtime).await)
     }
 
     pub async fn stop(&self) -> AppResult<ProxyStatus> {
         let task = {
             let mut runtime = self.runtime.lock().await;
             if runtime.status == ProxyRuntimeStatus::Stopped {
-                return Ok(self.status_from(&runtime));
+                return Ok(self.status_from(&runtime).await);
             }
             runtime.status = ProxyRuntimeStatus::Draining;
             if let Some(shutdown) = runtime.shutdown.take() {
@@ -246,7 +345,7 @@ impl ProxySupervisor {
         runtime.status = ProxyRuntimeStatus::Stopped;
         runtime.started_at = None;
         runtime.error = None;
-        Ok(self.status_from(&runtime))
+        Ok(self.status_from(&runtime).await)
     }
 
     pub async fn set_stopped_port(&self, port: u16) -> AppResult<ProxyStatus> {
@@ -263,15 +362,15 @@ impl ProxySupervisor {
         runtime.status = ProxyRuntimeStatus::Stopped;
         runtime.port = port;
         runtime.error = None;
-        Ok(self.status_from(&runtime))
+        Ok(self.status_from(&runtime).await)
     }
 
     pub async fn status(&self) -> ProxyStatus {
         let runtime = self.runtime.lock().await;
-        self.status_from(&runtime)
+        self.status_from(&runtime).await
     }
 
-    fn status_from(&self, runtime: &ProxyRuntime) -> ProxyStatus {
+    async fn status_from(&self, runtime: &ProxyRuntime) -> ProxyStatus {
         ProxyStatus {
             status: runtime.status,
             host: "127.0.0.1".to_owned(),
@@ -282,6 +381,8 @@ impl ProxySupervisor {
             successful_requests: self.metrics.successful_requests.load(Ordering::Relaxed),
             conversion_failures: self.metrics.conversion_failures.load(Ordering::Relaxed),
             upstream_failures: self.metrics.upstream_failures.load(Ordering::Relaxed),
+            recent_requests: self.metrics.recent_requests(REQUEST_LOG_LIMIT).await,
+            proxied_agents: self.routes.proxied_agent_ids().await,
             error: runtime.error.clone(),
         }
     }
@@ -471,6 +572,10 @@ async fn handle_proxy_request(
                 .metrics
                 .upstream_failures
                 .fetch_add(1, Ordering::Relaxed);
+            state
+                .metrics
+                .record_request(&route, StatusCode::BAD_GATEWAY.as_u16(), None, None, None)
+                .await;
             return proxy_error(
                 StatusCode::BAD_GATEWAY,
                 "upstream_unreachable",
@@ -485,13 +590,22 @@ async fn handle_proxy_request(
             .metrics
             .upstream_failures
             .fetch_add(1, Ordering::Relaxed);
+        state
+            .metrics
+            .record_request(&route, status.as_u16(), None, None, None)
+            .await;
         return proxy_error(status, "upstream_rejected", "上游 Provider 拒绝了请求");
     }
 
     if same_protocol && wants_stream {
-        passthrough_stream_response(upstream, Arc::clone(&state.metrics), connection)
+        passthrough_stream_response(
+            upstream,
+            Arc::clone(&state.metrics),
+            connection,
+            Arc::clone(&route),
+        )
     } else if same_protocol {
-        passthrough_non_stream_response(upstream, &state.metrics).await
+        passthrough_non_stream_response(upstream, &state.metrics, &route).await
     } else if wants_stream {
         stream_response(
             upstream,
@@ -499,6 +613,7 @@ async fn handle_proxy_request(
             route.upstream_protocol,
             Arc::clone(&state.metrics),
             connection,
+            Arc::clone(&route),
         )
     } else {
         non_stream_response(
@@ -506,6 +621,7 @@ async fn handle_proxy_request(
             source_protocol,
             route.upstream_protocol,
             &state.metrics,
+            &route,
         )
         .await
     }
@@ -514,6 +630,7 @@ async fn handle_proxy_request(
 async fn passthrough_non_stream_response(
     upstream: reqwest::Response,
     metrics: &ProxyMetrics,
+    route: &RouteSnapshot,
 ) -> Response {
     let status =
         StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
@@ -532,6 +649,16 @@ async fn passthrough_non_stream_response(
     };
     metrics.completed_requests.fetch_add(1, Ordering::Relaxed);
     metrics.successful_requests.fetch_add(1, Ordering::Relaxed);
+    let (input_tokens, output_tokens, cache_read_tokens) = usage_from_json(&body);
+    metrics
+        .record_request(
+            route,
+            status.as_u16(),
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+        )
+        .await;
     let mut response = Response::new(Body::from(body));
     *response.status_mut() = status;
     if let Some(content_type) = content_type {
@@ -546,15 +673,34 @@ fn passthrough_stream_response(
     upstream: reqwest::Response,
     metrics: Arc<ProxyMetrics>,
     connection: ActiveConnection,
+    route: Arc<RouteSnapshot>,
 ) -> Response {
     let content_type = upstream.headers().get(header::CONTENT_TYPE).cloned();
+    // 上游可能返回 401/429/5xx 但仍写出流式事件，原先写死 OK 会把失败请求误计
+    // 为成功并把"无 token 的 401"算作"成功请求"。这里把真实上游状态码读出来，
+    // 流结束时按它来记一次最终状态。
+    let upstream_status = upstream.status();
     let stream = async_stream::stream! {
         let _connection = connection;
         let mut upstream_stream = upstream.bytes_stream();
         let mut failed = false;
+        // 同协议转发不改写字节，但仍旁观 SSE 事件里的 usage，避免流式请求一律
+        // 被记成"用量未知"。探针只读取已经在线路上的帧，不影响转发内容与时序。
+        let mut probe = StreamUsageProbe::new(route.upstream_protocol);
+        let mut buffer = Vec::<u8>::new();
         while let Some(chunk) = upstream_stream.next().await {
             match chunk {
-                Ok(chunk) => yield Ok::<Bytes, Infallible>(chunk),
+                Ok(chunk) => {
+                    buffer.extend_from_slice(&chunk);
+                    while let Some((boundary, delimiter_length)) = find_sse_boundary(&buffer) {
+                        let frame = buffer.drain(..boundary).collect::<Vec<_>>();
+                        buffer.drain(..delimiter_length);
+                        if let Ok(text) = std::str::from_utf8(&frame) {
+                            probe.observe_frame(text);
+                        }
+                    }
+                    yield Ok::<Bytes, Infallible>(chunk);
+                }
                 Err(error) => {
                     log::warn!("proxy upstream stream passthrough failed: {error}");
                     metrics.upstream_failures.fetch_add(1, Ordering::Relaxed);
@@ -563,10 +709,33 @@ fn passthrough_stream_response(
                 }
             }
         }
+        // 上游可能在结束时留下一个没有空行结尾的事件。
+        if !failed && !buffer.is_empty() {
+            if let Ok(text) = std::str::from_utf8(&buffer) {
+                probe.observe_frame(text);
+            }
+        }
         metrics.completed_requests.fetch_add(1, Ordering::Relaxed);
-        if !failed {
+        if !failed && upstream_status.is_success() {
             metrics.successful_requests.fetch_add(1, Ordering::Relaxed);
         }
+        let (input_tokens, output_tokens, cache_read_tokens) = probe.usage();
+        let recorded_status = if failed {
+            StatusCode::BAD_GATEWAY
+        } else if upstream_status.is_success() {
+            StatusCode::OK
+        } else {
+            StatusCode::BAD_GATEWAY
+        };
+        metrics
+            .record_request(
+                &route,
+                recorded_status.as_u16(),
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+            )
+            .await;
     };
     let mut response = Response::new(Body::from_stream(stream));
     *response.status_mut() = StatusCode::OK;
@@ -586,6 +755,7 @@ async fn non_stream_response(
     source_protocol: ApiProtocol,
     upstream_protocol: ApiProtocol,
     metrics: &ProxyMetrics,
+    route: &RouteSnapshot,
 ) -> Response {
     let upstream_value: Value = match upstream.json().await {
         Ok(value) => value,
@@ -615,6 +785,15 @@ async fn non_stream_response(
     };
     metrics.completed_requests.fetch_add(1, Ordering::Relaxed);
     metrics.successful_requests.fetch_add(1, Ordering::Relaxed);
+    metrics
+        .record_request(
+            route,
+            StatusCode::OK.as_u16(),
+            canonical.usage.input_tokens,
+            canonical.usage.output_tokens,
+            canonical.usage.cache_read_tokens,
+        )
+        .await;
     (StatusCode::OK, axum::Json(source_value)).into_response()
 }
 
@@ -624,6 +803,7 @@ fn stream_response(
     upstream_protocol: ApiProtocol,
     metrics: Arc<ProxyMetrics>,
     connection: ActiveConnection,
+    route: Arc<RouteSnapshot>,
 ) -> Response {
     let stream = async_stream::stream! {
         let _connection = connection;
@@ -680,6 +860,24 @@ fn stream_response(
         if !failed {
             metrics.successful_requests.fetch_add(1, Ordering::Relaxed);
         }
+        // 跨协议流式转写会把 provider 的 usage 事件归一到 canonical 形式并累计到
+        // encoder 上，因此这里能拿到流结束时的真实 token 数；如果上游根本没发
+        // usage 事件，两侧都为 None，等价于"用量未知"。
+        let final_usage = encoder.usage().clone();
+        let status = if failed {
+            StatusCode::BAD_GATEWAY
+        } else {
+            StatusCode::OK
+        };
+        metrics
+            .record_request(
+                &route,
+                status.as_u16(),
+                final_usage.input_tokens,
+                final_usage.output_tokens,
+                final_usage.cache_read_tokens,
+            )
+            .await;
     };
 
     let mut response = Response::new(Body::from_stream(stream));
@@ -812,6 +1010,89 @@ mod tests {
         })
     }
 
+    fn test_route() -> RouteSnapshot {
+        RouteSnapshot {
+            agent_id: "codex".to_owned(),
+            provider_id: "p".to_owned(),
+            provider_name: "Provider P".to_owned(),
+            source_protocol: ApiProtocol::OpenaiChatCompletions,
+            upstream_protocol: ApiProtocol::OpenaiChatCompletions,
+            upstream_base_url: "https://provider.example/v1".to_owned(),
+            upstream_model: "model-a".to_owned(),
+            upstream_api_key_ref: "provider/p/api-key/v1".to_owned(),
+        }
+    }
+
+    #[tokio::test]
+    async fn request_log_returns_the_newest_entries_first_with_usage() {
+        let metrics = ProxyMetrics::default();
+        let route = test_route();
+
+        metrics
+            .record_request(&route, 200, Some(120), Some(30), Some(80))
+            .await;
+        metrics.record_request(&route, 401, None, None, None).await;
+
+        let recent = metrics.recent_requests(10).await;
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0].status, 401, "the newest entry comes first");
+        assert_eq!(recent[0].agent_id, "codex");
+        assert_eq!(recent[0].provider_name, "Provider P");
+        assert_eq!(recent[0].model, "model-a");
+        assert_eq!(recent[1].status, 200);
+        assert_eq!(recent[1].input_tokens, Some(120));
+        assert_eq!(recent[1].output_tokens, Some(30));
+        assert!(!recent[0].at.is_empty(), "each entry carries a timestamp");
+    }
+
+    #[tokio::test]
+    async fn request_log_is_capped_so_it_cannot_grow_unbounded() {
+        let metrics = ProxyMetrics::default();
+        let route = test_route();
+
+        for _ in 0..REQUEST_LOG_LIMIT + 20 {
+            metrics.record_request(&route, 200, None, None, None).await;
+        }
+
+        assert_eq!(
+            metrics.recent_requests(REQUEST_LOG_LIMIT + 50).await.len(),
+            REQUEST_LOG_LIMIT,
+            "older entries are dropped once the cap is reached"
+        );
+    }
+
+    #[tokio::test]
+    async fn usage_from_json_reads_both_openai_and_anthropic_shapes() {
+        let openai = br#"{"usage":{"prompt_tokens":11,"completion_tokens":22}}"#;
+        assert_eq!(usage_from_json(openai), (Some(11), Some(22), None));
+
+        let anthropic = br#"{"usage":{"input_tokens":33,"output_tokens":44}}"#;
+        assert_eq!(usage_from_json(anthropic), (Some(33), Some(44), None));
+
+        // OpenAI: cached tokens 走 prompt_tokens_details.cached_tokens。
+        let openai_cached = br#"{"usage":{"prompt_tokens":100,"completion_tokens":20,"prompt_tokens_details":{"cached_tokens":70}}}"#;
+        assert_eq!(
+            usage_from_json(openai_cached),
+            (Some(100), Some(20), Some(70))
+        );
+
+        // Anthropic: cache_read_input_tokens 顶层字段 + input_tokens_details.cached_tokens 都支持。
+        let anthropic_cached =
+            br#"{"usage":{"input_tokens":50,"output_tokens":10,"cache_read_input_tokens":40}}"#;
+        assert_eq!(
+            usage_from_json(anthropic_cached),
+            (Some(50), Some(10), Some(40))
+        );
+        let anthropic_cached_beta = br#"{"usage":{"input_tokens":50,"output_tokens":10,"input_tokens_details":{"cached_tokens":40}}}"#;
+        assert_eq!(
+            usage_from_json(anthropic_cached_beta),
+            (Some(50), Some(10), Some(40))
+        );
+
+        assert_eq!(usage_from_json(br#"{"choices":[]}"#), (None, None, None));
+        assert_eq!(usage_from_json(b"not json"), (None, None, None));
+    }
+
     #[tokio::test]
     async fn route_store_never_indexes_raw_tokens() {
         let store = RouteStore::default();
@@ -820,6 +1101,8 @@ mod tests {
                 "atsw_local_secret",
                 RouteSnapshot {
                     agent_id: "codex".to_owned(),
+                    provider_id: "p".to_owned(),
+                    provider_name: "Provider P".to_owned(),
                     source_protocol: ApiProtocol::OpenaiResponses,
                     upstream_protocol: ApiProtocol::AnthropicMessages,
                     upstream_base_url: "https://provider.example/v1".to_owned(),
@@ -969,6 +1252,8 @@ mod tests {
                 local_token,
                 RouteSnapshot {
                     agent_id: "codex".to_owned(),
+                    provider_id: "at-switch-e2e".to_owned(),
+                    provider_name: "E2E Provider".to_owned(),
                     source_protocol: ApiProtocol::OpenaiResponses,
                     upstream_protocol: ApiProtocol::OpenaiResponses,
                     upstream_base_url: format!("http://{upstream_address}/v1"),
