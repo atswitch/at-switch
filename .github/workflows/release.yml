@@ -15,8 +15,8 @@ concurrency:
 
 jobs:
   release:
-    # v3.14.2 publishes the already-verified website packages without rebuilding.
-    if: github.ref_name != 'v3.14.2'
+    # These versions publish the frozen website packages without rebuilding.
+    if: github.ref_name != 'v3.14.2' && github.ref_name != 'v3.15.1'
     strategy:
       fail-fast: false
       matrix:
@@ -48,10 +48,49 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      - name: Validate macOS signing configuration
+        if: matrix.platform == 'macos-14'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          required=(
+            APPLE_CERTIFICATE
+            APPLE_CERTIFICATE_PASSWORD
+            APPLE_SIGNING_IDENTITY
+            APPLE_ID
+            APPLE_PASSWORD
+            APPLE_TEAM_ID
+          )
+          present=0
+          missing=()
+          for name in "${required[@]}"; do
+            if [[ -n "${!name}" ]]; then
+              present=$((present + 1))
+            else
+              missing+=("$name")
+            fi
+          done
+          if (( present != ${#required[@]} )); then
+            echo "::error::Incomplete macOS signing configuration. Missing: ${missing[*]}"
+            exit 1
+          fi
+
       - name: Build and create Release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ matrix.platform == 'macos-14' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ matrix.platform == 'macos-14' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ matrix.platform == 'macos-14' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ matrix.platform == 'macos-14' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ matrix.platform == 'macos-14' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ matrix.platform == 'macos-14' && secrets.APPLE_TEAM_ID || '' }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'AT-Switch ${{ github.ref_name }}'
@@ -62,6 +101,8 @@ jobs:
             
             - See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for full release notes.
             - Official Website: [https://atswitch.io](https://atswitch.io)
-          releaseDraft: false
+          # Keep artifacts private until signature, notarization and clean-machine
+          # checks in RELEASE_CHECKLIST.md have been completed.
+          releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
           args: ${{ matrix.args }}
