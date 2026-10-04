@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v3.15.2] - 2026-10-04
+
+### Added
+- Tencent ima model switching on macOS and Windows through its signed-in account model settings, limited to public OpenAI Chat Completions endpoints.
+- Account-scoped encrypted recovery checkpoints, two-scene selection verification, interruption recovery, and preservation of existing custom models and unrelated local settings.
+
+### Validation
+- The macOS account round trip covers original model → third-party model → repeated switch → original model → third-party model → final restoration without creating duplicate model rows.
+- Frontend, Rust, formatting, Clippy, dependency-license, and existing-Agent regression gates pass. Windows implementation is covered by static and unit checks but still requires device validation.
+
 ## [v3.15.1] - 2026-10-03
 
 ### Fixed
