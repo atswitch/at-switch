@@ -33,12 +33,12 @@ struct PreferredResponse {
     preferred_model_id: Option<String>,
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
 #[derive(Deserialize)]
 #[serde(transparent)]
 struct SensitiveJson(serde_json::Value);
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
 impl Drop for SensitiveJson {
     fn drop(&mut self) {
         use zeroize::Zeroize;
@@ -57,7 +57,7 @@ impl Drop for SensitiveJson {
 impl ImaClient {
     /// Test-only compatibility diagnostics. Only field-presence/type labels
     /// leave this method; all actual strings in the temporary payloads are wiped.
-    #[cfg(all(test, target_os = "macos"))]
+    #[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
     pub(super) async fn contract_shapes(&self) -> AppResult<serde_json::Value> {
         let homepage_request = serde_json::json!({});
         let qa_request = serde_json::json!({"scene":0});
@@ -317,7 +317,7 @@ impl ImaClient {
                 "IMA_DTO_FAILURE endpoint={} code=ima_response_unsupported",
                 diagnostic_endpoint(endpoint)
             );
-            #[cfg(all(test, target_os = "macos"))]
+            #[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
             if let Ok(raw) = serde_json::from_slice::<SensitiveJson>(&bytes) {
                 if matches!(
                     endpoint,

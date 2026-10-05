@@ -5,7 +5,7 @@ mod types;
 #[cfg(any(target_os = "windows", test))]
 mod windows_auth;
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
 mod live_tests;
 
 pub use auth::*;
