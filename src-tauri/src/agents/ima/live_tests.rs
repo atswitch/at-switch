@@ -305,6 +305,18 @@ async fn ima_live_roundtrip_restores_original_models_and_preferences() {
         }
     }
     let before = require_live_result("initial-snapshot", client.snapshot().await);
+    let target_rows: Vec<_> = before.homepage.models.iter()
+        .filter(|model| model.model_name == live_provider.model_id)
+        .map(|model| serde_json::json!({
+            "endpoint_matches": model.api_uri == format!("{}/chat/completions", live_provider.base_url.trim_end_matches('/')),
+            "credential_matches": model.api_key.expose() == live_provider.credential.expose(),
+            "input_limit_matches_default": model.max_input_tokens == before.homepage.customize_model_config.default_input_tokens,
+            "output_limit_matches_default": model.max_output_tokens == before.homepage.customize_model_config.default_output_tokens,
+        })).collect();
+    println!(
+        "IMA_LIVE_EXISTING_TARGETS={}",
+        serde_json::json!(target_rows)
+    );
     let owned_before = require_live_result(
         "initial-owned-model",
         manager.owned_model_for_acceptance(&detection, &transaction),
@@ -473,6 +485,12 @@ fn user_models_preserved(
     owned_before: Option<&str>,
     owned_after: Option<&str>,
 ) -> bool {
+    // Selecting a pre-existing row relinquishes ownership of the previous
+    // managed row. In that case every row, including the old managed one,
+    // must be preserved exactly; none receives the mutable-owned exemption.
+    if owned_after.is_none() {
+        return before.len() == after.len() && before.iter().all(|model| after.contains(model));
+    }
     let original: Vec<_> = before
         .iter()
         .filter(|model| Some(model.customize_id.as_str()) != owned_before)
@@ -500,6 +518,8 @@ fn live_preservation_check_only_exempts_checkpoint_owned_rows() {
     };
     let before = vec![model("user", "original"), model("owned", "old-target")];
     let after = vec![model("user", "original"), model("owned", "new-target")];
+    assert!(user_models_preserved(&before, &before, Some("owned"), None));
+    assert!(!user_models_preserved(&before, &after, Some("owned"), None));
     assert!(user_models_preserved(
         &before,
         &after,
