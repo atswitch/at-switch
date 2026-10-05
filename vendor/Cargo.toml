@@ -1,0 +1,7 @@
+[workspace]
+members = ["glib-macros", "gtk3-macros"]
+resolver = "2"
+
+[patch.crates-io]
+glib-macros = { path = "glib-macros" }
+gtk3-macros = { path = "gtk3-macros" }
