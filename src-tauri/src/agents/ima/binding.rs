@@ -334,19 +334,25 @@ impl ImaBindingManager {
 
         let result = async {
             let managed = match previous {
-                Some(managed) => {
-                    if managed.input != input && managed.remove_on_restore {
-                        client.modify_model(&managed.customize_id, &input).await?;
-                        let mut managed = managed;
-                        managed.input = input.clone();
-                        managed
-                    } else if managed.input == input {
-                        managed
-                    } else {
-                        create_owned(client, transaction, &mut record, &input).await?
-                    }
+                Some(managed) if managed.input == input => managed,
+                Some(mut managed)
+                    if managed.remove_on_restore
+                        && !before
+                            .homepage
+                            .models
+                            .iter()
+                            .any(|model| model.matches(&input)) =>
+                {
+                    client.modify_model(&managed.customize_id, &input).await?;
+                    managed.input = input.clone();
+                    managed
                 }
-                None => create_owned(client, transaction, &mut record, &input).await?,
+                // An existing identical row may belong to the user or another
+                // device. Select it without editing either row: ima rejects
+                // changing our previous row into a duplicate configuration.
+                // create_owned marks pre-existing rows as borrowed, so restore
+                // and rollback retain them unchanged.
+                _ => create_owned(client, transaction, &mut record, &input).await?,
             };
             let mut managed = managed;
             managed.selected = true;

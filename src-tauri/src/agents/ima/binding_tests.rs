@@ -20,6 +20,7 @@ struct RemoteData {
     fail_scene_one_once: bool,
     deletion_resets_preference: bool,
     add_count: u64,
+    modify_count: u64,
     distinct_model_ids: bool,
     nested_custom_models: bool,
     ambiguous_model_links: bool,
@@ -73,6 +74,14 @@ async fn remote(
         }
         "/cgi-bin/customize_models/modify_model" => {
             let model = &body["model_info"];
+            data.modify_count += 1;
+            if data.models.iter().any(|existing| {
+                existing["customize_id"] != model["customize_id"]
+                    && existing["model_name"] == model["model_name"]
+                    && existing["api_uri"] == model["api_uri"]
+            }) {
+                return Json(json!({"code":100003,"msg":"请勿重复添加模型"}));
+            }
             let target = data
                 .models
                 .iter_mut()
@@ -149,6 +158,7 @@ async fn fixture() -> (
         fail_scene_one_once: false,
         deletion_resets_preference: true,
         add_count: 0,
+        modify_count: 0,
         distinct_model_ids: false,
         nested_custom_models: false,
         ambiguous_model_links: false,
@@ -238,6 +248,116 @@ async fn reuses_an_identical_existing_model_without_deleting_it_on_restore() {
     let data = remote.0.lock().unwrap();
     assert_eq!(data.models.len(), 1);
     assert_eq!(data.models[0]["customize_id"], "user-owned");
+    server.abort();
+}
+
+#[tokio::test]
+async fn switch_from_owned_to_existing_model_reuses_it_and_preserves_both_rows() {
+    let (directory, client, transaction, remote, server) = fixture().await;
+    let path = directory.path().join("Preferences");
+    let manager = ImaBindingManager::default();
+    manager
+        .apply_paused(
+            &client,
+            &path,
+            &desired("model-a"),
+            &transaction,
+            &|| Ok(()),
+        )
+        .await
+        .unwrap();
+    let before = remote.0.lock().unwrap().models.clone();
+    manager
+        .apply_paused(
+            &client,
+            &path,
+            &desired_existing_user_model(),
+            &transaction,
+            &|| Ok(()),
+        )
+        .await
+        .unwrap();
+    {
+        let data = remote.0.lock().unwrap();
+        assert_eq!(data.preferred, ["user-owned", "user-owned"]);
+        assert_eq!(data.models, before);
+        assert_eq!(data.modify_count, 0);
+        assert_eq!(data.add_count, 1);
+    }
+    manager
+        .restore_paused(&client, &path, &transaction, &|| Ok(()))
+        .await
+        .unwrap();
+    manager
+        .apply_paused(
+            &client,
+            &path,
+            &desired("model-a"),
+            &transaction,
+            &|| Ok(()),
+        )
+        .await
+        .unwrap();
+    manager
+        .apply_paused(
+            &client,
+            &path,
+            &desired_existing_user_model(),
+            &transaction,
+            &|| Ok(()),
+        )
+        .await
+        .unwrap();
+    manager
+        .restore_paused(&client, &path, &transaction, &|| Ok(()))
+        .await
+        .unwrap();
+    let data = remote.0.lock().unwrap();
+    assert_eq!(data.models, before);
+    assert_eq!(data.preferred, ["official-0", "official-1"]);
+    assert_eq!(data.modify_count, 0);
+    assert_eq!(data.add_count, 1);
+    server.abort();
+}
+
+#[tokio::test]
+async fn failed_switch_to_existing_row_restores_previous_owned_selection_without_edits() {
+    let (directory, client, transaction, remote, server) = fixture().await;
+    let path = directory.path().join("Preferences");
+    let manager = ImaBindingManager::default();
+    manager
+        .apply_paused(
+            &client,
+            &path,
+            &desired("model-a"),
+            &transaction,
+            &|| Ok(()),
+        )
+        .await
+        .unwrap();
+    let local_before = ima_local::snapshot(&path).unwrap();
+    let (models_before, preferred_before) = {
+        let mut data = remote.0.lock().unwrap();
+        data.fail_scene_one_once = true;
+        (data.models.clone(), data.preferred.clone())
+    };
+    let error = manager
+        .apply_paused(
+            &client,
+            &path,
+            &desired_existing_user_model(),
+            &transaction,
+            &|| Ok(()),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "ima_api_rejected");
+    ima_local::verify_snapshot(&path, &local_before).unwrap();
+    let data = remote.0.lock().unwrap();
+    assert_eq!(data.models, models_before);
+    assert_eq!(data.preferred, preferred_before);
+    assert_eq!(data.modify_count, 0);
+    assert_eq!(data.add_count, 1);
     server.abort();
 }
 

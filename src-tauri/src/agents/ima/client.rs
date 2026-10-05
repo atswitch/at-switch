@@ -249,6 +249,12 @@ impl ImaClient {
                     .with_recovery("请在 ima 中确认登录状态，再返回 AT-Switch 重试。"),
             );
         }
+        if response.status() == StatusCode::TOO_MANY_REQUESTS {
+            return Err(
+                CommandError::new("ima_rate_limited", "ima 暂时限制了模型配置请求")
+                    .with_recovery("请稍后重试；AT-Switch 已保留原始模型和恢复记录。"),
+            );
+        }
         if !response.status().is_success() {
             #[cfg(test)]
             eprintln!(
@@ -282,6 +288,10 @@ impl ImaClient {
                 diagnostic_endpoint(endpoint),
                 envelope.code
             );
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            if let Ok(raw) = serde_json::from_slice::<SensitiveJson>(&bytes) {
+                eprintln!("IMA_API_ERROR_HINTS={}", safe_error_hints(&raw.0));
+            }
         }
         // ima's client classifies these service codes as login/token expiry.
         if matches!(
@@ -294,13 +304,20 @@ impl ImaClient {
                     .with_recovery("请在 ima 中确认登录状态，再返回 AT-Switch 重试。"),
             );
         }
-        // The current ima settings extension classifies 100003 as a request
-        // frequency limit. Keep it distinct from an invalid model setup so the
-        // user does not edit credentials or retry a destructive operation.
-        if envelope.code == 100003 {
+        // Error numbers are scoped to the service. The unrelated IM messaging
+        // enum calls 100003 a frequency limit, but customize_models returns it
+        // for duplicate model configurations. Never expose its raw message.
+        if envelope.code == 100003
+            && matches!(
+                endpoint,
+                "customize_models/add_model" | "customize_models/modify_model"
+            )
+        {
             return Err(
-                CommandError::new("ima_rate_limited", "ima 暂时限制了模型配置请求")
-                    .with_recovery("请稍后重试；AT-Switch 已保留原始模型和恢复记录。"),
+                CommandError::new("ima_model_conflict", "ima 未接受存在冲突的模型配置")
+                    .with_recovery(
+                        "请检查 ima 中是否已有同名模型及其接口配置；原始模型和恢复记录已保留。",
+                    ),
             );
         }
         if envelope.code != 0 {
@@ -334,6 +351,22 @@ impl ImaClient {
             response_invalid()
         })
     }
+}
+
+/// Test diagnostics emit boolean hints only, never arbitrary server message
+/// text, identifiers, URLs, or credential values.
+#[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
+fn safe_error_hints(value: &serde_json::Value) -> serde_json::Value {
+    let message = value
+        .get("msg")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    serde_json::json!({
+        "message_present": !message.is_empty(),
+        "duplicate_model_hint": message.contains("重复") && message.contains("模型"),
+        "frequency_hint": message.contains("频率") || message.contains("频繁") || message.contains("限流"),
+        "parameter_hint": message.contains("参数"),
+    })
 }
 
 #[cfg(test)]
@@ -649,12 +682,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn service_rate_limit_has_a_safe_retry_error() {
-        let (_directory, client, _state, handle) = mock_client(vec![(
-            StatusCode::OK,
-            serde_json::json!({"code":100003,"msg":"fictional-sensitive-rate-message"}),
-        )])
+    async fn service_error_codes_are_scoped_and_http_rate_limits_remain_distinct() {
+        let (_directory, client, _state, handle) = mock_client(vec![
+            (
+                StatusCode::OK,
+                serde_json::json!({"code":100003,"msg":"fictional-sensitive-message"}),
+            ),
+            (
+                StatusCode::OK,
+                serde_json::json!({"code":100003,"msg":"fictional-sensitive-message"}),
+            ),
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                serde_json::json!({"msg":"fictional-sensitive-message"}),
+            ),
+        ])
         .await;
+        let input = ImaModelInput {
+            api_uri: "https://provider.example/v1/chat/completions".to_owned(),
+            api_key: ImaSecret::new("fictional-provider-key"),
+            model_name: "fictional-model".to_owned(),
+            max_input_tokens: 8192,
+            max_output_tokens: 4096,
+        };
+        let error = client
+            .modify_model("fictional-id", &input)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "ima_model_conflict");
+        assert!(!format!("{error:?}").contains("fictional"));
+        assert_eq!(
+            client.homepage().await.unwrap_err().code,
+            "ima_api_rejected"
+        );
         let error = client.homepage().await.unwrap_err();
         assert_eq!(error.code, "ima_rate_limited");
         assert!(client.session.is_valid());
