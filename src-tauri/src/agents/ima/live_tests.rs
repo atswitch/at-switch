@@ -19,6 +19,17 @@ use crate::{
 
 use super::ImaBindingManager;
 
+fn native_secret_store() -> NativeSecretStore {
+    #[cfg(target_os = "macos")]
+    {
+        NativeSecretStore::default()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        NativeSecretStore
+    }
+}
+
 /// Optional test-only handshakes keep a single native login session alive while
 /// a human or UI acceptance runner checks the application's selected models.
 struct LiveUiHandshake {
@@ -158,7 +169,7 @@ fn configured_live_provider() -> AppResult<LiveProvider> {
         .api_key_ref
         .as_deref()
         .ok_or_else(live_configuration_error)?;
-    let credential = NativeSecretStore::default().get(secret_reference)?;
+    let credential = native_secret_store().get(secret_reference)?;
     Ok(LiveProvider {
         provider_name: provider.name.clone(),
         model_id: model.model_id.clone(),
@@ -234,7 +245,7 @@ async fn ima_live_safe_checkpoint_diagnostics() {
         "diagnostics-auth",
         manager.connect(&detection, &version).await,
     );
-    let transaction = ConfigTransaction::new(Arc::new(NativeSecretStore::default()), backup_root);
+    let transaction = ConfigTransaction::new(Arc::new(native_secret_store()), backup_root);
     let diagnostics = require_live_result(
         "diagnostics",
         manager
@@ -272,7 +283,7 @@ async fn ima_live_roundtrip_restores_original_models_and_preferences() {
     let version = web_version(preferences).expect("ima extension version");
     let manager = ImaBindingManager::default();
     let client = require_live_result("initial-auth", manager.connect(&detection, &version).await);
-    let transaction = ConfigTransaction::new(Arc::new(NativeSecretStore::default()), backup_root);
+    let transaction = ConfigTransaction::new(Arc::new(native_secret_store()), backup_root);
     // Reusing the same backup directory after an interrupted run first repairs
     // its journal. Never throw away a pending real-account recovery checkpoint.
     if manager
@@ -294,6 +305,10 @@ async fn ima_live_roundtrip_restores_original_models_and_preferences() {
         }
     }
     let before = require_live_result("initial-snapshot", client.snapshot().await);
+    let owned_before = require_live_result(
+        "initial-owned-model",
+        manager.owned_model_for_acceptance(&detection, &transaction),
+    );
     let before_local = require_live_result("initial-local", ima_local::snapshot(preferences));
     let mut exercise_stage = "initial";
     let exercise: AppResult<()> = async {
@@ -350,6 +365,25 @@ async fn ima_live_roundtrip_restores_original_models_and_preferences() {
         manager.verify_cached(&detection, &desired, &transaction)?;
         exercise_stage = "ui-third-party-after-restore";
         ui.wait("third-party-after-restore").await?;
+
+        exercise_stage = "switch-and-restore-while-stopped";
+        println!("IMA_LIVE_STAGE={exercise_stage}");
+        let pause = crate::agents::lifecycle::pause_for_config_update(&detection)?;
+        let stopped_exercise: AppResult<()> = async {
+            manager
+                .restore(&detection, &version, &transaction, &|| Ok(()))
+                .await?;
+            require_not_running(&detection)?;
+            manager
+                .apply(&detection, &version, &desired, &transaction, &|| Ok(()))
+                .await?;
+            manager.verify_cached(&detection, &desired, &transaction)?;
+            require_not_running(&detection)
+        }
+        .await;
+        let resumed = pause.resume();
+        stopped_exercise?;
+        resumed?;
         Ok(())
     }
     .await;
@@ -366,6 +400,10 @@ async fn ima_live_roundtrip_restores_original_models_and_preferences() {
         .await;
     require_live_result("final-recovery", recovery);
     let after = require_live_result("final-snapshot", client.snapshot().await);
+    let owned_after = require_live_result(
+        "final-owned-model",
+        manager.owned_model_for_acceptance(&detection, &transaction),
+    );
     assert!(
         before
             .scenes
@@ -375,17 +413,21 @@ async fn ima_live_roundtrip_restores_original_models_and_preferences() {
         "Original remote model preferences were not restored"
     );
     assert!(
-        before.homepage.models.len() == after.homepage.models.len()
-            && before
-                .homepage
-                .models
-                .iter()
-                .all(|model| after.homepage.models.contains(model)),
+        user_models_preserved(
+            &before.homepage.models,
+            &after.homepage.models,
+            owned_before.as_deref(),
+            owned_after.as_deref()
+        ),
         "Original user-configured model rows were not preserved"
     );
-    require_live_result(
-        "final-local",
-        ima_local::verify_snapshot(preferences, &before_local),
+    let after_local = require_live_result("final-local", ima_local::snapshot(preferences));
+    // Running ima may refresh its own selection timestamp. Production restore
+    // verifies the exact saved timestamp before relaunch; acceptance after
+    // relaunch checks model ID/type and presence, not a client-owned clock.
+    assert!(
+        runtime_selections(&before_local) == runtime_selections(&after_local),
+        "Original local model selections were not restored after relaunch"
     );
     println!("IMA_LIVE_RESTORATION=verified");
     if let Err(error) = exercise {
@@ -394,6 +436,101 @@ async fn ima_live_roundtrip_restores_original_models_and_preferences() {
             error.code
         );
     }
+}
+
+fn runtime_selections(snapshot: &ima_local::LocalSelectionSnapshot) -> serde_json::Value {
+    let mut value = serde_json::to_value(snapshot).expect("local snapshot serialization");
+    for scene in value["scenes"].as_array_mut().expect("snapshot scenes") {
+        scene
+            .as_object_mut()
+            .expect("snapshot scene")
+            .remove("timestamp");
+    }
+    value
+}
+
+fn require_not_running(detection: &crate::agents::AgentDetection) -> AppResult<()> {
+    let installation = detection
+        .installation
+        .as_ref()
+        .ok_or_else(live_configuration_error)?;
+    if crate::agents::lifecycle::runtime_status(installation, "ima")
+        != crate::domain::AgentRuntimeStatus::NotRunning
+    {
+        return Err(CommandError::new(
+            "ima_live_unexpected_launch",
+            "Switching a closed ima instance must not launch it",
+        ));
+    }
+    Ok(())
+}
+
+// An AT-Switch-owned row is intentionally retained and reused with different
+// model inputs after restore. Only that checkpoint-proven row may differ.
+fn user_models_preserved(
+    before: &[super::ImaModel],
+    after: &[super::ImaModel],
+    owned_before: Option<&str>,
+    owned_after: Option<&str>,
+) -> bool {
+    let original: Vec<_> = before
+        .iter()
+        .filter(|model| Some(model.customize_id.as_str()) != owned_before)
+        .collect();
+    let restored: Vec<_> = after
+        .iter()
+        .filter(|model| Some(model.customize_id.as_str()) != owned_after)
+        .collect();
+    original.len() == restored.len()
+        && original.iter().all(|model| restored.contains(model))
+        && after
+            .iter()
+            .filter(|model| Some(model.customize_id.as_str()) == owned_after)
+            .count()
+            <= 1
+}
+
+#[test]
+fn live_preservation_check_only_exempts_checkpoint_owned_rows() {
+    let model = |id: &str, name: &str| {
+        serde_json::from_value::<super::ImaModel>(
+            serde_json::json!({"customize_id": id, "model_name": name}),
+        )
+        .unwrap()
+    };
+    let before = vec![model("user", "original"), model("owned", "old-target")];
+    let after = vec![model("user", "original"), model("owned", "new-target")];
+    assert!(user_models_preserved(
+        &before,
+        &after,
+        Some("owned"),
+        Some("owned")
+    ));
+    assert!(!user_models_preserved(&before, &after, None, Some("owned")));
+    assert!(!user_models_preserved(
+        &before,
+        &[model("user", "changed"), model("owned", "new-target")],
+        Some("owned"),
+        Some("owned")
+    ));
+    assert!(!user_models_preserved(
+        &before,
+        &[model("owned", "new-target")],
+        Some("owned"),
+        Some("owned")
+    ));
+    assert!(!user_models_preserved(
+        &before,
+        &[model("user", "original"), model("unexpected", "extra")],
+        Some("owned"),
+        Some("owned")
+    ));
+    assert!(user_models_preserved(
+        &[model("user", "original")],
+        &after,
+        None,
+        Some("owned")
+    ));
 }
 
 #[tokio::test]

@@ -116,6 +116,29 @@ impl ImaBindingManager {
         )))
     }
 
+    #[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
+    pub(super) fn owned_model_for_acceptance(
+        &self,
+        detection: &AgentDetection,
+        transaction: &ConfigTransaction,
+    ) -> AppResult<Option<String>> {
+        let account = active_account(preferences_path(detection)?)?;
+        let Some(bytes) = transaction.read_service_checkpoint("ima", &resource_key(&account))?
+        else {
+            return Ok(None);
+        };
+        let bytes = Zeroizing::new(bytes);
+        let record: Checkpoint =
+            serde_json::from_slice(&bytes).map_err(|_| checkpoint_invalid())?;
+        if record.version != 1 || record.account_key != account {
+            return Err(checkpoint_invalid());
+        }
+        Ok(record
+            .managed
+            .filter(|model| model.remove_on_restore)
+            .map(|model| model.customize_id))
+    }
+
     #[cfg(test)]
     pub(super) async fn safe_checkpoint_diagnostics(
         &self,

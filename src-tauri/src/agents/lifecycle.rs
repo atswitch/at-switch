@@ -22,6 +22,10 @@ use windows_sys::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWN
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+#[cfg(target_os = "windows")]
+#[path = "ima/windows_lifecycle.rs"]
+mod windows_ima;
+
 use crate::domain::{AgentRuntimeStatus, AppResult, CommandError};
 
 use super::{
@@ -336,6 +340,9 @@ fn wait_for_macos_process_exit(pids: &[u32], display_name: &str) -> AppResult<()
 /// 才能让用户的切换流程不被「无法安全退出」卡死，体验与 macOS 对齐。
 #[cfg(target_os = "windows")]
 fn stop_desktop_app_if_running(installation: &Installation, display_name: &str) -> AppResult<bool> {
+    if display_name == "ima" {
+        return windows_ima::stop(installation);
+    }
     let pids = windows_process_ids(&installation.path, display_name)?;
     if pids.is_empty() {
         return Ok(false);
@@ -657,6 +664,12 @@ fn launch_desktop_app(installation: &Installation, display_name: &str) -> AppRes
     for attempt in 0..2 {
         let mut command = Command::new(&installation.path);
         command.creation_flags(CREATE_NO_WINDOW);
+        // Agent logs can contain account data. Keep a relaunched desktop app
+        // independent of AT-Switch's output and of live-test log capture.
+        command
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
         if let Some(directory) = &working_directory {
             command.current_dir(directory);
         }

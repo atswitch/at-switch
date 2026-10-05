@@ -46,8 +46,8 @@ export function AgentAccountConnectionConfirmation({
           <div>
             <strong>{text("使用本机已登录的 ima 账号", "Use the ima account signed in on this computer")}</strong>
             <p>{text(
-              "AT-Switch 将读取 ima 的登录凭据，无需复制或填写。系统可能提示允许访问钥匙串；同一账号连接成功后，无需再次确认连接。",
-              "AT-Switch reads ima's sign-in credentials; no copying or typing is needed. Your system may request keychain access. After a successful connection, the same account needs no further connection confirmation.",
+              "AT-Switch 将读取 ima 的登录凭据，无需复制或填写。macOS 可能提示允许访问钥匙串，Windows 使用当前用户的系统加密凭据；同一账号连接成功后，无需再次确认连接。",
+              "AT-Switch reads ima's sign-in credentials; no copying or typing is needed. macOS may request keychain access; Windows uses credentials encrypted for the current user. After a successful connection, the same account needs no further connection confirmation.",
             )}</p>
           </div>
         </div>

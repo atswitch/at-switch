@@ -2168,6 +2168,7 @@ mod tests {
             "Programs/AutoClaw/AutoClaw.exe",
             "Programs/Codex/Codex.exe",
             "Programs/DuMate/DuMate.exe",
+            "ima.copilot/Application/ima.copilot.exe",
         ] {
             let executable = local_app_data.join(relative);
             fs::create_dir_all(executable.parent().expect("parent")).expect("app directory");
@@ -2188,7 +2189,7 @@ mod tests {
         };
 
         let detections = registry.detections();
-        assert_eq!(detections.len(), 6);
+        assert_eq!(detections.len(), 7);
         for detection in detections {
             assert_ne!(
                 detection.install_status,
