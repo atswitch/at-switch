@@ -110,7 +110,9 @@ function checkCargoLicenses() {
   }
 
   const metadata = JSON.parse(result.stdout);
-  const packages = metadata.packages.filter((pkg) => pkg.source);
+  const packages = metadata.packages.filter(
+    (pkg) => pkg.source || path.relative(repositoryRoot, pkg.manifest_path).split(path.sep)[0] === "vendor",
+  );
   const problems = packages.flatMap((pkg) => {
     if (!pkg.license) return [`${pkg.name}@${pkg.version}: missing license metadata`];
     if (!approvedCargoExpressions.has(pkg.license)) {
