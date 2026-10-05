@@ -1,5 +1,6 @@
 import { CircleAlert, Power, RotateCw, ShieldCheck } from "lucide-react";
 import { useLanguage } from "../i18n";
+import { usesCloudModelSettings } from "../lib/agentCapabilities";
 import type { AgentSummary } from "../types";
 import { Modal } from "./Modal";
 
@@ -18,8 +19,11 @@ export function AgentRestartConfirmation({
 }: AgentRestartConfirmationProps) {
   const { text } = useLanguage();
   const restoring = operation === "restore";
+  const cloudModelSettings = usesCloudModelSettings(agent?.id ?? "");
   const action = restoring
-    ? text("恢复默认配置", "Restore default configuration")
+    ? cloudModelSettings
+      ? text("恢复原始模型", "Restore original models")
+      : text("恢复默认配置", "Restore default configuration")
     : text("切换模型", "Switch model");
   const automatic = agent?.automaticRestartSupported ?? false;
   const title = agent
@@ -78,12 +82,20 @@ export function AgentRestartConfirmation({
               <p>
                 {restoring
                   ? text(
-                      "移除 AT-Switch 路由并恢复接管前的模型配置",
-                      "Remove the AT-Switch route and restore the pre-takeover model configuration",
+                      cloudModelSettings
+                        ? "恢复「问问 ima」和「我的 copilot」各自原来的模型，保留已有自定义模型"
+                        : "移除 AT-Switch 路由并恢复接管前的模型配置",
+                      cloudModelSettings
+                        ? "Restore the original model for Ask ima and My copilot, preserving existing custom models"
+                        : "Remove the AT-Switch route and restore the pre-takeover model configuration",
                     )
                   : text(
-                      "写入新的模型供应商、模型和本地路由配置",
-                      "Write the new provider, model, and local route configuration",
+                      cloudModelSettings
+                        ? "更新腾讯 ima 当前账号的模型配置，同时切换「问问 ima」和「我的 copilot」"
+                        : "写入新的模型供应商、模型和本地路由配置",
+                      cloudModelSettings
+                        ? "Update the current Tencent ima account's model settings for Ask ima and My copilot"
+                        : "Write the new provider, model, and local route configuration",
                     )}
               </p>
             </div>

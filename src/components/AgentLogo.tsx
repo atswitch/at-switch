@@ -1,4 +1,4 @@
-import { Bot } from "lucide-react";
+import { BookOpen, Bot } from "lucide-react";
 import clsx from "clsx";
 import autoclawIcon from "../assets/agents/autoclaw.png";
 import codebuddyIcon from "../assets/agents/codebuddy.png";
@@ -32,6 +32,8 @@ export function AgentLogo({ agentId, className }: AgentLogoProps) {
     >
       {logo ? (
         <img src={logo} alt="" />
+      ) : agentId === "ima" ? (
+        <BookOpen strokeWidth={1.8} />
       ) : (
         <Bot strokeWidth={1.8} />
       )}

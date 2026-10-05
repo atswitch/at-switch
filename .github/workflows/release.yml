@@ -16,7 +16,7 @@ concurrency:
 jobs:
   release:
     # These versions publish the frozen website packages without rebuilding.
-    if: github.ref_name != 'v3.14.2' && github.ref_name != 'v3.15.1'
+    if: github.ref_name != 'v3.14.2' && github.ref_name != 'v3.15.1' && github.ref_name != 'v3.15.2'
     strategy:
       fail-fast: false
       matrix:

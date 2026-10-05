@@ -34,10 +34,11 @@ pub fn set_agent_install_path(
 
 #[tauri::command]
 pub async fn delete_provider(state: State<'_, AppState>, provider_id: String) -> AppResult<()> {
+    let delete = || state.providers.delete(&provider_id);
     let affected = state
-        .database
-        .affected_agent_ids_for_provider(&provider_id)?;
-    state.providers.delete(&provider_id)?;
+        .agents
+        .delete_provider_with_service_restore(&provider_id, &delete)
+        .await?;
     for agent_id in affected {
         if let Err(error) = state
             .agents
@@ -94,16 +95,24 @@ pub async fn test_provider(
 pub async fn apply_agent_binding(
     state: State<'_, AppState>,
     draft: AgentBindingDraft,
+    confirm_account_connection: Option<bool>,
 ) -> AppResult<AgentSummary> {
-    state.agents.apply(draft).await
+    state
+        .agents
+        .apply_authorized(draft, confirm_account_connection.unwrap_or(false))
+        .await
 }
 
 #[tauri::command]
 pub async fn restore_agent_native(
     state: State<'_, AppState>,
     agent_id: String,
+    confirm_account_connection: Option<bool>,
 ) -> AppResult<AgentSummary> {
-    state.agents.restore_native(&agent_id).await
+    state
+        .agents
+        .restore_native_authorized(&agent_id, confirm_account_connection.unwrap_or(false))
+        .await
 }
 
 #[tauri::command]

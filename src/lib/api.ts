@@ -7,6 +7,7 @@ import type {
   ProviderSummary,
   ProxyStatus,
 } from "../types";
+import { supportsDirectBinding, usesCloudModelSettings } from "./agentCapabilities";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 
@@ -107,6 +108,7 @@ const mockAgentDisplayNames = {
   autoclaw: "AutoClaw",
   codex: "Codex",
   dumate: "百度搭子",
+  ima: "ima",
 } as const;
 
 const mockSnapshotTemplate: AppSnapshot = {
@@ -127,6 +129,7 @@ const mockSnapshotTemplate: AppSnapshot = {
     mode: undefined,
     needsRestart: true,
     automaticRestartSupported: true,
+    requiresAccountConnection: usesCloudModelSettings(id) || undefined,
     message: "浏览器预览使用演示状态；Tauri 版本会读取本机真实安装",
   })),
   proxy: {
@@ -622,6 +625,15 @@ async function invokeMock<T>(
         (item) => item.id === draft.providerId,
       );
       if (!agent || !provider) throw new Error("Mock binding target missing");
+      if (usesCloudModelSettings(agent.id)) {
+        if (draft.mode !== "direct" || !supportsDirectBinding(agent.id, provider)) {
+          throw { code: "unsupported_protocol", message: "ima 需要公网 OpenAI Chat 接口" };
+        }
+        if (agent.requiresAccountConnection && args?.confirmAccountConnection !== true) {
+          throw { code: "agent_account_connection_required", message: "请先确认连接 ima" };
+        }
+        agent.requiresAccountConnection = false;
+      }
       agent.providerId = provider.id;
       agent.providerName = provider.name;
       agent.modelId = draft.modelId;
@@ -639,6 +651,12 @@ async function invokeMock<T>(
         (item) => item.id === (args?.agentId as string),
       );
       if (!agent) throw new Error("Mock Agent missing");
+      if (usesCloudModelSettings(agent.id) && agent.requiresAccountConnection) {
+        if (args?.confirmAccountConnection !== true) {
+          throw { code: "agent_account_connection_required", message: "请先确认连接 ima" };
+        }
+        agent.requiresAccountConnection = false;
+      }
       agent.providerId = undefined;
       agent.providerName = undefined;
       agent.modelId = undefined;
@@ -691,10 +709,10 @@ export const api = {
     invoke<string>("reveal_provider_api_key", { providerId }),
   testProvider: (providerId: string, modelId?: string) =>
     invoke<ProviderSummary>("test_provider", { providerId, modelId }),
-  applyAgentBinding: (draft: AgentBindingDraft) =>
-    invoke<AgentSummary>("apply_agent_binding", { draft }),
-  restoreAgentNative: (agentId: string) =>
-    invoke<AgentSummary>("restore_agent_native", { agentId }),
+  applyAgentBinding: (draft: AgentBindingDraft, confirmAccountConnection?: boolean) =>
+    invoke<AgentSummary>("apply_agent_binding", { draft, confirmAccountConnection }),
+  restoreAgentNative: (agentId: string, confirmAccountConnection?: boolean) =>
+    invoke<AgentSummary>("restore_agent_native", { agentId, confirmAccountConnection }),
   startProxy: () => invoke<ProxyStatus>("start_proxy"),
   stopProxy: () => invoke<ProxyStatus>("stop_proxy"),
   updateProxyPort: (port: number) =>

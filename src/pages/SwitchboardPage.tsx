@@ -17,7 +17,9 @@ import { useLanguage } from "../i18n";
 import { ProviderLogo } from "../components/ProviderLogo";
 import {
   directBindingRequirement,
+  directBindingUnavailableReason,
   supportsDirectBinding,
+  usesCloudModelSettings,
 } from "../lib/agentCapabilities";
 import {
   agentAvailabilityLabel,
@@ -88,6 +90,7 @@ export function SwitchboardPage({
   );
 
   const installed = agent.installStatus !== "not_installed";
+  const cloudModelSettings = usesCloudModelSettings(agent.id);
   const agentReady = installed && agent.adapterVerified;
   const modelCount = providersWithModels.reduce(
     (count, provider) => count + provider.models.length,
@@ -111,9 +114,13 @@ export function SwitchboardPage({
             <span>{text("当前路由", "Current route")}</span>
             <i aria-hidden="true">›</i>
             <span>
-              {agent.providerName
-                ? `${agent.providerName} · ${agent.modelId ?? text("模型", "Model")}`
-                : text("Agent 原生路由", "Agent native route")}
+              {cloudModelSettings && agent.activationRequired
+                ? text("模型状态待确认", "Model state needs confirmation")
+                : agent.providerName
+                  ? `${agent.providerName} · ${agent.modelId ?? text("模型", "Model")}`
+                  : cloudModelSettings
+                    ? text("ima 原有模型", "Original ima models")
+                    : text("Agent 原生路由", "Agent native route")}
             </span>
           </strong>
           <span
@@ -386,10 +393,7 @@ export function SwitchboardPage({
                               "Edit the model provider and save an API key first",
                             )
                           : !directCompatible
-                          ? text(
-                              `该模型供应商未提供 ${directBindingRequirement(agent.id, language)}；如需协议转换，请前往高级设置使用本地代理`,
-                              `This provider does not offer ${directBindingRequirement(agent.id, language)}. Use the local proxy in Advanced settings for protocol conversion.`,
-                            )
+                          ? directBindingUnavailableReason(agent.id, language)
                           : !agentReady
                             ? text(
                                 "智能体尚不可配置",
@@ -440,12 +444,15 @@ export function SwitchboardPage({
       <footer className="switchboard__safety">
         <ShieldCheck size={18} />
         <span>
-          {text(
+          {cloudModelSettings ? text(
+            "同时切换「问问 ima」和「我的 copilot」；保留接管前的模型选择，恢复时只撤销 AT-Switch 的更改。",
+            "Switch both Ask ima and My copilot. Preserve their original model selections and undo only AT-Switch changes when restoring.",
+          ) : text(
             "切换前自动建立加密备份；只修改 AT-Switch 管理的字段，失败时自动恢复。",
             "An encrypted backup is created before switching. Only AT-Switch-managed fields are changed, with automatic recovery on failure.",
           )}
         </span>
-        <b>LOCAL FIRST</b>
+        <b>{cloudModelSettings ? "IMA ACCOUNT" : "LOCAL FIRST"}</b>
       </footer>
     </div>
   );
@@ -463,24 +470,29 @@ function NativeRouteControl({
   onRestore: () => void;
 }) {
   const { text } = useLanguage();
+  const cloudModelSettings = usesCloudModelSettings(agent.id);
   const active =
     agent.installStatus !== "not_installed" &&
     !agent.providerId &&
+    (!cloudModelSettings || agent.configHealth === "healthy") &&
     !agent.activationRequired;
   return (
     <article className={clsx("switchboard-native-control", active && "is-active")}>
       <div className="switchboard-native-control__copy">
         <div>
-          <strong>{text("默认配置", "Default configuration")}</strong>
+          <strong>{cloudModelSettings ? text("原始模型", "Original models") : text("默认配置", "Default configuration")}</strong>
           <span>
-            {text(
+            {cloudModelSettings ? text("接管前的模型选择", "Pre-takeover model selections") : text(
               `${agent.displayName} 自带模型`,
               `${agent.displayName} built-in models`,
             )}
           </span>
         </div>
         <small>
-          {text(
+          {cloudModelSettings ? text(
+            "恢复两个入口各自原来的模型，保留你已有的自定义模型",
+            "Restore each entry's original model and preserve your existing custom models",
+          ) : text(
             "恢复接管前配置，不经过 AT-Switch 模型供应商",
             "Restore the pre-takeover configuration without an AT-Switch provider",
           )}

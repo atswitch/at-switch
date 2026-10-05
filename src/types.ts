@@ -91,6 +91,7 @@ export interface AgentSummary {
   needsRestart: boolean;
   automaticRestartSupported: boolean;
   activationRequired?: boolean;
+  requiresAccountConnection?: boolean;
   message?: string;
 }
 

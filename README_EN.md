@@ -2,7 +2,7 @@
 
 # AT-Switch
 
-### The All-in-One Manager & Model Switcher for WorkBuddy, CodeBuddy, QClaw, AutoClaw, Codex & DuMate
+### The All-in-One Manager & Model Switcher for WorkBuddy, CodeBuddy, QClaw, AutoClaw, Codex, DuMate & ima
 
 [![Version](https://img.shields.io/github/v/release/atswitch/at-switch?color=blue&label=version)](https://github.com/atswitch/at-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/atswitch/at-switch/releases)
@@ -51,12 +51,12 @@ Built with **Tauri 2, Rust, React, and TypeScript**, AT-Switch prioritizes secur
 
 - **Centralized Provider & Model Catalog**: Manage multiple upstream providers (DeepSeek, Kimi, Zhipu GLM, Doubao, MiniMax, Qwen, etc.) and their custom endpoints in one place.
 - **Per-Agent Independence**: Maintain separate model bindings, active configurations, and connection modes for each Agent.
-- **Direct Mode by Default**: Direct configuration writing removes network hops and latency; the local proxy is reserved under Advanced Settings for compatibility needs.
+- **Direct Mode by Default**: Uses each Agent's native model configuration mechanism; compatible Agents can use the local proxy under Advanced Settings.
 - **Multi-Protocol Translation**: Seamless interoperability between **OpenAI Chat Completions**, **OpenAI Responses**, and **Anthropic Messages** protocols.
 - **Streaming & Tool Calling**: Built-in codec preserves streaming chunks and function call structures across protocol transitions.
 - **Transactional Config Rollback**: Encrypted backups are automatically created prior to writing changes, with atomic file writes, validation pre-checks, and automatic rollback on failure.
 - **Automatic Lifecycle Management**: Automatically detects running Agent processes and performs graceful restarts when configuration changes.
-- **Native Security & Zero Cloud Dependency**: Zero collection of user prompts, completions, or telemetry. Runs strictly on `127.0.0.1`.
+- **Native Security & No AT-Switch Cloud Service**: No collection of user prompts, completions, or telemetry. The local proxy listens only on `127.0.0.1`; ima uses Tencent's own account settings as described below.
 
 ---
 
@@ -81,6 +81,15 @@ All official release binaries are hosted on [GitHub Releases](https://github.com
 | **AutoClaw** | macOS / Windows | ✅ Supported | OpenAI Chat Completions | Manages authoritative model catalogs in Electron user data |
 | **Codex** | macOS / Windows | ✅ Supported | OpenAI Responses | Updates `$CODEX_HOME/config.toml` or `~/.codex/config.toml` cleanly |
 | **Baidu DuMate** | macOS / Windows | ✅ Supported | OpenAI Chat Completions | Updates the active account's persistent XDG override for every session directory and built-in model alias |
+| **Tencent ima** | macOS / Windows | Implemented; validation scope below | Public OpenAI Chat Completions | Connects the locally signed-in account and synchronizes ima account settings with both local entry selections |
+
+### Using ima
+
+Select **ima** in the top bar, then click **Switch** beside a model in the existing provider list. The first connection asks you to confirm access to the ima account signed in on this computer. macOS may also request Keychain access; you do not need to copy sign-in credentials. The selected endpoint, API key, and model name are saved to Tencent ima through its custom-model settings and selected for both **Ask ima** and **My copilot**.
+
+ima currently accepts **public OpenAI Chat endpoints in Direct mode**. AT-Switch's local proxy and endpoints reachable only on this computer are unavailable for ima. Switching safely quits and reopens a running ima, so wait for any active generation to finish. **Restore original models** restores each entry's selection from before the first takeover and preserves existing custom models.
+
+See [ima integration and validation](IMA_INTEGRATION.md) for the current implementation and evidence. Full macOS switching and restoration validation remains incomplete. Windows has only undergone static investigation and compilation checks, with no device validation. This describes the working tree, not a published release.
 
 ---
 
