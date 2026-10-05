@@ -1,0 +1,2 @@
+d1f3dc3f10f170e852be40598d3c132e5210bf7dd4c2ef79669ca464500f7033  AT-Switch_3.15.2_universal.dmg
+20aa8eb02d934a76d368fcb28646e2a5ca4df809afef160e5b3fcc9f6cfa8a08  AT-Switch_3.15.2_x64-setup.exe

@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - master
+      - 'release/**'
   pull_request:
 
 permissions:
@@ -59,3 +60,14 @@ jobs:
 
       - name: Link desktop application
         run: npm run tauri -- build --debug --no-bundle
+
+  gtk-macro-backports:
+    name: GTK macro backport regression tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install native test dependencies
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev
+      - name: Test upstream macros and diagnostic backports
+        run: cargo test --manifest-path vendor/Cargo.toml --workspace --locked --lib --tests
