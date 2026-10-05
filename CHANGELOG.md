@@ -9,15 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [v3.15.2] - 2026-10-04
+## [v3.15.2] - 2026-10-05
 
 ### Added
 - Tencent ima model switching on macOS and Windows through its signed-in account model settings, limited to public OpenAI Chat Completions endpoints.
 - Account-scoped encrypted recovery checkpoints, two-scene selection verification, interruption recovery, and preservation of existing custom models and unrelated local settings.
 
+### Fixed
+- Request a normal ima shutdown on Windows before switching, preventing incorrect-shutdown prompts after restart; preserve the stopped state when ima is not running.
+- Isolate relaunched Windows agents' standard streams so their debug output does not enter AT-Switch logs.
+
+### Usage
+- Install and sign in to ima, then refresh Agent status. First connection asks permission to save the provider URL, API key, and model name in the current Tencent ima account.
+- Localhost, private-network endpoints, and the AT-Switch local proxy are not supported by the ima adapter. Save work before restarting and verify both entry points in new conversations.
+- Restoration preserves existing user models and leaves the AT-Switch-created model unselected for reuse.
+
 ### Validation
 - The macOS account round trip covers original model → third-party model → repeated switch → original model → third-party model → final restoration without creating duplicate model rows.
-- Frontend, Rust, formatting, Clippy, dependency-license, and existing-Agent regression gates pass. Windows implementation is covered by static and unit checks but still requires device validation.
+- Windows installation, native credentials, switching and restoration while running and stopped, normal restarts, real responses in Ask ima and My copilot, and actual copilot tool execution passed with GLM-5.2 and DeepSeek V4 Flash.
+- Frontend (107 tests), Windows Rust (187 tests), formatting, Clippy, dependency-license, and existing-Agent regression gates passed. Platform functionality and dependency security audits are recorded separately in the release verification record.
 
 ## [v3.15.1] - 2026-10-03
 
