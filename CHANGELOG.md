@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Account-scoped encrypted recovery checkpoints, two-scene selection verification, interruption recovery, and preservation of existing custom models and unrelated local settings.
 
 ### Fixed
+- Reuse an existing identical ima model before modifying a managed row, avoiding duplicate-model conflicts while preserving both rows and rollback behavior.
 - Request a normal ima shutdown on Windows before switching, preventing incorrect-shutdown prompts after restart; preserve the stopped state when ima is not running.
 - Isolate relaunched Windows agents' standard streams so their debug output does not enter AT-Switch logs.
 
@@ -30,8 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Validation
 - The macOS account round trip covers original model → third-party model → repeated switch → original model → third-party model → final restoration without creating duplicate model rows.
-- The original Windows candidate passed the full GLM-5.2/DeepSeek acceptance. After the security rebuild, installation, startup, GLM switching, provider connectivity and restoration pass. The repeat DeepSeek roundtrip is pending because ima returns service rate limit 100003; the failed run verified restoration.
-- Frontend (107 tests), Windows Rust (187 tests), formatting, Clippy, dependency-license, and existing-Agent regression gates passed. Platform functionality and dependency security audits are recorded separately in the release verification record.
+- The duplicate-model correction passes real-account GLM-5.2 and DeepSeek roundtrips, including repeated switching, stopped-app behavior and restoration with existing rows preserved. The earlier interpretation of code 100003 as a rate limit was incorrect.
+- Frontend (107 tests), Windows Rust (189 tests), formatting, Clippy and Windows/macOS/Linux CI passed. The rebuilt Windows installer passes installation and startup checks; installed UI switching and the matching notarized Mac package remain pending. See the release verification record for evidence and remaining gates.
 
 ## [v3.15.1] - 2026-10-03
 
