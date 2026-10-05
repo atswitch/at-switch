@@ -1,9 +1,10 @@
-import { BookOpen, Bot } from "lucide-react";
+import { Bot } from "lucide-react";
 import clsx from "clsx";
 import autoclawIcon from "../assets/agents/autoclaw.png";
 import codebuddyIcon from "../assets/agents/codebuddy.png";
 import codexIcon from "../assets/agents/codex.png";
 import dumateIcon from "../assets/agents/dumate.png";
+import imaIcon from "../assets/agents/ima.png";
 import qclawIcon from "../assets/agents/qclaw.png";
 import workbuddyIcon from "../assets/agents/workbuddy.png";
 
@@ -14,6 +15,7 @@ const agentLogos: Partial<Record<string, string>> = {
   autoclaw: autoclawIcon,
   codex: codexIcon,
   dumate: dumateIcon,
+  ima: imaIcon,
 };
 
 interface AgentLogoProps {
@@ -32,8 +34,6 @@ export function AgentLogo({ agentId, className }: AgentLogoProps) {
     >
       {logo ? (
         <img src={logo} alt="" />
-      ) : agentId === "ima" ? (
-        <BookOpen strokeWidth={1.8} />
       ) : (
         <Bot strokeWidth={1.8} />
       )}

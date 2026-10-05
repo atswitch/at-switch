@@ -6,14 +6,17 @@ Their inclusion does not imply endorsement, sponsorship, or affiliation.
 
 Tencent ima / ima.copilot is identified by its product name for compatibility with
 its model settings. The official product source is [Tencent ima](https://ima.qq.com/).
-AT-Switch uses a generic interface symbol for this entry and does not bundle an
-extracted ima application icon. The product name and trademarks remain the
-property of their respective owners.
+AT-Switch uses the official website favicon solely to identify this compatible
+product. The source asset is published by Tencent at
+`https://fe-static.ima.myqcloud.com/ima/assets/chat/favicon.svg`; the bundled
+`src/assets/agents/ima.png` is a 128×128 PNG conversion. The product name, icon,
+and trademarks remain the property of their respective owners and are not
+relicensed under this repository's MIT License.
 
 ## Bundled Identification Assets
 
-The repository contains the following identification assets. The maintainer
-confirmed their redistribution status on 2026-09-04.
+The repository contains the following identification assets. Each row records
+the asset's source category and distribution basis.
 
 | Product or service | Files | Source category | Distribution record |
 | --- | --- | --- | --- |
@@ -23,6 +26,7 @@ confirmed their redistribution status on 2026-09-04.
 | AutoClaw | `src/assets/agents/autoclaw.png` | Official macOS application icon | Maintainer-confirmed permission |
 | OpenAI Codex | `src/assets/agents/codex.png` | Official application icon | Maintainer-confirmed permission |
 | Baidu DuMate | `src/assets/agents/dumate.png` | Official macOS application icon | Compatibility identification; upstream trademark terms apply |
+| Tencent ima | `src/assets/agents/ima.png` | Official website favicon | Compatibility identification; upstream trademark terms apply |
 | DeepSeek | `src/assets/providers/deepseek.png`, `src/assets/providers/deepseek.ico` | Maintainer-provided product asset | Maintainer-confirmed permission |
 | Doubao | `src/assets/providers/doubao.png` | Maintainer-provided product asset | Maintainer-confirmed permission |
 | Kimi / Moonshot AI | `src/assets/providers/kimi.png`, `src/assets/providers/kimi.ico` | Maintainer-provided product asset | Maintainer-confirmed permission |
