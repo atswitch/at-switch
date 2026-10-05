@@ -43,6 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - Standalone `ProxyPage.tsx` — functionality merged into `SettingsPage` under the `proxy` tab.
 
+## [v3.15.1] - 2026-10-03
+
+### Fixed
+- DuMate switching now verifies every native model alias in the effective account override, preventing a stale route from being reported as successfully applied.
+- The settings footer now reads the packaged application version and current runtime platform instead of showing a stale hard-coded version and both platforms.
+- macOS release builds now require a complete Developer ID signing configuration and remain draft-only until signature, notarization, and clean-machine checks are complete.
+
 ## [v3.14.2] - 2026-09-08
 
 ### Added

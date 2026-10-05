@@ -280,6 +280,101 @@ fn repeated_switch_replaces_every_managed_model_without_stale_entries() {
 }
 
 #[test]
+fn verify_rejects_a_missing_native_route_instead_of_reporting_false_success() {
+    let temp = tempdir().expect("temp");
+    let config_path = temp.path().join("opencode.jsonc");
+    let runtime_data_dir = temp.path().join("xdg/user-1");
+    let native_path = runtime_data_dir.join("config/opencode/opencode.json");
+    fs::create_dir_all(native_path.parent().expect("native parent")).expect("native parent");
+    fs::write(
+        &native_path,
+        serde_json::to_vec(&json!({
+            "provider": {
+                "QianfanPersonalQuota": {
+                    "models": {
+                        "glm-5": { "id": "model-text" },
+                        "future-native-alias": { "id": "future-model" }
+                    }
+                }
+            }
+        }))
+        .expect("native json"),
+    )
+    .expect("native config");
+    fs::write(&config_path, b"{}\n").expect("initial override");
+    let detection = detection(config_path.clone(), runtime_data_dir);
+    let mut selected = desired();
+    selected.model_id = "selected-model";
+    let bytes = DuMateAdapter
+        .build_config(&detection, &selected)
+        .expect("build selected model");
+    let mut incomplete: Value = serde_json::from_slice(&bytes).expect("managed json");
+    incomplete["provider"][NATIVE_PROVIDER]["models"]
+        .as_object_mut()
+        .expect("native aliases")
+        .remove("future-native-alias");
+    fs::write(
+        &config_path,
+        serde_json::to_vec(&incomplete).expect("incomplete json"),
+    )
+    .expect("incomplete override");
+
+    let error = DuMateAdapter
+        .verify_config(&detection, &selected)
+        .expect_err("missing native alias must fail verification");
+    assert_eq!(error.code, "agent_config_not_applied");
+}
+
+#[test]
+fn verify_rejects_a_stale_account_override_even_when_generated_config_is_current() {
+    let temp = tempdir().expect("temp");
+    let config_path = temp.path().join("opencode.jsonc");
+    let runtime_data_dir = temp.path().join("xdg/user-1");
+    let native_path = runtime_data_dir.join("config/opencode/opencode.json");
+    fs::create_dir_all(native_path.parent().expect("native parent")).expect("native parent");
+    fs::write(
+        &native_path,
+        serde_json::to_vec(&json!({
+            "model": "QianfanPersonalQuota/glm-5",
+            "provider": {
+                "QianfanPersonalQuota": {
+                    "models": { "glm-5": { "id": "selected-model" } }
+                }
+            }
+        }))
+        .expect("native json"),
+    )
+    .expect("native config");
+    fs::write(
+        &config_path,
+        serde_json::to_vec(&json!({
+            "model": "at-switch/stale-model",
+            "small_model": "at-switch/stale-model",
+            "provider": {
+                "at-switch": provider_config(&desired(), &["stale-model".to_owned()]),
+                "QianfanPersonalQuota": provider_config(
+                    &desired(),
+                    &REQUIRED_NATIVE_ALIASES
+                        .iter()
+                        .map(|alias| (*alias).to_owned())
+                        .collect::<Vec<_>>()
+                )
+            }
+        }))
+        .expect("stale json"),
+    )
+    .expect("stale override");
+    let detection = detection(config_path, runtime_data_dir);
+    let mut selected = desired();
+    selected.model_id = "selected-model";
+
+    let error = DuMateAdapter
+        .verify_config(&detection, &selected)
+        .expect_err("effective account override must win over generated config");
+    assert_eq!(error.code, "agent_config_not_applied");
+}
+
+#[test]
 fn native_restore_removes_only_managed_values_and_preserves_user_content() {
     let temp = tempdir().expect("temp");
     let config_path = temp.path().join("opencode.jsonc");
