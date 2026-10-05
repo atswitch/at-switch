@@ -11,7 +11,8 @@
 | `autoclaw.png` | AutoClaw macOS 官方应用 `icon.icns` |
 | `codex.png` | OpenAI 官方 ChatGPT/Codex 应用图标 |
 | `dumate.png` | 百度搭子（DuMate）macOS 官方应用 `icon.icns` |
+| `ima.png` | 腾讯 ima 官方网站公开 `favicon.svg`，转换为 128×128 PNG |
 
 这些图标只用于识别对应产品。产品名、图标和商标归各自权利人所有，不属于本仓库
-MIT 许可证的授权范围。维护者已确认当前素材可以随项目分发；上游品牌规范或素材
+MIT 许可证的授权范围。素材来源与分发依据以第三方声明为准；上游品牌规范或素材
 变化时必须重新核对。完整说明见 [第三方声明](../../../THIRD_PARTY_NOTICES.md)。
