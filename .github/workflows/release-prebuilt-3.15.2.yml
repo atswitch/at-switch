@@ -1,0 +1,81 @@
+name: Publish verified v3.15.2 packages
+
+on:
+  push:
+    tags:
+      - 'v3.15.2'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-prebuilt-v3.15.2
+  cancel-in-progress: false
+
+jobs:
+  verify-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify the frozen Mac package and notarization
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --proto '=https' --tlsv1.2 --output AT-Switch_3.15.2_universal.dmg https://atswitch.io/downloads/AT-Switch_3.15.2_universal.dmg
+          grep '  AT-Switch_3.15.2_universal.dmg$' .github/releases/v3.15.2-checksums.txt | shasum -a 256 --check -
+          bash scripts/verify-macos-package.sh AT-Switch_3.15.2_universal.dmg 3.15.2 CQ28DNKYR3
+  publish:
+    needs: verify-macos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Verify source version
+        run: node scripts/check-release-version.mjs
+      - name: Download and verify the frozen website packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir artifacts
+          cd artifacts
+          curl --fail --location --retry 3 --proto '=https' --tlsv1.2 --output AT-Switch_3.15.2_universal.dmg https://atswitch.io/downloads/AT-Switch_3.15.2_universal.dmg
+          curl --fail --location --retry 3 --proto '=https' --tlsv1.2 --output AT-Switch_3.15.2_x64-setup.exe https://atswitch.io/downloads/AT-Switch_3.15.2_x64-setup.exe
+          cp ../.github/releases/v3.15.2-checksums.txt checksums.txt
+          sha256sum --check checksums.txt
+      - name: Publish verified packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=v3.15.2
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" > releases.json
+          release=$(jq -c --arg tag "$tag" '.[] | select(.tag_name == $tag)' releases.json)
+          if [[ -n "$release" ]]; then
+            if [[ $(jq -r '.draft' <<< "$release") != true ]]; then
+              echo 'Refusing to overwrite an already public release.' >&2
+              exit 1
+            fi
+          else
+            gh release create "$tag" --verify-tag --draft --title "AT-Switch $tag" --notes-file ".github/releases/$tag.md"
+          fi
+          gh release edit "$tag" --draft --title "AT-Switch $tag" --notes-file ".github/releases/$tag.md"
+          gh release view "$tag" --json assets > assets.json
+          mkdir existing
+          for file in AT-Switch_3.15.2_universal.dmg AT-Switch_3.15.2_x64-setup.exe checksums.txt; do
+            if jq -e --arg name "$file" '.assets[] | select(.name == $name)' assets.json > /dev/null; then
+              gh release download "$tag" --pattern "$file" --dir existing
+              cmp "artifacts/$file" "existing/$file"
+            else
+              gh release upload "$tag" "artifacts/$file"
+            fi
+          done
+          gh release view "$tag" --json assets > assets.json
+          jq -e '[.assets[].name] | sort == (["AT-Switch_3.15.2_universal.dmg", "AT-Switch_3.15.2_x64-setup.exe", "checksums.txt"] | sort)' assets.json
+          mkdir uploaded
+          gh release download "$tag" --dir uploaded
+          (cd uploaded && sha256sum --check ../artifacts/checksums.txt)
+          cmp artifacts/checksums.txt uploaded/checksums.txt
+          gh release edit "$tag" --draft=false --prerelease=false --latest
