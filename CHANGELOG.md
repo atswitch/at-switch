@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Request a normal ima shutdown on Windows before switching, preventing incorrect-shutdown prompts after restart; preserve the stopped state when ima is not running.
 - Isolate relaunched Windows agents' standard streams so their debug output does not enter AT-Switch logs.
 
+### Security
+- Upgrade rustls to 0.23.45 to fix RUSTSEC-2026-0285; upgrade Tauri to 2.12.1 and remove six unmaintained transitive dependencies, with upstream GTK macro diagnostic backports.
+- Whole-lock Rust advisory checks and production npm audit pass without exceptions.
+
 ### Usage
 - Install and sign in to ima, then refresh Agent status. First connection asks permission to save the provider URL, API key, and model name in the current Tencent ima account.
 - Localhost, private-network endpoints, and the AT-Switch local proxy are not supported by the ima adapter. Save work before restarting and verify both entry points in new conversations.
@@ -26,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Validation
 - The macOS account round trip covers original model → third-party model → repeated switch → original model → third-party model → final restoration without creating duplicate model rows.
-- Windows installation, native credentials, switching and restoration while running and stopped, normal restarts, real responses in Ask ima and My copilot, and actual copilot tool execution passed with GLM-5.2 and DeepSeek V4 Flash.
+- The original Windows candidate passed the full GLM-5.2/DeepSeek acceptance. After the security rebuild, installation, startup, GLM switching, provider connectivity and restoration pass. The repeat DeepSeek roundtrip is pending because ima returns service rate limit 100003; the failed run verified restoration.
 - Frontend (107 tests), Windows Rust (187 tests), formatting, Clippy, dependency-license, and existing-Agent regression gates passed. Platform functionality and dependency security audits are recorded separately in the release verification record.
 
 ## [v3.15.1] - 2026-10-03

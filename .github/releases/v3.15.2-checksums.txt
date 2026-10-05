@@ -1,2 +1,2 @@
-e67cec82a9729b9aafff9e70ca254b1f300dd78efb87fd50b2d5edccf5471a85  AT-Switch_3.15.2_universal.dmg
-9b5e9dab024ce16f182024dca445b17a884d7c3d09df4e791bf5bab62eca732c  AT-Switch_3.15.2_x64-setup.exe
+875836719b84a071194810311c048daf2df40896d61bcb43882c13c260d58fb2  AT-Switch_3.15.2_universal.dmg
+ee63fb915ad49d0d6eff14dac2e7040443f28eb3a9d32ddafca782d5f5226509  AT-Switch_3.15.2_x64-setup.exe
