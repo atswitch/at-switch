@@ -106,6 +106,7 @@ export interface AgentSummary {
   needsRestart: boolean;
   automaticRestartSupported: boolean;
   activationRequired?: boolean;
+  requiresAccountConnection?: boolean;
   message?: string;
   /**
    * 当 Agent 无法被 AT-Switch 自动恢复到出厂默认模型（用户从未被接管过，磁盘

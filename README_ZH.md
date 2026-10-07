@@ -2,7 +2,7 @@
 
 # AT-Switch
 
-### WorkBuddy、CodeBuddy、QClaw、AutoClaw、Codex、百度搭子、Hermes、OpenCode、Kimi Work、AionClaw 与 ZCode 的全方位管理与模型切换工具
+### WorkBuddy、CodeBuddy、QClaw、AutoClaw、Codex、百度搭子、Hermes、OpenCode、Kimi Work、AionClaw、ZCode 与 ima 的全方位管理与模型切换工具
 
 [![Version](https://img.shields.io/github/v/release/atswitch/at-switch?color=blue&label=version)](https://github.com/atswitch/at-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/atswitch/at-switch/releases)
@@ -41,7 +41,7 @@
 
 它将各个 AI Agent 繁琐分散的配置方式统一为同一套直观的桌面工作流：**选择智能体 → 维护供应商 → 选择模型 → 秒级切换**。
 
-- **直连优先**：应用默认以原生直连方式修改 Agent 配置文件，零代理开销、无网络延迟。
+- **直连优先**：应用默认使用 Agent 的原生模型配置机制，不经过 AT-Switch 本地代理。
 - **本地代理**：当需要跨协议转换（如 Codex Responses 与通用 Chat 协议互转）或密钥隔离时，可一键启用本地代理。
 - **本地安全**：基于 Tauri 2、Rust、React 与 TypeScript 构建。敏感 API Key 存储在系统凭据库（macOS Keychain 或 Windows Credential Manager），应用绝不收集任何 Prompt 提示词、模型回复或日志。
 
@@ -91,7 +91,15 @@
 | **Kimi Work** | macOS / Windows | 🟡 仅检测 | — | Daimon 会在每次启动时用服务端下发的默认模型覆盖 `model.current`（实测连官方模型名 `k3-agent` 也会被重置为 `k2d8-preview`），运行态 TOML 的 `default_model` 因此永远回落到官方模型。写入的自有 Provider 虽会出现在运行态 TOML 中，但不会被选中，本地无可用写入通道，故不修改其配置 |
 | **AionClaw** | macOS / Windows | ✅ 支持 | OpenAI Chat Completions / OpenAI Responses / Anthropic Messages | 更新沙盒内 `openclaw/state/openclaw.json` 的受管 Provider 与默认模型，与 QClaw 复用同一套实现 |
 | **EasyClaw** | macOS / Windows | ✅ 支持 | OpenAI Chat Completions / OpenAI Responses / Anthropic Messages | 同样基于 OpenClaw 内核（应用内 `gateway.asar/openclaw.mjs`），更新 `~/.easyclaw/easyclaw.json` 的受管 Provider 与 `agents.defaults.model.primary`；该文件即权威配置（`EASYCLAW_CONFIG_DIR` 指向 `~/.easyclaw`），无需再写第二处 |
-| **ima** | macOS / Windows | 🟡 仅检测 | — | ima 确有自定义模型入口（`Default/Preferences` 的 `kExtraSettingInfo`，含用户添加的 `NMauto`），但**外部写入留不住**：在 ima 关闭时改写选中态，它启动 11 秒即重写并改回原值；该模型 UUID 在本地除 `Preferences` 外无任何副本，权威态在服务端，故不写入 |
+| **腾讯 ima** | macOS / Windows | 当前实现，验收范围见下文 | 公网 OpenAI Chat Completions | 连接本机已登录账号，同步 ima 账号模型设置与两个入口的本地选择 |
+
+### ima 使用说明
+
+顶部选择 **ima**，在现有供应商与模型列表中点击「切换」。首次连接需确认使用本机已登录的 ima 账号；macOS 还可能提示钥匙串访问授权，无需手动复制登录凭据。所选接口地址、API Key 和模型名会按 ima 的自定义模型机制保存到腾讯 ima，并同时用于「问问 ima」和「我的 copilot」。
+
+ima 当前仅提供**公网 OpenAI Chat 直连**，不支持 AT-Switch 本地代理或仅本机可访问的接口。运行中切换会安全退出并重新打开 ima，请先等待当前生成完成。「恢复原始模型」恢复首次接管前两个入口各自的选择，保留已有自定义模型。
+
+当前实现与验证范围见 [ima 接入与验收记录](IMA_INTEGRATION.md)。macOS 完整切换与恢复验收尚未完成；Windows 目前仅完成静态研究与编译检查，未经真机验收。此说明不代表新增功能已经发布。
 
 ---
 
