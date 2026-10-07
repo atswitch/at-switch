@@ -91,6 +91,8 @@ pub struct AgentSummary {
     pub needs_restart: bool,
     pub automatic_restart_supported: bool,
     pub activation_required: bool,
+    #[serde(default)]
+    pub requires_account_connection: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     /// 当 Agent 无法被 AT-Switch 自动恢复到出厂默认模型（用户从未被 AT-Switch

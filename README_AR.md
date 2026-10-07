@@ -2,7 +2,7 @@
 
 # AT-Switch
 
-### أداة شاملة لإدارة وتبديل النماذج لـ WorkBuddy و CodeBuddy و QClaw و AutoClaw و Codex و DuMate و Hermes و OpenCode و Kimi Work و AionClaw و ZCode
+### أداة شاملة لإدارة وتبديل النماذج لـ WorkBuddy و CodeBuddy و QClaw و AutoClaw و Codex و DuMate و Hermes و OpenCode و Kimi Work و AionClaw و ZCode و ima
 
 [![Version](https://img.shields.io/github/v/release/atswitch/at-switch?color=blue&label=version)](https://github.com/atswitch/at-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/atswitch/at-switch/releases)
@@ -41,7 +41,7 @@
 
 بدلاً من البحث في ملفات التكوين المشتتة لكل تطبيق، يوحد AT-Switch سير العمل في مسار مكتبي واضح: **اختيار الوكيل ← إدارة المزوّد ← اختيار النموذج ← التبديل الفوري**.
 
-- **الاتصال المباشر أولاً**: يقوم التطبيق افتراضياً بتعديل ملفات تكوين الوكلاء محلياً وبشكل مباشر دون أي تأخير أو وسيط.
+- **الاتصال المباشر أولاً**: يستخدم التطبيق افتراضياً آلية إعداد النماذج الأصلية لكل وكيل دون المرور عبر الوكيل المحلي لـ AT-Switch.
 - **الوكيل المحلي (Local Proxy)**: عند الحاجة إلى تحويل البروتوكولات أو عزل مفاتيح API، يمكن تفعيل الوكيل المحلي بنقرة واحدة من الإعدادات المتقدمة.
 - **أمان وخصوصية محلية**: مبني باستخدام Tauri 2 و Rust و React و TypeScript. تُحفظ مفاتيح API الحساسة في خزائن بيانات الاعتماد الأصلية للنظام (macOS Keychain أو Windows Credential Manager)، ولا يتم أبداً جمع أو تسجيل مدخلات Prompt أو ردود النماذج.
 
@@ -91,7 +91,15 @@
 | **Kimi Work** | macOS / Windows | 🟡 اكتشاف فقط | — | يعيد Daimon كتابة `model.current` عند كل تشغيل بالنموذج الافتراضي القادم من الخادم (حتى اسم نموذج رسمي مثل `k3-agent` يُعاد إلى `k2d8-preview`)، لذا يبقى `default_model` في TOML الخاص بالتشغيل على النموذج الرسمي؛ ومزوّد مخصّص يظهر في TOML لكنه لا يُختار أبدًا. لا توجد قناة كتابة محلية، لذا لا تُعدَّل إعداداته |
 | **AionClaw** | macOS / Windows | ✅ مدعوم | OpenAI Chat Completions / OpenAI Responses / Anthropic Messages | تحديث المزوّد المُدار والنموذج الافتراضي في `openclaw/state/openclaw.json` داخل البيئة المعزولة، بمشاركة التنفيذ نفسه مع QClaw |
 | **EasyClaw** | macOS / Windows | ✅ مدعوم | OpenAI Chat Completions / OpenAI Responses / Anthropic Messages | يعمل أيضًا بنواة OpenClaw (`gateway.asar/openclaw.mjs`)؛ يحدّث المزوّد المُدار و`agents.defaults.model.primary` في `~/.easyclaw/easyclaw.json` وهو الإعداد المرجعي (`EASYCLAW_CONFIG_DIR` يشير إلى `~/.easyclaw`)، فلا حاجة لملف ثانٍ |
-| **ima** | macOS / Windows | 🟡 اكتشاف فقط | — | يمتلك ima مدخلًا للنماذج المخصّصة (`kExtraSettingInfo` في `Default/Preferences`، ويشمل `NMauto` الذي أضافه المستخدم)، لكن **الكتابة الخارجية لا تثبت**: بعد كتابة اختيار مختلف وima مغلق، أعاد ima كتابة الملف بعد 11 ثانية من التشغيل وأعاد القيمة الأصلية؛ ولا يظهر معرّف النموذج محليًا إلا في `Preferences`، فالحالة المرجعية على الخادم، لذلك لا يُكتب أي شيء |
+| **Tencent ima** | macOS / Windows | منفّذ؛ نطاق التحقق موضح أدناه | OpenAI Chat Completions عبر الإنترنت العام | ربط الحساب المسجل محلياً ومزامنة إعدادات ima واختيار النموذج في الواجهتين |
+
+### استخدام ima
+
+اختر **ima** من الشريط العلوي، ثم اضغط **تبديل** بجوار نموذج في قائمة المزوّدين الحالية. عند الاتصال لأول مرة، تؤكد السماح باستخدام حساب ima المسجل على هذا الجهاز. قد يطلب macOS أيضاً إذن الوصول إلى Keychain؛ لا حاجة إلى نسخ بيانات تسجيل الدخول يدوياً. يُحفظ عنوان API ومفتاحه واسم النموذج في خدمة Tencent ima ضمن إعدادات النماذج المخصصة، ويُختار النموذج لكل من **Ask ima** و **My copilot**.
+
+يدعم ima حالياً **الاتصال المباشر بنقاط OpenAI Chat المتاحة عبر الإنترنت العام** فقط. لا يدعم الوكيل المحلي لـ AT-Switch أو نقاط النهاية المتاحة على هذا الجهاز وحده. يُغلق ima قيد التشغيل بأمان ثم يُفتح مجدداً عند التبديل، لذا انتظر انتهاء أي توليد جارٍ. تعيد **استعادة النماذج الأصلية** اختيار كل واجهة إلى حالته قبل الإدارة الأولى، مع الاحتفاظ بالنماذج المخصصة الموجودة.
+
+راجع [توثيق تكامل ima والتحقق منه](IMA_INTEGRATION.md) لمعرفة التنفيذ الحالي ونطاق التحقق. لم يكتمل التحقق الكامل من التبديل والاستعادة على macOS. اقتصر التحقق في Windows على الفحص الثابت وفحوص الترجمة البرمجية، دون اختبار على جهاز فعلي. لا يعني هذا الوصف أن الميزة نُشرت في إصدار رسمي.
 
 ---
 

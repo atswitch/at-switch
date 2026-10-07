@@ -226,44 +226,6 @@ pub const KIMI_WORK_ADAPTER: DetectionOnlyAdapter = DetectionOnlyAdapter::new(
     "Kimi Work 已检测到；其运行时配置由 Daimon 在每次启动时按服务端下发的默认模型重建（model.current 会被无条件覆盖），本地写入无法生效，因此不修改其配置，当前只显示安装状态。",
 );
 
-/// ima（腾讯，`com.tencent.imamac`）。**注意它确实有自定义模型入口**，只是写入留不住。
-///
-/// 它是原生壳 + CEF（Frameworks 里是 `ImSDKForMac_Plus` / `MMKV` / `RDelivery`），
-/// 没有 Electron 的 `app.asar`。模型配置是**本地明文**，在
-/// `Default/Preferences` 的 `kExtraSettingInfo`（JSON 字符串）里：
-///
-/// ```text
-/// modelConfig.modelOptions = [ {id:3, name:"DeepSeek-V4-Flash", modelId:"official_3"},
-///                              …,
-///                              {id:1000000, name:"NMauto", desc:"自定义模型",
-///                               modelId:"9305e434-c7b3-48fa-8b31-181e202567e0"} ]
-/// modelConfig.modelType / modelId / hasUserSelection   ← 选中态
-/// ```
-///
-/// 但**外部写入会被覆盖**。真机对照实验（ima 关闭 → 写入 `modelType=3` /
-/// `modelId="official_3"` → 打开 ima）：
-///
-/// - ima 启动 **11 秒**后即重写 `Preferences`，选中态被改回 `1000000` /
-///   `9305e434-…`，并把 `hasUserSelection` 置回 `false`
-/// - 用该模型 UUID 反查整个数据目录，**除 `Preferences` 外没有任何副本**
-///   （`mmkv/`、leveldb、`com.tencent.imamac.plist` 均无），说明权威状态在服务端
-///
-/// 结论：模型清单与选中态由登录态 + 服务端下发，本地没有可写入的通道，
-/// 因此只做安装检测。这与 QClaw / EasyClaw 那类"自有 Provider 可写"的发行版不同。
-pub const IMA_ADAPTER: DetectionOnlyAdapter = DetectionOnlyAdapter::new(
-    "ima",
-    "ima",
-    &["ima.copilot.app"],
-    &["com.tencent.imamac"],
-    &["Programs/ima/ima.exe", "ima/ima.exe"],
-    &[
-        "Library/Application Support/com.tencent.imamac",
-        "AppData/Roaming/com.tencent.imamac",
-        "AppData/Local/com.tencent.imamac",
-    ],
-    "ima 已检测到；其模型由登录态与服务端下发，本地没有用户级模型配置入口，AT-Switch 不修改其配置，当前只显示安装状态。",
-);
-
 /// Accio（`com.accio.desktop`，阿里国际电商 AI Agent 桌面端 "Accio Work"）。
 /// 它是**服务端锁定**的智能体，本地没有任何自定义模型/Provider 写入通道：
 ///

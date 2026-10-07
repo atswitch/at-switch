@@ -108,6 +108,7 @@ export function SettingsPage({
     { id: "about", label: text("关于", "About"), icon: Info },
   ];
 
+
   return (
     <div className="settings-center">
       <nav

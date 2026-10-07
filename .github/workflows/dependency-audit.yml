@@ -5,14 +5,19 @@ on:
     branches:
       - main
       - master
+      - 'release/**'
     paths:
       - package-lock.json
       - src-tauri/Cargo.lock
+      - src-tauri/Cargo.toml
+      - vendor/**
       - .github/workflows/dependency-audit.yml
   pull_request:
     paths:
       - package-lock.json
       - src-tauri/Cargo.lock
+      - src-tauri/Cargo.toml
+      - vendor/**
       - .github/workflows/dependency-audit.yml
   schedule:
     - cron: '23 3 * * 1'

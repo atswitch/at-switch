@@ -7,6 +7,7 @@ import {
   isSwitchableAgent,
   providerSupportedProtocols,
   supportsDirectBinding,
+  supportsProxyBinding,
 } from "./agentCapabilities";
 import type { AgentSummary, ProviderSummary } from "../types";
 
@@ -114,9 +115,11 @@ describe("Agent protocol capabilities", () => {
     expect(isDetectionOnlyAgent("easyclaw")).toBe(false);
   });
 
-  it("treats ima as read-only because it exposes no provider configuration", () => {
-    expect(isDetectionOnlyAgent("ima")).toBe(true);
-    expect(isSwitchableAgent(agent("ima"))).toBe(false);
+  // ima 的权威模型设置在账号侧：AT-Switch 读取登录态后直连写入公网 OpenAI Chat
+  // 接口，所以它可切换，但没有本地 Provider 配置面。
+  it("treats ima as switchable through its account-side cloud model settings", () => {
+    expect(isDetectionOnlyAgent("ima")).toBe(false);
+    expect(isSwitchableAgent(agent("ima"))).toBe(true);
   });
 
   it("treats Accio as read-only because its models are server-locked behind its own gateway", () => {
@@ -152,6 +155,28 @@ describe("Agent protocol capabilities", () => {
     };
     expect(supportsDirectBinding("qclaw", anthropic)).toBe(true);
     expect(supportsDirectBinding("autoclaw", anthropic)).toBe(true);
+  });
+
+  it("supports ima through public OpenAI Chat endpoints across providers", () => {
+    expect(supportsDirectBinding("ima", { ...mongyun, baseUrl: "https://api.example.test/v1" })).toBe(true);
+    expect(supportsDirectBinding("ima", { ...mongyun, baseUrl: "https://[2606:4700::1111]/v1" })).toBe(true);
+    expect(supportsDirectBinding("ima", { kind: "custom", protocol: "openai_chat_completions", baseUrl: "https://other.example.test/v1/chat/completions" })).toBe(true);
+    expect(supportsDirectBinding("ima", { kind: "custom", protocol: "openai_responses", baseUrl: "https://api.example.test/v1" })).toBe(false);
+    expect(supportsProxyBinding("ima")).toBe(false);
+    expect(supportsProxyBinding("dumate")).toBe(true);
+  });
+
+  it.each([
+    "http://localhost:1234/v1", "http://127.0.0.1:1234/v1",
+    "http://127.1:1234/v1", "http://192.168.1.2/v1", "http://10.1.2.3/v1",
+    "http://172.16.2.3/v1", "http://169.254.1.2/v1", "http://100.64.1.2/v1",
+    "http://[::1]:1234/v1", "http://[::ffff:127.0.0.1]/v1",
+    "http://[fc00::1]/v1", "http://[fe80::1]/v1", "http://[ff00::1]/v1",
+    "http://model.lan/v1", "http://model.home/v1",
+    "http://model.local/v1", "http://model.internal/v1", "http://model.localhost/v1",
+    "file:///local/model", "not-a-url",
+  ])("disables ima for cloud-inaccessible endpoint %s", (baseUrl) => {
+    expect(supportsDirectBinding("ima", { ...mongyun, baseUrl })).toBe(false);
   });
 });
 

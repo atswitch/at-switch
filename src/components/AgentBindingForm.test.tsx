@@ -55,6 +55,12 @@ const provider: ProviderSummary = {
 };
 
 describe("AgentBindingForm", () => {
+  it("does not offer a local proxy submission for ima", () => {
+    render(<AgentBindingForm agent={{ ...agent, id: "ima", displayName: "ima" }} providers={[provider]} mode="proxy" busy={false} onSubmit={vi.fn()} />);
+    expect(screen.getByText("请在首页切换 ima 模型")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "应用到 ima" })).not.toBeInTheDocument();
+  });
+
   it("keeps direct mode read-only and exposes the macOS installation action inline", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();

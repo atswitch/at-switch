@@ -84,8 +84,6 @@ fn detection_only_agent_metadata_is_stable() {
     assert_eq!(DOUBAO_WORK_ADAPTER.display_name(), "豆包工作");
     assert_eq!(COZE_ADAPTER.id(), "coze");
     assert_eq!(COZE_ADAPTER.display_name(), "扣子");
-    assert_eq!(IMA_ADAPTER.id(), "ima");
-    assert_eq!(IMA_ADAPTER.display_name(), "ima");
     assert_eq!(KIMI_WORK_ADAPTER.id(), "kimiwork");
     assert_eq!(KIMI_WORK_ADAPTER.display_name(), "Kimi Work");
     assert_eq!(ACCIO_ADAPTER.id(), "accio");

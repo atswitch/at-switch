@@ -1,10 +1,10 @@
 [package]
 name = "at-switch"
-version = "3.14.2"
+version = "3.15.2"
 description = "Local-first provider, model and proxy configuration manager for AI agents."
 authors = ["AT-Switch Contributors"]
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.90"
 license = "MIT"
 repository = "https://github.com/atswitch/at-switch"
 homepage = "https://github.com/atswitch/at-switch"
@@ -15,7 +15,7 @@ name = "at_switch_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2.7.1", features = [] }
 
 [dependencies]
 async-stream = "0.3"
@@ -36,7 +36,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml = "0.9"
 sha2 = "0.10"
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2.12.1", features = ["tray-icon"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
@@ -51,7 +51,10 @@ tauri-plugin-dialog = "2"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",
+  "Win32_Security_Cryptography",
   "Win32_Storage_FileSystem",
+  "Win32_System_RestartManager",
+  "Win32_System_Threading",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ] }
@@ -65,3 +68,9 @@ codegen-units = 16
 lto = "thin"
 opt-level = "s"
 strip = "symbols"
+
+# Backport upstream syn::Error handling until Tauri adopts newer GTK bindings.
+# See vendor/README.md for source revisions, scope, and removal conditions.
+[patch.crates-io]
+glib-macros = { path = "../vendor/glib-macros" }
+gtk3-macros = { path = "../vendor/gtk3-macros" }

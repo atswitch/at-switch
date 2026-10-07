@@ -7,6 +7,7 @@ dist-ssr/
 
 # Rust / Tauri Build Artifacts
 src-tauri/target/
+vendor/target/
 
 # IDE & Editor Configs
 .idea/
@@ -45,3 +46,5 @@ test-results/
 build-log.txt
 .workbuddy/
 
+# Agent Instruction Files
+AGENTS.md
