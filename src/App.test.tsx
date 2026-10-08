@@ -66,7 +66,8 @@ describe("AT-Switch desktop shell", () => {
     const apply = vi.spyOn(api, "applyAgentBinding");
     const restore = vi.spyOn(api, "restoreAgentNative");
     render(<App />);
-    await user.click(await screen.findByRole("tab", { name: "ima" }));
+    await user.click(await screen.findByRole("button", { name: /更多智能体/ }));
+    await user.click(screen.getByRole("menuitemradio", { name: /^ima/ }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(apply).not.toHaveBeenCalled();
 
@@ -105,7 +106,8 @@ describe("AT-Switch desktop shell", () => {
     const apply = vi.spyOn(api, "applyAgentBinding").mockRejectedValueOnce({ code: "ima_switch_failed", message: "切换失败，已恢复先前配置" });
     const user = userEvent.setup();
     render(<App />);
-    await user.click(await screen.findByRole("tab", { name: "ima" }));
+    await user.click(await screen.findByRole("button", { name: /更多智能体/ }));
+    await user.click(screen.getByRole("menuitemradio", { name: /^ima/ }));
     const currentRow = screen.getByText("GLM-5.2").closest("article")!;
     const nextRow = screen.getByText("GLM-5.1").closest("article")!;
     await user.click(within(nextRow).getByRole("button", { name: "切换" }));
@@ -284,7 +286,7 @@ describe("AT-Switch desktop shell", () => {
     const detailButtons = await screen.findAllByRole("button", {
       name: "详情",
     });
-    expect(detailButtons).toHaveLength(7);
+    expect(detailButtons).toHaveLength(9);
     expect(
       detailButtons.every((button) => !button.hasAttribute("disabled")),
     ).toBe(true);

@@ -73,6 +73,21 @@ describe("Agent protocol capabilities", () => {
     expect(supportsProxyBinding("dumate")).toBe(true);
   });
 
+  it("supports TraeCode and TraeWork direct mode for all official custom-model protocols", () => {
+    for (const agentId of ["traecode", "traework"]) {
+      expect(supportsDirectBinding(agentId, mongyun)).toBe(true);
+      expect(supportsDirectBinding(agentId, {
+        kind: "custom",
+        protocol: "openai_responses",
+      })).toBe(true);
+      expect(supportsDirectBinding(agentId, {
+        kind: "custom",
+        protocol: "anthropic_messages",
+      })).toBe(true);
+      expect(supportsProxyBinding(agentId)).toBe(false);
+    }
+  });
+
   it.each([
     "http://localhost:1234/v1", "http://127.0.0.1:1234/v1",
     "http://127.1:1234/v1", "http://192.168.1.2/v1", "http://10.1.2.3/v1",

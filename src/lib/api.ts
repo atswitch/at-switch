@@ -7,7 +7,7 @@ import type {
   ProviderSummary,
   ProxyStatus,
 } from "../types";
-import { supportsDirectBinding, usesCloudModelSettings } from "./agentCapabilities";
+import { supportsDirectBinding, usesServiceModelSettings } from "./agentCapabilities";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 
@@ -109,6 +109,8 @@ const mockAgentDisplayNames = {
   codex: "Codex",
   dumate: "百度搭子",
   ima: "ima",
+  traecode: "TraeCode",
+  traework: "TraeWork",
 } as const;
 
 const mockSnapshotTemplate: AppSnapshot = {
@@ -129,7 +131,7 @@ const mockSnapshotTemplate: AppSnapshot = {
     mode: undefined,
     needsRestart: true,
     automaticRestartSupported: true,
-    requiresAccountConnection: usesCloudModelSettings(id) || undefined,
+    requiresAccountConnection: usesServiceModelSettings(id) || undefined,
     message: "浏览器预览使用演示状态；Tauri 版本会读取本机真实安装",
   })),
   proxy: {
@@ -625,12 +627,12 @@ async function invokeMock<T>(
         (item) => item.id === draft.providerId,
       );
       if (!agent || !provider) throw new Error("Mock binding target missing");
-      if (usesCloudModelSettings(agent.id)) {
+      if (usesServiceModelSettings(agent.id)) {
         if (draft.mode !== "direct" || !supportsDirectBinding(agent.id, provider)) {
-          throw { code: "unsupported_protocol", message: "ima 需要公网 OpenAI Chat 接口" };
+          throw { code: "unsupported_protocol", message: `${agent.displayName} 不支持所选接入方式` };
         }
         if (agent.requiresAccountConnection && args?.confirmAccountConnection !== true) {
-          throw { code: "agent_account_connection_required", message: "请先确认连接 ima" };
+          throw { code: "agent_account_connection_required", message: `请先确认操作 ${agent.displayName} 模型设置` };
         }
         agent.requiresAccountConnection = false;
       }
@@ -651,9 +653,9 @@ async function invokeMock<T>(
         (item) => item.id === (args?.agentId as string),
       );
       if (!agent) throw new Error("Mock Agent missing");
-      if (usesCloudModelSettings(agent.id) && agent.requiresAccountConnection) {
+      if (usesServiceModelSettings(agent.id) && agent.requiresAccountConnection) {
         if (args?.confirmAccountConnection !== true) {
-          throw { code: "agent_account_connection_required", message: "请先确认连接 ima" };
+          throw { code: "agent_account_connection_required", message: `请先确认操作 ${agent.displayName} 模型设置` };
         }
         agent.requiresAccountConnection = false;
       }

@@ -1,6 +1,6 @@
 # Agent 图标资产
 
-顶部 Agent 切换器、智能体状态列表和当前路由摘要统一使用 128×128 PNG，以避免运行时
+顶部 Agent 切换器、智能体状态列表和当前路由摘要使用仓库内置的 PNG 或 SVG，以避免运行时
 依赖用户本机应用资源。未知 Agent 使用内置通用图标降级，不从用户应用中动态提取资源。
 
 | 文件 | 来源 |
@@ -12,6 +12,8 @@
 | `codex.png` | OpenAI 官方 ChatGPT/Codex 应用图标 |
 | `dumate.png` | 百度搭子（DuMate）macOS 官方应用 `icon.icns` |
 | `ima.png` | 腾讯 ima 官方网站公开 `favicon.svg`，转换为 128×128 PNG |
+| `traecode.svg` | TRAE 官方网站公开 favicon 的等比例 SVG 描摹 |
+| `traework.svg` | TraeWork 官方 Web App `icon-192.png` 的等比例 SVG 描摹 |
 
 这些图标只用于识别对应产品。产品名、图标和商标归各自权利人所有，不属于本仓库
 MIT 许可证的授权范围。素材来源与分发依据以第三方声明为准；上游品牌规范或素材

@@ -1,5 +1,6 @@
 import { Cloud, KeyRound, RotateCw, ShieldCheck } from "lucide-react";
 import { useLanguage } from "../i18n";
+import { usesInteractiveModelSettings } from "../lib/agentCapabilities";
 import type { AgentSummary } from "../types";
 import { Modal } from "./Modal";
 
@@ -18,15 +19,20 @@ export function AgentAccountConnectionConfirmation({
 }: AgentAccountConnectionConfirmationProps) {
   const { text } = useLanguage();
   const restoring = operation === "restore";
+  const trae = usesInteractiveModelSettings(agent?.id ?? "");
   const title = restoring
-    ? text("连接 ima 并恢复原始模型", "Connect ima and restore original models")
-    : text("连接 ima 并切换模型", "Connect ima and switch model");
+    ? trae
+      ? text(`恢复 ${agent?.displayName ?? "Trae"} 原始模型`, `Restore original ${agent?.displayName ?? "Trae"} model`)
+      : text("连接 ima 并恢复原始模型", "Connect ima and restore original models")
+    : trae
+      ? text(`允许 ${agent?.displayName ?? "Trae"} 直连配置`, `Allow ${agent?.displayName ?? "Trae"} Direct configuration`)
+      : text("连接 ima 并切换模型", "Connect ima and switch model");
 
   return (
     <Modal
       open={Boolean(agent)}
       onClose={onCancel}
-      eyebrow="CONNECT IMA"
+      eyebrow={trae ? "OFFICIAL MODEL UI" : "CONNECT IMA"}
       title={title}
       footer={
         <div className="restart-confirmation__actions">
@@ -35,7 +41,9 @@ export function AgentAccountConnectionConfirmation({
           </button>
           <button className="button button--primary" type="button" onClick={onConfirm}>
             <KeyRound size={16} />
-            {restoring ? text("连接并恢复", "Connect and restore") : text("连接并切换", "Connect and switch")}
+            {restoring
+              ? trae ? text("确认恢复", "Restore") : text("连接并恢复", "Connect and restore")
+              : trae ? text("确认并切换", "Confirm and switch") : text("连接并切换", "Connect and switch")}
           </button>
         </div>
       }
@@ -43,18 +51,31 @@ export function AgentAccountConnectionConfirmation({
       <div className="restart-confirmation">
         <div className="restart-confirmation__agent">
           <span aria-hidden="true"><Cloud size={22} /></span>
-          <div>
-            <strong>{text("使用本机已登录的 ima 账号", "Use the ima account signed in on this computer")}</strong>
-            <p>{text(
-              "AT-Switch 将读取 ima 的登录凭据，无需复制或填写。macOS 可能提示允许访问钥匙串，Windows 使用当前用户的系统加密凭据；同一账号连接成功后，无需再次确认连接。",
-              "AT-Switch reads ima's sign-in credentials; no copying or typing is needed. macOS may request keychain access; Windows uses credentials encrypted for the current user. After a successful connection, the same account needs no further connection confirmation.",
-            )}</p>
-          </div>
+          {trae ? (
+            <div>
+              <strong>{text(`使用 ${agent?.displayName ?? "Trae"} 官方自定义模型界面`, `Use the official ${agent?.displayName ?? "Trae"} custom-model UI`)}</strong>
+              <p>{text(
+                "AT-Switch 会打开已运行的 Trae 模型界面并完成填写、连通性测试和模型选择。macOS 首次使用需要授予 AT-Switch 辅助功能权限；Windows 使用系统 UI Automation。",
+                "AT-Switch opens the running Trae model UI and completes form entry, connectivity testing, and selection. macOS requires Accessibility permission once; Windows uses system UI Automation.",
+              )}</p>
+            </div>
+          ) : (
+            <div>
+              <strong>{text("使用本机已登录的 ima 账号", "Use the ima account signed in on this computer")}</strong>
+              <p>{text(
+                "AT-Switch 将读取 ima 的登录凭据，无需复制或填写。macOS 可能提示允许访问钥匙串，Windows 使用当前用户的系统加密凭据；同一账号连接成功后，无需再次确认连接。",
+                "AT-Switch reads ima's sign-in credentials; no copying or typing is needed. macOS may request keychain access; Windows uses credentials encrypted for the current user. After a successful connection, the same account needs no further connection confirmation.",
+              )}</p>
+            </div>
+          )}
         </div>
         {!restoring && (
           <div className="restart-confirmation__note">
             <Cloud size={18} />
-            <span>{text(
+            <span>{trae ? text(
+              "所选接口地址、API Key 和模型名会保存到 Trae 自己的自定义模型设置；模型请求从 Trae 直接发送到 Provider，不经过 AT-Switch。",
+              "The endpoint, API key, and model name are saved in Trae's own custom-model settings. Model requests go directly from Trae to the provider and bypass AT-Switch.",
+            ) : text(
               "所选模型的接口地址、API Key 和模型名会按照 ima 自定义模型的机制保存到腾讯 ima，并同时用于「问问 ima」和「我的 copilot」。",
               "The selected endpoint, API key, and model name are saved to Tencent ima using its custom-model settings, and selected for both Ask ima and My copilot.",
             )}</span>
@@ -62,7 +83,10 @@ export function AgentAccountConnectionConfirmation({
         )}
         <div className="restart-confirmation__note">
           <ShieldCheck size={18} />
-          <span>{text(
+          <span>{trae ? text(
+            "首次切换前加密保存原模型选择。恢复时只删除 AT-Switch 创建的模型项，保留你已有的自定义模型；失败会自动回到切换前选择。",
+            "The original selection is encrypted before the first switch. Restore removes only models created by AT-Switch and preserves your existing custom models; failures return to the prior selection.",
+          ) : text(
             "首次切换前保存两个入口各自原来的模型选择。恢复原始模型时保留你已有的自定义模型；切换失败会尝试自动恢复，并明确提示需要处理的异常。",
             "The original model selection for each entry is saved before the first switch. Restore preserves your existing custom models. A failed switch attempts automatic recovery and reports any issue that needs attention.",
           )}</span>

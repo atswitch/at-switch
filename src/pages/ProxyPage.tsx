@@ -11,7 +11,7 @@ import { useEffect, useState } from "react";
 import { useLanguage } from "../i18n";
 import type { AgentSummary, ProxyStatus } from "../types";
 import { formatDuration, successRate } from "../lib/format";
-import { supportsProxyBinding } from "../lib/agentCapabilities";
+import { supportsProxyBinding, usesInteractiveModelSettings } from "../lib/agentCapabilities";
 import { PageHeader } from "../components/PageHeader";
 import { StatusPill } from "../components/StatusPill";
 
@@ -191,7 +191,9 @@ export function ProxyPage({
                   <strong>{agent.displayName}</strong>
                   <small>
                     {!supportsProxyBinding(agent.id)
-                      ? text("使用云端模型配置，请在首页切换", "Uses cloud model settings; switch from the main page")
+                      ? usesInteractiveModelSettings(agent.id)
+                        ? text("使用官方模型界面直连，请在首页切换", "Uses the official model UI for Direct mode; switch from the main page")
+                        : text("使用云端模型配置，请在首页切换", "Uses cloud model settings; switch from the main page")
                       : agent.mode === "proxy"
                       ? `${agent.providerName ?? "Provider"} · ${agent.modelId ?? text("模型", "Model")}`
                       : text("未使用本地代理", "Not using the local proxy")}
@@ -211,7 +213,9 @@ export function ProxyPage({
                   }
                   title={
                     !supportsProxyBinding(agent.id)
-                      ? text("ima 无法访问本机代理，请使用公网 OpenAI Chat 接口", "ima cannot reach the local proxy. Use a public OpenAI Chat endpoint")
+                      ? usesInteractiveModelSettings(agent.id)
+                        ? text(`${agent.displayName} 仅支持官方界面直连`, `${agent.displayName} supports Direct mode through its official model UI`)
+                        : text("ima 无法访问本机代理，请使用公网 OpenAI Chat 接口", "ima cannot reach the local proxy. Use a public OpenAI Chat endpoint")
                       : agent.adapterVerified
                       ? text(
                           "选择模型供应商和模型后启用代理接管",

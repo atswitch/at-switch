@@ -2,7 +2,7 @@
 
 # AT-Switch
 
-### The All-in-One Manager & Model Switcher for WorkBuddy, CodeBuddy, QClaw, AutoClaw, Codex, DuMate & ima
+### The All-in-One Manager & Model Switcher for WorkBuddy, CodeBuddy, QClaw, AutoClaw, Codex, DuMate, ima, TraeCode & TraeWork
 
 [![Version](https://img.shields.io/github/v/release/atswitch/at-switch?color=blue&label=version)](https://github.com/atswitch/at-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/atswitch/at-switch/releases)
@@ -82,6 +82,8 @@ All official release binaries are hosted on [GitHub Releases](https://github.com
 | **Codex** | macOS / Windows | ✅ Supported | OpenAI Responses | Updates `$CODEX_HOME/config.toml` or `~/.codex/config.toml` cleanly |
 | **Baidu DuMate** | macOS / Windows | ✅ Supported | OpenAI Chat Completions | Updates the active account's persistent XDG override for every session directory and built-in model alias |
 | **Tencent ima** | macOS / Windows | Implemented; validation scope below | Public OpenAI Chat Completions | Connects the locally signed-in account and synchronizes ima account settings with both local entry selections |
+| **TraeCode** | macOS / Windows | Implemented; validation scope below | OpenAI Chat / Responses / Anthropic Messages | Configures Direct mode through the official custom-model UI without modifying Trae's private database |
+| **TraeWork** | macOS / Windows | Implemented; validation scope below | OpenAI Chat / Responses / Anthropic Messages | Configures Direct mode through the official custom-model UI without modifying Trae's private database |
 
 ### Using ima
 
@@ -90,6 +92,21 @@ Select **ima** in the top bar, then click **Switch** beside a model in the exist
 ima currently accepts **public OpenAI Chat endpoints in Direct mode**. AT-Switch's local proxy and endpoints reachable only on this computer are unavailable for ima. Switching safely quits and reopens a running ima, so wait for any active generation to finish. **Restore original models** restores each entry's selection from before the first takeover and preserves existing custom models.
 
 See [ima integration and validation](IMA_INTEGRATION.md) for the current implementation and evidence. Full macOS switching and restoration validation remains incomplete. Windows has only undergone static investigation and compilation checks, with no device validation. This describes the working tree, not a published release.
+
+### Using TraeCode and TraeWork
+
+Select **TraeCode** or **TraeWork** in the top bar and click **Switch** beside an existing provider
+model. The first operation asks you to authorize AT-Switch to use Trae's official custom-model UI;
+macOS also requires Accessibility permission once. AT-Switch fills the endpoint, model ID, and API
+key, waits for Trae's own connectivity test, and selects the model. Requests travel directly from
+Trae to the provider and never use AT-Switch's local proxy.
+
+**Restore original model** returns to the pre-takeover selection and removes only custom models
+created by AT-Switch. Existing user models remain untouched. On macOS, both TraeCode and TraeWork
+passed local-mock model creation, switching between two third-party models, full-restart persistence,
+original-selection restore, and managed-row cleanup. Windows has the equivalent implementation and
+automated checks but no device validation yet; real-provider default-session and tool-call validation
+also remain pending. See [TraeCode / TraeWork integration and validation](TRAE_INTEGRATION.md).
 
 ---
 

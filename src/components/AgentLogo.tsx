@@ -6,6 +6,8 @@ import codexIcon from "../assets/agents/codex.png";
 import dumateIcon from "../assets/agents/dumate.png";
 import imaIcon from "../assets/agents/ima.png";
 import qclawIcon from "../assets/agents/qclaw.png";
+import traecodeIcon from "../assets/agents/traecode.svg";
+import traeworkIcon from "../assets/agents/traework.svg";
 import workbuddyIcon from "../assets/agents/workbuddy.png";
 
 const agentLogos: Partial<Record<string, string>> = {
@@ -16,6 +18,8 @@ const agentLogos: Partial<Record<string, string>> = {
   codex: codexIcon,
   dumate: dumateIcon,
   ima: imaIcon,
+  traecode: traecodeIcon,
+  traework: traeworkIcon,
 };
 
 interface AgentLogoProps {
