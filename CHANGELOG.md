@@ -9,7 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [v3.15.2] - 2026-10-05
+## [v3.16.1] - 2026-10-08
+
+### Added
+- TraeCode and TraeWork Direct-mode integration through their official custom-model UI for OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages, with independent discovery and bindings.
+- Encrypted, account-scoped Trae recovery journals, idempotent managed-model reuse, original-selection restoration, and separate macOS Accessibility / Windows UI Automation implementations.
+- Collapse Agent navigation beyond six visible entries into an accessible status-aware selector while keeping the active Agent visible.
+
+### Fixed
+- Treat an empty ima account metadata record as a signed-out state instead of an unsupported login format, preserving installation detection and showing an actionable login prompt without changing ima switching behavior.
+- Restore the exact pre-operation Trae model and clean up newly created managed rows when a later binding commit fails.
+- Wait for Trae's accessibility model selector to finish loading, and allow release builds to use a stable macOS signing identity so Accessibility permission survives application updates.
+- Treat Trae's `Auto` and `Auto Mode` labels as the same original selection, dismiss transient promotion overlays, and navigate the collapsed TraeCode settings drawer without fixed screen coordinates.
+- Remove the `AT-Switch ·` implementation prefix from new Trae model names, migrate exact legacy managed rows after a successful switch, recover missing ownership only from authenticated account-scoped history, and avoid treating Trae's lagging model cache as a failed selector update.
+- Reuse an existing Trae custom model with the same real model ID by selecting it directly, while preserving it as user-owned during later restore and cleanup.
+- Return automatically from TraeCode model management or the TraeWork add-model page before reading the active selector, so an already configured model can be switched without manual page cleanup.
+- Recognize the main Trae model selector even when its current official model is absent from Trae's cached catalog, while keeping add-model form comboboxes excluded.
+- Recover within the same switch when Trae has already persisted a newly added model but its official UI briefly loses the completion confirmation, avoiding a false failure followed by a required second click.
+- Retry an exact Trae model-menu item with a verified center click when Electron reports a successful accessibility action without changing the active selector.
+
+### Usage
+- Keep TraeCode or TraeWork open, grant AT-Switch Accessibility permission on macOS when prompted, and choose a Direct-compatible provider. Trae requests go directly to the provider; Proxy mode is intentionally unavailable.
+
+### Validation
+- TraeCode and TraeWork passed macOS local-mock add/select, third-party-to-third-party switching, full app restart persistence, original-selection restore, exact managed-row cleanup, and interrupted-operation recovery. Windows device validation and real-provider default-session/tool-call validation remain pending; see `TRAE_INTEGRATION.md`.
+
+## [v3.15.2] - 2026-10-07
 
 ### Added
 - Tencent ima model switching on macOS and Windows through its signed-in account model settings, limited to public OpenAI Chat Completions endpoints.

@@ -95,6 +95,9 @@ fn read_metadata(path: &Path) -> AppResult<AccountMetadata> {
     let bytes = Zeroizing::new(std::fs::read(path).map_err(|_| login_required())?);
     let prefs: Preferences = serde_json::from_slice(&bytes).map_err(|_| metadata_invalid())?;
     let raw_meta = Zeroizing::new(prefs.tencent.wxlogin.account_meta);
+    if raw_meta.trim().is_empty() {
+        return Err(login_required());
+    }
     let account: AccountMetadata =
         serde_json::from_str(&raw_meta).map_err(|_| metadata_invalid())?;
     if !account.is_login || account.credential_id.is_empty() {
@@ -603,5 +606,23 @@ pub(super) mod tests {
         assert_eq!(error.code, "ima_login_format_unsupported");
         assert!(error.recovery.is_some());
         assert!(!format!("{error:?}").contains("fictional secret"));
+    }
+
+    #[test]
+    fn empty_account_metadata_is_reported_as_signed_out() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("Preferences");
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "tencent": { "wxlogin": { "account_meta": "" } },
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let error = active_account(&path).unwrap_err();
+        assert_eq!(error.code, "ima_login_required");
+        assert!(error.message.contains("登录"));
     }
 }

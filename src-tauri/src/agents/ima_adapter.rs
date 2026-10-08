@@ -500,6 +500,29 @@ mod tests {
             .contains("example-signed-out-credential"));
     }
 
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn empty_login_metadata_keeps_the_installation_detected_with_a_login_prompt() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = context(directory.path());
+        create_installation(&context);
+        let preferences = create_preferences(&context);
+        create_extension(&preferences, "5.6.3_0", "5.6.3");
+        let mut root: serde_json::Value =
+            serde_json::from_slice(&fs::read(&preferences).unwrap()).unwrap();
+        root["tencent"]["wxlogin"]["account_meta"] = json!("");
+        fs::write(&preferences, root.to_string()).unwrap();
+
+        let detection = ImaAdapter::default().detect(&context);
+        assert!(detection.installation.is_some());
+        assert_eq!(
+            detection.install_status,
+            AgentInstallStatus::InstalledUninitialized
+        );
+        assert!(!detection.write_supported);
+        assert!(detection.message.unwrap().contains("登录"));
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn renamed_macos_custom_bundle_keeps_the_standard_user_profile() {

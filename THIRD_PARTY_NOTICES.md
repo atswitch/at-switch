@@ -27,6 +27,8 @@ the asset's source category and distribution basis.
 | OpenAI Codex | `src/assets/agents/codex.png` | Official application icon | Maintainer-confirmed permission |
 | Baidu DuMate | `src/assets/agents/dumate.png` | Official macOS application icon | Compatibility identification; upstream trademark terms apply |
 | Tencent ima | `src/assets/agents/ima.png` | Official website favicon | Compatibility identification; upstream trademark terms apply |
+| TRAE TraeCode | `src/assets/agents/traecode.svg` | Vector trace of the official website favicon at `https://lf-static.traecdn.us/obj/trae-ai-tx/trae_website/favicon.png` | Compatibility identification; upstream trademark terms apply |
+| TRAE TraeWork | `src/assets/agents/traework.svg` | Vector trace of the official Web App icon at `https://work.trae.ai/icon-192.png` | Compatibility identification; upstream trademark terms apply |
 | DeepSeek | `src/assets/providers/deepseek.png`, `src/assets/providers/deepseek.ico` | Maintainer-provided product asset | Maintainer-confirmed permission |
 | Doubao | `src/assets/providers/doubao.png` | Maintainer-provided product asset | Maintainer-confirmed permission |
 | Kimi / Moonshot AI | `src/assets/providers/kimi.png`, `src/assets/providers/kimi.ico` | Maintainer-provided product asset | Maintainer-confirmed permission |

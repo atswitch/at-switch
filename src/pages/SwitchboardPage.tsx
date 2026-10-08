@@ -20,6 +20,7 @@ import {
   directBindingUnavailableReason,
   supportsDirectBinding,
   usesCloudModelSettings,
+  usesServiceModelSettings,
 } from "../lib/agentCapabilities";
 import {
   agentAvailabilityLabel,
@@ -90,7 +91,7 @@ export function SwitchboardPage({
   );
 
   const installed = agent.installStatus !== "not_installed";
-  const cloudModelSettings = usesCloudModelSettings(agent.id);
+  const serviceModelSettings = usesServiceModelSettings(agent.id);
   const agentReady = installed && agent.adapterVerified;
   const modelCount = providersWithModels.reduce(
     (count, provider) => count + provider.models.length,
@@ -114,12 +115,12 @@ export function SwitchboardPage({
             <span>{text("当前路由", "Current route")}</span>
             <i aria-hidden="true">›</i>
             <span>
-              {cloudModelSettings && agent.activationRequired
+              {serviceModelSettings && agent.activationRequired
                 ? text("模型状态待确认", "Model state needs confirmation")
                 : agent.providerName
                   ? `${agent.providerName} · ${agent.modelId ?? text("模型", "Model")}`
-                  : cloudModelSettings
-                    ? text("ima 原有模型", "Original ima models")
+                  : serviceModelSettings
+                    ? text(`${agent.displayName} 原有模型`, `Original ${agent.displayName} models`)
                     : text("Agent 原生路由", "Agent native route")}
             </span>
           </strong>
@@ -444,15 +445,18 @@ export function SwitchboardPage({
       <footer className="switchboard__safety">
         <ShieldCheck size={18} />
         <span>
-          {cloudModelSettings ? text(
+          {usesCloudModelSettings(agent.id) ? text(
             "同时切换「问问 ima」和「我的 copilot」；保留接管前的模型选择，恢复时只撤销 AT-Switch 的更改。",
             "Switch both Ask ima and My copilot. Preserve their original model selections and undo only AT-Switch changes when restoring.",
+          ) : serviceModelSettings ? text(
+            `通过 ${agent.displayName} 官方自定义模型界面配置直连；恢复时删除 AT-Switch 管理模型并还原接管前选择。`,
+            `Configure Direct mode through ${agent.displayName}'s official custom-model UI. Restore removes AT-Switch-managed models and reinstates the original selection.`,
           ) : text(
             "切换前自动建立加密备份；只修改 AT-Switch 管理的字段，失败时自动恢复。",
             "An encrypted backup is created before switching. Only AT-Switch-managed fields are changed, with automatic recovery on failure.",
           )}
         </span>
-        <b>{cloudModelSettings ? "IMA ACCOUNT" : "LOCAL FIRST"}</b>
+        <b>{usesCloudModelSettings(agent.id) ? "IMA ACCOUNT" : serviceModelSettings ? "OFFICIAL UI" : "LOCAL FIRST"}</b>
       </footer>
     </div>
   );
@@ -471,18 +475,19 @@ function NativeRouteControl({
 }) {
   const { text } = useLanguage();
   const cloudModelSettings = usesCloudModelSettings(agent.id);
+  const serviceModelSettings = usesServiceModelSettings(agent.id);
   const active =
     agent.installStatus !== "not_installed" &&
     !agent.providerId &&
-    (!cloudModelSettings || agent.configHealth === "healthy") &&
+    (!serviceModelSettings || agent.configHealth === "healthy") &&
     !agent.activationRequired;
   return (
     <article className={clsx("switchboard-native-control", active && "is-active")}>
       <div className="switchboard-native-control__copy">
         <div>
-          <strong>{cloudModelSettings ? text("原始模型", "Original models") : text("默认配置", "Default configuration")}</strong>
+          <strong>{serviceModelSettings ? text("原始模型", "Original models") : text("默认配置", "Default configuration")}</strong>
           <span>
-            {cloudModelSettings ? text("接管前的模型选择", "Pre-takeover model selections") : text(
+            {serviceModelSettings ? text("接管前的模型选择", "Pre-takeover model selection") : text(
               `${agent.displayName} 自带模型`,
               `${agent.displayName} built-in models`,
             )}
@@ -492,6 +497,9 @@ function NativeRouteControl({
           {cloudModelSettings ? text(
             "恢复两个入口各自原来的模型，保留你已有的自定义模型",
             "Restore each entry's original model and preserve your existing custom models",
+          ) : serviceModelSettings ? text(
+            "恢复原模型并删除 AT-Switch 创建的自定义模型，保留你已有的模型",
+            "Restore the original model and remove only custom models created by AT-Switch",
           ) : text(
             "恢复接管前配置，不经过 AT-Switch 模型供应商",
             "Restore the pre-takeover configuration without an AT-Switch provider",

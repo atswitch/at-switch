@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="TraeWork">
+  <rect x="2" y="2" width="44" height="44" rx="11" fill="#fff"/>
+  <path fill="#050505" d="M12 15h24v16h-4V19H16v12h-4z"/>
+  <path fill="#050505" d="M16 23h18v12H16z"/>
+  <path fill="#fff" d="M20 27h10v4H20z"/>
+  <path fill="#050505" d="m20 29 2-2 2 2-2 2zm6 0 2-2 2 2-2 2z"/>
+</svg>

@@ -10,6 +10,7 @@ mod openclaw;
 mod service_adapter;
 #[cfg(test)]
 mod service_adapter_tests;
+mod trae;
 mod workbuddy;
 
 use std::{
@@ -44,6 +45,7 @@ use self::{
     lifecycle::RestartOutcome,
     locator::{normalized_path_string, DiscoveryContext, Installation, InstallationKind},
     openclaw::{AutoClawAdapter, QClawAdapter},
+    trae::TraeAdapter,
     workbuddy::WorkBuddyAdapter,
 };
 
@@ -349,6 +351,8 @@ impl Default for AgentRegistry {
                 Box::new(CodexAdapter),
                 Box::new(DuMateAdapter),
                 Box::new(ImaAdapter::default()),
+                Box::new(TraeAdapter::code()),
+                Box::new(TraeAdapter::work()),
             ],
             context: DiscoveryContext::native(),
         }
@@ -501,12 +505,18 @@ impl AgentService {
                             Ok(Some((_, true))) => {
                                 summary.config_health = AgentConfigHealth::TakeoverInterrupted;
                                 summary.activation_required = true;
-                                summary.message = Some("上次 ima 切换尚未完成，请点击切换或恢复原始模型，AT-Switch 会先恢复中断的操作。".to_owned());
+                                summary.message = Some(format!(
+                                    "上次 {} 切换尚未完成，请点击切换或恢复原始模型，AT-Switch 会先恢复中断的操作。",
+                                    summary.display_name
+                                ));
                             }
                             Ok(Some((true, false))) if !bindings.contains_key(&summary.id) => {
                                 summary.config_health = AgentConfigHealth::ExternalChanged;
                                 summary.activation_required = true;
-                                summary.message = Some("当前 ima 账号存在已管理的模型设置，请重新选择目标模型或恢复原始模型。".to_owned());
+                                summary.message = Some(format!(
+                                    "当前 {} 存在已管理的模型设置，请重新选择目标模型或恢复原始模型。",
+                                    summary.display_name
+                                ));
                             }
                             Ok(Some((true, false))) if matches!(summary.config_health, AgentConfigHealth::ExternalChanged) => {
                                 summary.provider_name = None;
@@ -514,7 +524,10 @@ impl AgentService {
                                 summary.model_id = None;
                                 summary.mode = None;
                                 summary.activation_required = true;
-                                summary.message = Some("当前 ima 账号的模型设置与保存的绑定不同，请重新选择模型或恢复原始模型。".to_owned());
+                                summary.message = Some(format!(
+                                    "当前 {} 模型设置与保存的绑定不同，请重新选择模型或恢复原始模型。",
+                                    summary.display_name
+                                ));
                             }
                             Ok(Some((false, false))) | Ok(None) => {
                                 summary.provider_name = None;
@@ -527,7 +540,10 @@ impl AgentService {
                             Err(_) => {
                                 summary.config_health = AgentConfigHealth::ManualRecoveryRequired;
                                 summary.activation_required = true;
-                                summary.message = Some("ima 的模型恢复记录暂时无法读取，请解锁系统凭据库后重试恢复。".to_owned());
+                                summary.message = Some(format!(
+                                    "{} 的模型恢复记录暂时无法读取，请解锁系统凭据库后重试恢复。",
+                                    summary.display_name
+                                ));
                             }
                             _ => {}
                         }
@@ -708,9 +724,12 @@ impl AgentService {
         {
             return Err(CommandError::new(
                 "agent_account_connection_required",
-                "首次使用需要确认连接当前 ima 账号",
+                format!(
+                    "首次使用需要确认操作当前 {} 模型设置",
+                    detection.display_name
+                ),
             )
-            .with_recovery("请点击目标模型的“切换”，确认连接后继续。"));
+            .with_recovery("请点击目标模型的“切换”，确认后继续。"));
         }
         Ok(())
     }
@@ -802,7 +821,7 @@ impl AgentService {
         if detection.install_status == AgentInstallStatus::NotInstalled {
             return Err(CommandError::new(
                 "agent_not_installed",
-                "请安装并登录 ima 后恢复原始模型。",
+                format!("请安装并登录 {} 后恢复原始模型。", detection.display_name),
             ));
         }
         self.require_service_connection(service, detection, confirmed)?;
@@ -2151,7 +2170,9 @@ mod tests {
                 "autoclaw",
                 "codex",
                 "dumate",
-                "ima"
+                "ima",
+                "traecode",
+                "traework"
             ]
         );
     }
@@ -2169,6 +2190,8 @@ mod tests {
             "Programs/Codex/Codex.exe",
             "Programs/DuMate/DuMate.exe",
             "ima.copilot/Application/ima.copilot.exe",
+            "Programs/Trae CN/Trae CN.exe",
+            "Programs/TRAE SOLO CN/TRAE SOLO CN.exe",
         ] {
             let executable = local_app_data.join(relative);
             fs::create_dir_all(executable.parent().expect("parent")).expect("app directory");
@@ -2189,7 +2212,7 @@ mod tests {
         };
 
         let detections = registry.detections();
-        assert_eq!(detections.len(), 7);
+        assert_eq!(detections.len(), 9);
         for detection in detections {
             assert_ne!(
                 detection.install_status,
@@ -2227,6 +2250,8 @@ mod tests {
             ("codex", "Codex.exe"),
             ("dumate", "DuMate.exe"),
             ("ima", "ima.copilot.exe"),
+            ("traecode", "Trae CN.exe"),
+            ("traework", "TRAE SOLO CN.exe"),
         ] {
             let custom_directory = temp.path().join(format!("custom-{agent_id}"));
             let executable = custom_directory.join(executable_name);
@@ -2274,6 +2299,8 @@ mod tests {
             ("codex", "Codex.app"),
             ("dumate", "DuMate.app"),
             ("ima", "ima.copilot.app"),
+            ("traecode", "Trae CN.app"),
+            ("traework", "TRAE SOLO CN.app"),
         ] {
             let custom_directory = temp.path().join(format!("custom-{agent_id}"));
             let app = custom_directory.join(app_name);

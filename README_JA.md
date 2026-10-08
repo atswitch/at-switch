@@ -2,7 +2,7 @@
 
 # AT-Switch
 
-### WorkBuddy、CodeBuddy、QClaw、AutoClaw、Codex、DuMate、ima のオールインワン管理・モデル切り替えツール
+### WorkBuddy、CodeBuddy、QClaw、AutoClaw、Codex、DuMate、ima、TraeCode、TraeWork のオールインワン管理・モデル切り替えツール
 
 [![Version](https://img.shields.io/github/v/release/atswitch/at-switch?color=blue&label=version)](https://github.com/atswitch/at-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/atswitch/at-switch/releases)
@@ -74,6 +74,12 @@ Agent ごとに散らばった設定ファイルを探す必要はありませ�
 現在は**公開 OpenAI Chat エンドポイントへのダイレクト接続**のみ対応し、AT-Switch のローカルプロキシや端末内限定のエンドポイントは利用できません。起動中の ima は安全に終了して再起動するため、生成が終わってから切り替えてください。「元のモデルに復元」は AT-Switch による最初の設定変更前の各入口の選択を復元し、既存のカスタムモデルを保持します。
 
 現在の実装と検証範囲は [ima 接続・検証記録](IMA_INTEGRATION.md)を参照してください。macOS での切り替え・復元の一連の検証は未完了です。Windows は静的調査とコンパイル確認のみで、実機検証は行っていません。ここでの説明は公開済みリリースを示すものではありません。
+
+### TraeCode / TraeWork の利用
+
+上部の **TraeCode** または **TraeWork** を選び、既存モデルの「切り替え」をクリックします。初回は Trae 公式カスタムモデル画面の操作を確認し、macOS ではアクセシビリティ権限も必要です。Endpoint、モデル ID、API キーは公式画面に入力され、Trae 自身の接続テスト後にモデルが選択されます。リクエストは Trae から Provider に直接送信され、AT-Switch のローカルプロキシを経由しません。
+
+「元のモデルに復元」は接管前の選択に戻し、AT-Switch が作成したモデルだけを削除します。既存のユーザーモデルは保持されます。macOS では TraeCode と TraeWork の両方で、ローカル Mock モデルの追加、2 モデル間の切り替え、完全再起動後の保持、元の選択への復元、管理項目の削除を確認済みです。Windows は同等ロジックと自動テストまで完了していますが実機未検証で、実 Provider の既定新規セッションと Tool 呼び出しも未検証です。詳細は [TraeCode / TraeWork 接続・検証記録](TRAE_INTEGRATION.md)を参照してください。
 
 ---
 

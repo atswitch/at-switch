@@ -36,4 +36,21 @@ describe("AgentAccountConnectionConfirmation", () => {
     expect(onCancel).toHaveBeenCalledOnce();
     expect(onConfirm).not.toHaveBeenCalled();
   });
+
+  it("explains Trae official-UI direct switching without ima account wording", async () => {
+    const user = userEvent.setup();
+    const onConfirm = vi.fn();
+    render(<AgentAccountConnectionConfirmation
+      agent={{ ...ima, id: "traecode", displayName: "TraeCode", needsRestart: false }}
+      operation="apply"
+      onCancel={vi.fn()}
+      onConfirm={onConfirm}
+    />);
+    expect(screen.getByRole("dialog", { name: "允许 TraeCode 直连配置" })).toBeInTheDocument();
+    expect(screen.getByText(/官方自定义模型界面/)).toBeInTheDocument();
+    expect(screen.getByText(/不经过 AT-Switch/)).toBeInTheDocument();
+    expect(screen.queryByText(/读取 ima 的登录凭据/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "确认并切换" }));
+    expect(onConfirm).toHaveBeenCalledOnce();
+  });
 });

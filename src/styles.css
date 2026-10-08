@@ -2904,19 +2904,31 @@ textarea:focus-visible {
 }
 
 .agent-switcher {
+  position: relative;
   display: inline-flex;
   justify-self: center;
   align-items: center;
   gap: 3px;
   min-width: 0;
   max-width: 100%;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  scrollbar-width: thin;
   padding: 4px;
   background: var(--paper-muted);
   border: 1px solid color-mix(in srgb, var(--line) 68%, transparent);
   border-radius: 14px;
+}
+
+.agent-switcher__tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.agent-switcher__tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .agent-switcher__item {
@@ -3014,6 +3026,171 @@ textarea:focus-visible {
 
 .agent-switcher__status.is-warning {
   background: var(--warning);
+}
+
+.agent-switcher__overflow {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.agent-switcher__more {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 9px 0 10px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--paper) 42%, transparent);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    background 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.agent-switcher__more:hover,
+.agent-switcher__more.is-open {
+  color: var(--ink);
+  background: var(--paper);
+  border-color: color-mix(in srgb, var(--line) 72%, transparent);
+  box-shadow: 0 5px 14px rgba(16, 24, 40, 0.06);
+}
+
+.agent-switcher__more b {
+  display: grid;
+  min-width: 18px;
+  height: 18px;
+  place-items: center;
+  padding-inline: 4px;
+  color: var(--ink-soft);
+  font-size: 10px;
+  line-height: 1;
+  background: color-mix(in srgb, var(--line) 64%, transparent);
+  border-radius: 999px;
+}
+
+.agent-switcher__more > svg:last-child {
+  transition: transform 160ms ease;
+}
+
+.agent-switcher__more.is-open > svg:last-child {
+  transform: rotate(180deg);
+}
+
+.agent-switcher__menu {
+  position: absolute;
+  z-index: 80;
+  top: calc(100% + 10px);
+  right: -4px;
+  width: 270px;
+  padding: 7px;
+  background: color-mix(in srgb, var(--paper) 97%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: 15px;
+  box-shadow:
+    0 18px 45px rgba(16, 24, 40, 0.16),
+    0 2px 7px rgba(16, 24, 40, 0.08);
+  backdrop-filter: blur(18px) saturate(1.2);
+  transform-origin: top right;
+  animation: agent-menu-enter 150ms ease-out both;
+}
+
+.agent-switcher__menu-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 9px 8px;
+  color: var(--ink-soft);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.agent-switcher__menu-heading small {
+  display: grid;
+  min-width: 20px;
+  height: 20px;
+  place-items: center;
+  color: var(--ink-faint);
+  font-size: 10px;
+  background: var(--paper-muted);
+  border-radius: 999px;
+}
+
+.agent-switcher__menu-item {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 52px;
+  padding: 7px 9px;
+  color: var(--ink);
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    transform 140ms ease;
+}
+
+.agent-switcher__menu-item:hover,
+.agent-switcher__menu-item.is-active {
+  background: var(--paper-muted);
+  border-color: color-mix(in srgb, var(--line) 70%, transparent);
+}
+
+.agent-switcher__menu-item:hover {
+  transform: translateX(2px);
+}
+
+.agent-switcher__menu-item > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.agent-switcher__menu-item strong,
+.agent-switcher__menu-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-switcher__menu-item strong {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.agent-switcher__menu-item small {
+  color: var(--ink-soft);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.agent-switcher__menu-item > svg {
+  color: var(--signal);
+}
+
+@keyframes agent-menu-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-5px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .desktop-actions {

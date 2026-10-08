@@ -2,7 +2,7 @@
 
 # AT-Switch
 
-### WorkBuddy、CodeBuddy、QClaw、AutoClaw、Codex、百度搭子和 ima 的全方位管理与模型切换工具
+### WorkBuddy、CodeBuddy、QClaw、AutoClaw、Codex、百度搭子、ima、TraeCode 和 TraeWork 的全方位管理与模型切换工具
 
 [![Version](https://img.shields.io/github/v/release/atswitch/at-switch?color=blue&label=version)](https://github.com/atswitch/at-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/atswitch/at-switch/releases)
@@ -81,6 +81,8 @@
 | **Codex** | macOS / Windows | ✅ 支持 | OpenAI Responses | 精确更新 `$CODEX_HOME/config.toml` 或 `~/.codex/config.toml`，保留原有注释 |
 | **百度搭子（DuMate）** | macOS / Windows | ✅ 支持 | OpenAI Chat Completions | 更新当前账号的 XDG 持久覆盖配置，兼容所有会话目录和内置模型别名 |
 | **腾讯 ima** | macOS / Windows | 当前实现，验收范围见下文 | 公网 OpenAI Chat Completions | 连接本机已登录账号，同步 ima 账号模型设置与两个入口的本地选择 |
+| **TraeCode** | macOS / Windows | 当前实现，验收范围见下文 | OpenAI Chat / Responses / Anthropic Messages | 通过官方自定义模型界面配置直连；不修改 Trae 私有数据库 |
+| **TraeWork** | macOS / Windows | 当前实现，验收范围见下文 | OpenAI Chat / Responses / Anthropic Messages | 通过官方自定义模型界面配置直连；不修改 Trae 私有数据库 |
 
 ### ima 使用说明
 
@@ -89,6 +91,19 @@
 ima 当前仅提供**公网 OpenAI Chat 直连**，不支持 AT-Switch 本地代理或仅本机可访问的接口。运行中切换会安全退出并重新打开 ima，请先等待当前生成完成。「恢复原始模型」恢复首次接管前两个入口各自的选择，保留已有自定义模型。
 
 当前实现与验证范围见 [ima 接入与验收记录](IMA_INTEGRATION.md)。macOS 完整切换与恢复验收尚未完成；Windows 目前仅完成静态研究与编译检查，未经真机验收。此说明不代表新增功能已经发布。
+
+### TraeCode / TraeWork 使用说明
+
+顶部选择 **TraeCode** 或 **TraeWork**，再从现有供应商与模型列表点击「切换」。首次操作
+会确认允许 AT-Switch 使用 Trae 官方自定义模型界面；macOS 还需要一次辅助功能权限。
+AT-Switch 会填写 Endpoint、模型 ID 和 API Key，等待 Trae 自带连通性测试成功后选择
+该模型。请求由 Trae 直达 Provider，不经过 AT-Switch 本地代理。
+
+「恢复原始模型」会选回首次接管前的模型，并只删除 AT-Switch 创建的模型项，保留用户
+已有自定义模型。当前 macOS 已对 TraeCode 与 TraeWork 完成本地 Mock 模型新增、两模型
+互切、完全重启持久化、恢复原选择和受管项清理。Windows 已完成同语义实现与自动化检查，
+但尚未经 Windows 真机；真实上游默认新会话与 Tool 调用也仍需验收。详见
+[TraeCode / TraeWork 接入与验收记录](TRAE_INTEGRATION.md)。
 
 ---
 
