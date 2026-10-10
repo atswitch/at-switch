@@ -67,6 +67,13 @@ impl TraeKind {
         }
     }
 
+    fn additional_selection_labels(self) -> &'static [&'static str] {
+        match self {
+            Self::Code => &["solo_agent", "solo_coder", "ide_legacy"],
+            Self::Work => &[],
+        }
+    }
+
     fn supports_native_bridge(self, version: Option<&str>) -> bool {
         matches!(
             (self, version),
@@ -294,6 +301,11 @@ impl ServiceConfigAdapter for TraeAdapter {
                             .zip(snapshot.active_selection)
                             .into_iter()
                             .collect(),
+                        additional_baselines: BTreeMap::new(),
+                        additional_session_baselines: BTreeMap::new(),
+                        ide_baseline: None,
+                        secondary_baseline_selection: None,
+                        secondary_session_baselines: BTreeMap::new(),
                         selection_label: Some(kind.selection_label().to_owned()),
                         legacy_work_remote_baseline: None,
                         owned: Vec::new(),
@@ -379,6 +391,23 @@ impl ServiceConfigAdapter for TraeAdapter {
                     .session_baselines
                     .entry(session_id.clone())
                     .or_insert_with(|| selection.clone());
+            }
+            for (label, baseline) in &plan.additional_previous {
+                if label == "ide_legacy" && checkpoint.ide_baseline.is_none() {
+                    checkpoint.ide_baseline = baseline.ide.clone();
+                }
+                checkpoint
+                    .additional_baselines
+                    .entry(label.clone())
+                    .or_insert_with(|| baseline.selection.clone());
+                if let Some((session_id, selection)) = baseline.session.as_ref() {
+                    checkpoint
+                        .additional_session_baselines
+                        .entry(label.clone())
+                        .or_default()
+                        .entry(session_id.clone())
+                        .or_insert_with(|| selection.clone());
+                }
             }
 
             let previous_active = checkpoint.active.clone();
@@ -501,6 +530,82 @@ impl ServiceConfigAdapter for TraeAdapter {
                         "Trae 当前任务没有选中目标模型，已回滚本次切换",
                     ));
                 }
+                for label in kind.additional_selection_labels() {
+                    let previous = plan
+                        .additional_previous
+                        .get_mut(*label)
+                        .ok_or_else(|| CommandError::internal("TraeCode 模型选择缺少恢复基线"))?;
+                    let ui = Arc::clone(&self.ui);
+                    let detection_for_snapshot = detection.clone();
+                    let current = tokio::task::spawn_blocking(move || {
+                        ui.snapshot_label(kind, &detection_for_snapshot, label)
+                    })
+                    .await
+                    .map_err(|_| CommandError::internal("TraeCode 模型校验任务异常终止"))??;
+                    if let Some(session_id) = current.active_session_id.as_deref() {
+                        if previous
+                            .session
+                            .as_ref()
+                            .is_some_and(|(id, _)| id != session_id)
+                        {
+                            return Err(CommandError::new(
+                                "trae_active_session_changed",
+                                "TraeCode 当前任务在切换期间发生变化，已回滚本次切换",
+                            ));
+                        }
+                        if current.active_selection.as_deref()
+                            != Some(plan.row.display_name.as_str())
+                        {
+                            if previous.session.is_none() {
+                                let baseline =
+                                    current.active_selection.clone().ok_or_else(|| {
+                                        CommandError::new(
+                                            "trae_native_selection_missing",
+                                            "TraeCode 当前模型尚未加载完成",
+                                        )
+                                    })?;
+                                checkpoint
+                                    .additional_session_baselines
+                                    .entry((*label).to_owned())
+                                    .or_default()
+                                    .entry(session_id.to_owned())
+                                    .or_insert_with(|| baseline.clone());
+                                previous.session = Some((session_id.to_owned(), baseline));
+                                save_checkpoint(transaction, self.id(), &resource, &checkpoint)?;
+                            }
+                            let ui = Arc::clone(&self.ui);
+                            let detection_for_select = detection.clone();
+                            let display_name = plan.row.display_name.clone();
+                            let session_id = session_id.to_owned();
+                            tokio::task::spawn_blocking(move || {
+                                ui.select_model_label_scoped(
+                                    kind,
+                                    &detection_for_select,
+                                    label,
+                                    &display_name,
+                                    Some(&session_id),
+                                )
+                            })
+                            .await
+                            .map_err(|_| {
+                                CommandError::internal("TraeCode 当前任务切换异常终止")
+                            })??;
+                        }
+                    }
+                    let ui = Arc::clone(&self.ui);
+                    let detection_for_snapshot = detection.clone();
+                    let final_selection = tokio::task::spawn_blocking(move || {
+                        ui.snapshot_label(kind, &detection_for_snapshot, label)
+                    })
+                    .await
+                    .map_err(|_| CommandError::internal("TraeCode 模型复核异常终止"))??;
+                    if final_selection.selection != plan.row.display_name {
+                        return Err(CommandError::new(
+                            "trae_visible_selection_mismatch",
+                            "TraeCode 有模式没有选中目标模型，已回滚本次切换",
+                        ));
+                    }
+                }
                 Ok(())
             }
             .await;
@@ -531,6 +636,16 @@ impl ServiceConfigAdapter for TraeAdapter {
             let model_id = plan.row.input.model_id.clone();
             let protocol = plan.row.input.protocol;
             let selected_session = plan.previous_session.as_ref().map(|(id, _)| id.clone());
+            let additional_sessions = plan
+                .additional_previous
+                .iter()
+                .filter_map(|(label, baseline)| {
+                    baseline
+                        .session
+                        .as_ref()
+                        .map(|(id, _)| (label.clone(), id.clone()))
+                })
+                .collect::<BTreeMap<_, _>>();
             let persisted = tokio::task::spawn_blocking(move || {
                 verify_persisted_default_in_running_session(
                     &detection_for_verification,
@@ -538,6 +653,7 @@ impl ServiceConfigAdapter for TraeAdapter {
                     &model_id,
                     protocol,
                     selected_session.as_deref(),
+                    &additional_sessions,
                     was_running,
                 )
             })
@@ -614,7 +730,7 @@ impl ServiceConfigAdapter for TraeAdapter {
             // durable, remove only the exact legacy rows recorded as owned by
             // this adapter. A cleanup failure does not invalidate the active
             // model; the retained row remains available to a later restore.
-            let legacy_cleanup_complete = cleanup_legacy_rows(
+            cleanup_legacy_rows(
                 Arc::clone(&self.ui),
                 kind,
                 detection.clone(),
@@ -634,22 +750,7 @@ impl ServiceConfigAdapter for TraeAdapter {
                 .map_err(|_| CommandError::internal("Trae 原生模型服务交接任务异常终止"))??;
             Ok(ServiceConfigOutcome {
                 needs_restart: false,
-                message: if plan.borrowed {
-                    format!(
-                        "{} 已直接切换到 Trae 中已有的模型配置；请求不经过 AT-Switch。",
-                        self.display_name()
-                    )
-                } else if legacy_cleanup_complete {
-                    format!(
-                        "{} 已通过 Trae 原生模型服务切换为直连模型；请求不经过 AT-Switch。",
-                        self.display_name()
-                    )
-                } else {
-                    format!(
-                        "{} 已切换为直连模型；旧版模型项将在下次切换或恢复时继续清理。",
-                        self.display_name()
-                    )
-                },
+                message: format!("{} · {}", desired.provider_name, desired.model_id),
             })
         })
     }
@@ -681,11 +782,48 @@ impl ServiceConfigAdapter for TraeAdapter {
             let detection_for_ui = detection.clone();
             let baseline = checkpoint.baseline_selection.clone();
             let session_baselines = checkpoint.session_baselines.clone();
+            let additional_baselines = checkpoint.additional_baselines.clone();
+            let additional_sessions = checkpoint.additional_session_baselines.clone();
+            let ide_baseline = checkpoint.ide_baseline.clone();
             tokio::task::spawn_blocking(move || {
                 for (session_id, selection) in session_baselines {
                     ui.select_model_scoped(kind, &detection_for_ui, &selection, Some(&session_id))?;
                 }
-                select_model_with_transient_retry(ui.as_ref(), kind, &detection_for_ui, &baseline)
+                select_model_with_transient_retry(ui.as_ref(), kind, &detection_for_ui, &baseline)?;
+                for label in kind.additional_selection_labels() {
+                    if *label == "ide_legacy" {
+                        continue;
+                    }
+                    let Some(selection) = additional_baselines.get(*label) else {
+                        continue;
+                    };
+                    for (session_id, session_selection) in additional_sessions
+                        .get(*label)
+                        .into_iter()
+                        .flat_map(|map| map.iter())
+                    {
+                        ui.select_model_label_scoped(
+                            kind,
+                            &detection_for_ui,
+                            label,
+                            session_selection,
+                            Some(session_id),
+                        )?;
+                    }
+                    ui.select_model_label_scoped(kind, &detection_for_ui, label, selection, None)?;
+                }
+                if let Some(ide_baseline) = ide_baseline.as_ref() {
+                    ui.restore_ide_baseline(kind, &detection_for_ui, ide_baseline)?;
+                } else if let Some(selection) = additional_baselines.get("ide_legacy") {
+                    ui.select_model_label_scoped(
+                        kind,
+                        &detection_for_ui,
+                        "ide_legacy",
+                        selection,
+                        None,
+                    )?;
+                }
+                AppResult::Ok(())
             })
             .await
             .map_err(|_| CommandError::internal("Trae 原模型恢复任务异常终止"))??;
@@ -700,7 +838,18 @@ impl ServiceConfigAdapter for TraeAdapter {
                     let detection = detection.clone();
                     let active = active.to_owned();
                     tokio::task::spawn_blocking(move || {
-                        select_model_with_transient_retry(ui.as_ref(), kind, &detection, &active)
+                        select_model_with_transient_retry(ui.as_ref(), kind, &detection, &active)?;
+                        for label in kind.additional_selection_labels() {
+                            select_model_label_scoped_with_transient_retry(
+                                ui.as_ref(),
+                                kind,
+                                &detection,
+                                label,
+                                &active,
+                                None,
+                            )?;
+                        }
+                        AppResult::Ok(())
                     })
                     .await
                     .is_ok_and(|result| result.is_ok())
@@ -808,6 +957,15 @@ impl ServiceConfigAdapter for TraeAdapter {
                 "Trae 新任务的默认模型与目标模型不一致",
             ));
         }
+        for label in self.kind.additional_selection_labels() {
+            verify_persisted_label(
+                detection,
+                label,
+                &expected.model_id,
+                expected.protocol,
+                None,
+            )?;
+        }
         Ok(())
     }
 }
@@ -840,46 +998,31 @@ fn verify_persisted_default_in_running_session(
     model_id: &str,
     protocol: ApiProtocol,
     selected_session: Option<&str>,
+    additional_sessions: &BTreeMap<String, String>,
     was_running: bool,
 ) -> AppResult<()> {
     if was_running {
         std::thread::sleep(Duration::from_secs(3));
     }
     for _ in 0..12 {
-        let recent =
-            ui::cached_recent_selection(detection.config_path.as_deref(), kind.selection_label())?
-                .is_some_and(|(mode, key)| {
-                    mode == 0
-                        && stable_persisted_key_matches(
-                            detection.config_path.as_deref(),
-                            kind.selection_label(),
-                            model_id,
-                            protocol,
-                            &key,
-                        )
-                        .unwrap_or(false)
-                });
-        let session = selected_session.is_none_or(|session_id| {
-            ui::cached_session_selection(
-                detection.config_path.as_deref(),
-                session_id,
-                kind.selection_label(),
+        let primary = verify_persisted_label(
+            detection,
+            kind.selection_label(),
+            model_id,
+            protocol,
+            selected_session,
+        );
+        let additional = kind.additional_selection_labels().iter().all(|label| {
+            verify_persisted_label(
+                detection,
+                label,
+                model_id,
+                protocol,
+                additional_sessions.get(*label).map(String::as_str),
             )
-            .is_ok_and(|selection| {
-                selection.is_some_and(|(mode, key)| {
-                    mode == 0
-                        && stable_persisted_key_matches(
-                            detection.config_path.as_deref(),
-                            kind.selection_label(),
-                            model_id,
-                            protocol,
-                            &key,
-                        )
-                        .unwrap_or(false)
-                })
-            })
+            .is_ok()
         });
-        if recent && session {
+        if primary.is_ok() && additional {
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(250));
@@ -890,14 +1033,79 @@ fn verify_persisted_default_in_running_session(
     ))
 }
 
+fn verify_persisted_label(
+    detection: &AgentDetection,
+    label: &str,
+    model_id: &str,
+    protocol: ApiProtocol,
+    session_id: Option<&str>,
+) -> AppResult<()> {
+    if label == "ide_legacy" {
+        let selection = ui::cached_ide_selection(detection.config_path.as_deref())?;
+        let matches = selection.is_some_and(|(mode, key)| {
+            mode == 0
+                && stable_persisted_key_matches(
+                    detection.config_path.as_deref(),
+                    "solo_coder",
+                    model_id,
+                    protocol,
+                    &format!("solo_coder_{key}"),
+                )
+                .unwrap_or(false)
+        });
+        return if matches {
+            Ok(())
+        } else {
+            Err(CommandError::new(
+                "trae_persisted_selection_mismatch",
+                "TraeCode IDE 模型选择未保持为目标模型",
+            ))
+        };
+    }
+    let selection = ui::cached_recent_selection(detection.config_path.as_deref(), label)?;
+    let matches = |selection: Option<(i64, String)>| {
+        selection.is_some_and(|(mode, key)| {
+            mode == 0
+                && stable_persisted_key_matches(
+                    detection.config_path.as_deref(),
+                    label,
+                    model_id,
+                    protocol,
+                    &key,
+                )
+                .unwrap_or(false)
+        })
+    };
+    if !matches(selection)
+        || session_id.is_some_and(|id| {
+            !ui::cached_session_selection(detection.config_path.as_deref(), id, label)
+                .is_ok_and(matches)
+        })
+    {
+        return Err(CommandError::new(
+            "trae_persisted_selection_mismatch",
+            "Trae 模型选择未保持为目标模型",
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 struct UiApplyPlan {
     row: ManagedRow,
     previous_selection: String,
     previous_session: Option<(String, String)>,
+    additional_previous: BTreeMap<String, LabelBaseline>,
     created: bool,
     borrowed: bool,
     replaced_row: Option<ManagedRow>,
+}
+
+#[derive(Clone)]
+struct LabelBaseline {
+    selection: String,
+    session: Option<(String, String)>,
+    ide: Option<ui::IdeSelectionBaseline>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -976,6 +1184,18 @@ fn plan_ui_change(
     known_names: &HashSet<String>,
 ) -> AppResult<UiApplyPlan> {
     let snapshot = ui.snapshot_interactive(kind, detection)?;
+    let mut additional_previous = BTreeMap::new();
+    for label in kind.additional_selection_labels() {
+        let selection = ui.snapshot_label(kind, detection, label)?;
+        additional_previous.insert(
+            (*label).to_owned(),
+            LabelBaseline {
+                selection: selection.recent_selection,
+                session: selection.active_session_id.zip(selection.active_selection),
+                ide: selection.ide_baseline,
+            },
+        );
+    }
     if let Some(row) = matching {
         if snapshot.custom_models.contains(&row.display_name) {
             ensure_existing_endpoint(&snapshot, &row.display_name, input)?;
@@ -986,6 +1206,7 @@ fn plan_ui_change(
                     .active_session_id
                     .clone()
                     .zip(snapshot.active_selection.clone()),
+                additional_previous,
                 created: false,
                 borrowed: false,
                 replaced_row: None,
@@ -1042,6 +1263,7 @@ fn plan_ui_change(
                     .active_session_id
                     .clone()
                     .zip(snapshot.active_selection.clone()),
+                additional_previous,
                 created: false,
                 borrowed: true,
                 replaced_row: None,
@@ -1066,6 +1288,7 @@ fn plan_ui_change(
             .active_session_id
             .clone()
             .zip(snapshot.active_selection.clone()),
+        additional_previous,
         created: true,
         borrowed: false,
         replaced_row,
@@ -1160,6 +1383,26 @@ fn apply_ui_change(
             result = Ok(());
         }
     }
+    if result.is_ok() {
+        for label in kind.additional_selection_labels() {
+            let session_id = plan
+                .additional_previous
+                .get(*label)
+                .and_then(|baseline| baseline.session.as_ref())
+                .map(|(id, _)| id.as_str());
+            result = select_model_label_scoped_with_transient_retry(
+                ui,
+                kind,
+                detection,
+                label,
+                &plan.row.display_name,
+                session_id,
+            );
+            if result.is_err() {
+                break;
+            }
+        }
+    }
     // select_model verifies Trae's persisted selection on both platforms.
     // Do not gate it again on Trae's asynchronously refreshed model cache.
     UiApplyAttempt { result, mutation }
@@ -1213,6 +1456,30 @@ fn select_model_scoped_with_transient_retry(
             ) =>
         {
             ui.select_model_scoped(kind, detection, display_name, session_id)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn select_model_label_scoped_with_transient_retry(
+    ui: &dyn ui::TraeUi,
+    kind: TraeKind,
+    detection: &AgentDetection,
+    label: &str,
+    display_name: &str,
+    session_id: Option<&str>,
+) -> AppResult<()> {
+    match ui.select_model_label_scoped(kind, detection, label, display_name, session_id) {
+        Ok(()) => Ok(()),
+        Err(error)
+            if matches!(
+                error.code.as_str(),
+                "trae_native_model_missing"
+                    | "trae_native_selection_unverified"
+                    | "trae_native_selection_mismatch"
+            ) =>
+        {
+            ui.select_model_label_scoped(kind, detection, label, display_name, session_id)
         }
         Err(error) => Err(error),
     }
@@ -1311,8 +1578,21 @@ async fn rollback_ui_change(
                 ui.select_model_scoped(kind, &detection, selection, Some(id))
                     .is_ok()
             });
-        let selection_restored = replaced_row_restored
+        let additional_restored = plan
+            .additional_previous
+            .iter()
+            .filter(|(label, _)| label.as_str() != "ide_legacy")
+            .all(|(label, baseline)| {
+                baseline.session.as_ref().is_none_or(|(id, selection)| {
+                    ui.select_model_label_scoped(kind, &detection, label, selection, Some(id))
+                        .is_ok()
+                }) && ui
+                    .select_model_label_scoped(kind, &detection, label, &baseline.selection, None)
+                    .is_ok()
+            });
+        let native_restored = replaced_row_restored
             && session_restored
+            && additional_restored
             && select_model_with_transient_retry(
                 ui.as_ref(),
                 kind,
@@ -1320,6 +1600,25 @@ async fn rollback_ui_change(
                 &plan.previous_selection,
             )
             .is_ok();
+        let ide_restored = plan
+            .additional_previous
+            .get("ide_legacy")
+            .is_none_or(|baseline| {
+                baseline.ide.as_ref().map_or_else(
+                    || {
+                        ui.select_model_label_scoped(
+                            kind,
+                            &detection,
+                            "ide_legacy",
+                            &baseline.selection,
+                            None,
+                        )
+                        .is_ok()
+                    },
+                    |state| ui.restore_ide_baseline(kind, &detection, state).is_ok(),
+                )
+            });
+        let selection_restored = native_restored && ide_restored;
         UiRollback {
             selection_restored,
             model_removed,
@@ -1426,6 +1725,16 @@ struct Checkpoint {
     #[serde(default)]
     session_baselines: BTreeMap<String, String>,
     #[serde(default)]
+    additional_baselines: BTreeMap<String, String>,
+    #[serde(default)]
+    additional_session_baselines: BTreeMap<String, BTreeMap<String, String>>,
+    #[serde(default)]
+    ide_baseline: Option<ui::IdeSelectionBaseline>,
+    #[serde(default)]
+    secondary_baseline_selection: Option<String>,
+    #[serde(default)]
+    secondary_session_baselines: BTreeMap<String, String>,
+    #[serde(default)]
     selection_label: Option<String>,
     #[serde(default)]
     legacy_work_remote_baseline: Option<String>,
@@ -1443,7 +1752,26 @@ fn load_checkpoint(
 ) -> AppResult<Option<Checkpoint>> {
     transaction
         .read_service_checkpoint(agent_id, resource)?
-        .map(|bytes| serde_json::from_slice(&bytes).map_err(|_| checkpoint_invalid()))
+        .map(|bytes| {
+            let mut checkpoint: Checkpoint =
+                serde_json::from_slice(&bytes).map_err(|_| checkpoint_invalid())?;
+            if agent_id == TraeKind::Code.id() {
+                if let Some(selection) = checkpoint.secondary_baseline_selection.take() {
+                    checkpoint
+                        .additional_baselines
+                        .entry("solo_agent".to_owned())
+                        .or_insert(selection);
+                }
+                if !checkpoint.secondary_session_baselines.is_empty() {
+                    checkpoint
+                        .additional_session_baselines
+                        .entry("solo_agent".to_owned())
+                        .or_default()
+                        .append(&mut checkpoint.secondary_session_baselines);
+                }
+            }
+            Ok(checkpoint)
+        })
         .transpose()
 }
 
@@ -1640,6 +1968,11 @@ mod tests {
         selection: String,
         recent_selection: Option<String>,
         active_session: Option<(String, String)>,
+        secondary_selection: String,
+        ide_selection: String,
+        secondary_active_session: Option<(String, String)>,
+        coder_selection: String,
+        coder_active_session: Option<(String, String)>,
         reveal_session_at_snapshot: Option<(usize, String, String)>,
         models: HashSet<String>,
         model_ids: HashMap<String, String>,
@@ -1662,6 +1995,9 @@ mod tests {
             Self {
                 state: Mutex::new(FakeUiState {
                     selection: selection.to_owned(),
+                    secondary_selection: "Auto Mode".to_owned(),
+                    ide_selection: "Auto Mode".to_owned(),
+                    coder_selection: "Auto Mode".to_owned(),
                     cache_visible: true,
                     ..Default::default()
                 }),
@@ -1717,6 +2053,7 @@ mod tests {
                 } else {
                     Default::default()
                 },
+                ide_baseline: None,
             }
         }
     }
@@ -1740,6 +2077,32 @@ mod tests {
             }
             drop(state);
             Ok(self.snapshot_value())
+        }
+
+        fn snapshot_label(
+            &self,
+            kind: TraeKind,
+            _: &AgentDetection,
+            label: &str,
+        ) -> AppResult<ui::TraeUiSnapshot> {
+            assert!(kind.additional_selection_labels().contains(&label));
+            let mut snapshot = self.snapshot_value();
+            let state = self.state.lock().expect("fake UI state");
+            let (selection, active) = if label == "ide_legacy" {
+                (&state.ide_selection, &None)
+            } else if label == "solo_coder" {
+                (&state.coder_selection, &state.coder_active_session)
+            } else {
+                (&state.secondary_selection, &state.secondary_active_session)
+            };
+            snapshot.recent_selection = selection.clone();
+            snapshot.active_session_id = active.as_ref().map(|(id, _)| id.clone());
+            snapshot.active_selection = active.as_ref().map(|(_, selected)| selected.clone());
+            snapshot.selection = snapshot
+                .active_selection
+                .clone()
+                .unwrap_or_else(|| selection.clone());
+            Ok(snapshot)
         }
 
         fn add_model(
@@ -1948,6 +2311,170 @@ mod tests {
                     .expect("fake persisted session selection");
             }
             Ok(())
+        }
+
+        fn select_model_label_scoped(
+            &self,
+            kind: TraeKind,
+            detection: &AgentDetection,
+            label: &str,
+            display_name: &str,
+            session_id: Option<&str>,
+        ) -> AppResult<()> {
+            assert!(kind.additional_selection_labels().contains(&label));
+            let mut state = self.state.lock().expect("fake UI state");
+            if display_name != "Auto Mode" && !state.models.contains(display_name) {
+                return Err(CommandError::new(
+                    "test_model_missing",
+                    "test model missing",
+                ));
+            }
+            let model_id = state
+                .model_ids
+                .get(display_name)
+                .cloned()
+                .unwrap_or_default();
+            let mode = if display_name == "Auto Mode" { 1 } else { 0 };
+            if label == "ide_legacy" {
+                state.ide_selection = display_name.to_owned();
+                drop(state);
+                if let Some(path) = detection.config_path.as_deref() {
+                    let connection = Connection::open(path).expect("fake state database");
+                    let model_key = if mode == 0 {
+                        format!(
+                            "3_custom_responses_compatible_custom_responses_compatible//{model_id}_123"
+                        )
+                    } else {
+                        String::new()
+                    };
+                    for (suffix, value) in [
+                        (
+                            "globalModelMap",
+                            serde_json::json!({"solo_coder": model_key}),
+                        ),
+                        ("globalModeMap", serde_json::json!({"solo_coder": mode})),
+                    ] {
+                        let key = format!("12345_ai-chat:sessionRelation:{suffix}");
+                        connection
+                            .execute("DELETE FROM ItemTable WHERE key = ?1", [&key])
+                            .expect("remove fake IDE state");
+                        connection
+                            .execute(
+                                "INSERT INTO ItemTable (key, value) VALUES (?1, ?2)",
+                                [&key, &value.to_string()],
+                            )
+                            .expect("fake IDE state");
+                    }
+                }
+                return Ok(());
+            }
+            let model_key = if mode == 0 {
+                format!(
+                    "{label}_3_custom_responses_compatible_custom_responses_compatible//{model_id}_123"
+                )
+            } else {
+                String::new()
+            };
+            if label == "solo_coder" {
+                if let Some(id) = session_id {
+                    state.coder_active_session = Some((id.to_owned(), display_name.to_owned()));
+                }
+                state.coder_selection = display_name.to_owned();
+            } else {
+                if let Some(id) = session_id {
+                    state.secondary_active_session = Some((id.to_owned(), display_name.to_owned()));
+                }
+                state.secondary_selection = display_name.to_owned();
+            }
+            drop(state);
+            if let Some(path) = detection.config_path.as_deref() {
+                let connection = Connection::open(path).expect("fake state database");
+                if mode == 0 {
+                    let catalog_key = "12345:AI.agent.model.model_list_map";
+                    let raw: String = connection
+                        .query_row(
+                            "SELECT value FROM ItemTable WHERE key = ?1 LIMIT 1",
+                            [catalog_key],
+                            |row| row.get(0),
+                        )
+                        .expect("fake catalog");
+                    let mut catalog: serde_json::Value =
+                        serde_json::from_str(&raw).expect("fake catalog JSON");
+                    if !catalog[label].is_array() {
+                        catalog[label] = serde_json::json!([]);
+                    }
+                    let models = catalog[label].as_array_mut().expect("fake catalog label");
+                    models.retain(|model| {
+                        model
+                            .get("display_name")
+                            .and_then(serde_json::Value::as_str)
+                            != Some(display_name)
+                    });
+                    models.push(serde_json::json!({
+                        "config_source": 3,
+                        "provider": "custom_responses_compatible",
+                        "name": format!("custom_responses_compatible//{model_id}"),
+                        "custom_model_id": 123,
+                        "display_name": display_name,
+                    }));
+                    connection
+                        .execute(
+                            "UPDATE ItemTable SET value = ?2 WHERE key = ?1",
+                            [catalog_key, catalog.to_string().as_str()],
+                        )
+                        .expect("fake catalog update");
+                }
+                for (storage_key, target_session) in [
+                    (
+                        "12345:AI.agent.model.recent_user_selection_by_agent_label",
+                        None,
+                    ),
+                    ("12345:AI.agent.model.session_selected_model", session_id),
+                ] {
+                    if storage_key.ends_with("session_selected_model") && target_session.is_none() {
+                        continue;
+                    }
+                    let mut selected = connection
+                        .query_row(
+                            "SELECT value FROM ItemTable WHERE key = ?1 LIMIT 1",
+                            [storage_key],
+                            |row| row.get::<_, String>(0),
+                        )
+                        .ok()
+                        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+                        .unwrap_or_else(|| serde_json::json!({}));
+                    let value = serde_json::json!({"mode": mode, "modelId": model_key});
+                    if let Some(id) = target_session {
+                        selected[id][label] = value;
+                    } else {
+                        selected[label] = value;
+                    }
+                    connection
+                        .execute("DELETE FROM ItemTable WHERE key = ?1", [storage_key])
+                        .expect("remove fake selection");
+                    connection
+                        .execute(
+                            "INSERT INTO ItemTable (key, value) VALUES (?1, ?2)",
+                            [storage_key, selected.to_string().as_str()],
+                        )
+                        .expect("fake persisted selection");
+                }
+            }
+            Ok(())
+        }
+
+        fn restore_ide_baseline(
+            &self,
+            kind: TraeKind,
+            detection: &AgentDetection,
+            baseline: &ui::IdeSelectionBaseline,
+        ) -> AppResult<()> {
+            let selected = baseline.workspace.mode.or(baseline.app.mode).unwrap_or(1);
+            if selected == 1 {
+                self.select_model_label_scoped(kind, detection, "ide_legacy", "Auto Mode", None)
+            } else {
+                Ok(())
+            }
         }
     }
 
@@ -2177,6 +2704,110 @@ mod tests {
         );
         assert_eq!(state.deletions, 1);
         assert_eq!(commits.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn code_switch_selects_and_restores_agent_and_ide_with_one_checkpoint() {
+        let temp = tempfile::tempdir().expect("temp");
+        let detection = test_detection(&temp);
+        let fake = Arc::new(FakeUi::new("Auto Mode"));
+        {
+            let mut state = fake.state.lock().expect("fake UI state");
+            state.active_session = Some(("task-one".to_owned(), "Auto Mode".to_owned()));
+            state.secondary_active_session = Some(("task-one".to_owned(), "Auto Mode".to_owned()));
+            state.coder_active_session = Some(("task-one".to_owned(), "Auto Mode".to_owned()));
+        }
+        let adapter = TraeAdapter::with_ui(TraeKind::Code, fake.clone());
+        let transaction = ConfigTransaction::new(
+            Arc::new(MemorySecretStore::default()),
+            temp.path().join("backups"),
+        );
+        let desired = desired("fictional-secret");
+
+        let outcome = adapter
+            .apply(&detection, &desired, &transaction, &|| Ok(()))
+            .await
+            .expect("both Code modes selected");
+        assert_eq!(outcome.message, "Fictional Provider · fictional-model");
+        adapter
+            .verify_cached(&detection, &desired, &transaction)
+            .expect("both defaults survive restart");
+        {
+            let state = fake.state.lock().expect("fake UI state");
+            let target = "Fictional Provider · fictional-model";
+            assert_eq!(state.selection, target);
+            assert_eq!(state.secondary_selection, target);
+            assert_eq!(state.coder_selection, target);
+            assert_eq!(state.ide_selection, target);
+            assert_eq!(
+                state
+                    .active_session
+                    .as_ref()
+                    .map(|(_, value)| value.as_str()),
+                Some(target)
+            );
+            assert_eq!(
+                state
+                    .secondary_active_session
+                    .as_ref()
+                    .map(|(_, value)| value.as_str()),
+                Some(target)
+            );
+            assert_eq!(
+                state
+                    .coder_active_session
+                    .as_ref()
+                    .map(|(_, value)| value.as_str()),
+                Some(target)
+            );
+        }
+        ui::TraeUi::select_model_label_scoped(
+            fake.as_ref(),
+            TraeKind::Code,
+            &detection,
+            "solo_coder",
+            "Auto Mode",
+            None,
+        )
+        .expect("simulate IDE drifting to Auto");
+        assert_eq!(
+            adapter
+                .verify_cached(&detection, &desired, &transaction)
+                .expect_err("one-mode success must be rejected")
+                .code,
+            "trae_persisted_selection_mismatch"
+        );
+
+        adapter
+            .restore(&detection, &transaction, &|| Ok(()))
+            .await
+            .expect("both Code modes restored");
+        let state = fake.state.lock().expect("fake UI state");
+        assert_eq!(state.selection, "Auto Mode");
+        assert_eq!(state.secondary_selection, "Auto Mode");
+        assert_eq!(state.coder_selection, "Auto Mode");
+        assert_eq!(state.ide_selection, "Auto Mode");
+        assert_eq!(
+            state
+                .active_session
+                .as_ref()
+                .map(|(_, value)| value.as_str()),
+            Some("Auto Mode")
+        );
+        assert_eq!(
+            state
+                .coder_active_session
+                .as_ref()
+                .map(|(_, value)| value.as_str()),
+            Some("Auto Mode")
+        );
+        assert_eq!(
+            state
+                .secondary_active_session
+                .as_ref()
+                .map(|(_, value)| value.as_str()),
+            Some("Auto Mode")
+        );
     }
 
     #[tokio::test]
@@ -2444,6 +3075,7 @@ mod tests {
                 },
                 previous_selection: "Auto Mode".to_owned(),
                 previous_session: None,
+                additional_previous: BTreeMap::new(),
                 created: true,
                 borrowed: false,
                 replaced_row: Some(legacy),
@@ -2487,6 +3119,11 @@ mod tests {
                 account_scope: "traecode:12345".to_owned(),
                 baseline_selection: "Auto Mode".to_owned(),
                 session_baselines: BTreeMap::new(),
+                additional_baselines: BTreeMap::new(),
+                additional_session_baselines: BTreeMap::new(),
+                ide_baseline: None,
+                secondary_baseline_selection: None,
+                secondary_session_baselines: BTreeMap::new(),
                 selection_label: None,
                 legacy_work_remote_baseline: None,
                 owned: vec![ManagedRow {
@@ -2592,6 +3229,11 @@ mod tests {
                 account_scope: "traecode:12345".to_owned(),
                 baseline_selection: "Auto Mode".to_owned(),
                 session_baselines: BTreeMap::new(),
+                additional_baselines: BTreeMap::new(),
+                additional_session_baselines: BTreeMap::new(),
+                ide_baseline: None,
+                secondary_baseline_selection: None,
+                secondary_session_baselines: BTreeMap::new(),
                 selection_label: None,
                 legacy_work_remote_baseline: None,
                 owned: vec![ManagedRow {
@@ -2663,6 +3305,11 @@ mod tests {
                 account_scope: "traecode:12345".to_owned(),
                 baseline_selection: "Auto Mode".to_owned(),
                 session_baselines: BTreeMap::new(),
+                additional_baselines: BTreeMap::new(),
+                additional_session_baselines: BTreeMap::new(),
+                ide_baseline: None,
+                secondary_baseline_selection: None,
+                secondary_session_baselines: BTreeMap::new(),
                 selection_label: None,
                 legacy_work_remote_baseline: None,
                 owned: vec![ManagedRow {
@@ -2725,6 +3372,11 @@ mod tests {
                 account_scope: "traecode:12345".to_owned(),
                 baseline_selection: "Auto Mode".to_owned(),
                 session_baselines: BTreeMap::new(),
+                additional_baselines: BTreeMap::new(),
+                additional_session_baselines: BTreeMap::new(),
+                ide_baseline: None,
+                secondary_baseline_selection: None,
+                secondary_session_baselines: BTreeMap::new(),
                 selection_label: None,
                 legacy_work_remote_baseline: None,
                 owned: vec![ManagedRow {
@@ -2746,6 +3398,11 @@ mod tests {
                 account_scope: "traecode:12345".to_owned(),
                 baseline_selection: "Auto Mode".to_owned(),
                 session_baselines: BTreeMap::new(),
+                additional_baselines: BTreeMap::new(),
+                additional_session_baselines: BTreeMap::new(),
+                ide_baseline: None,
+                secondary_baseline_selection: None,
+                secondary_session_baselines: BTreeMap::new(),
                 selection_label: None,
                 legacy_work_remote_baseline: None,
                 owned: Vec::new(),
@@ -2888,7 +3545,11 @@ mod tests {
             return;
         }
         let context = DiscoveryContext::native();
+        let selected_kind = std::env::var("AT_SWITCH_TRAE_KIND").unwrap_or_default();
         for adapter in [TraeAdapter::code(), TraeAdapter::work()] {
+            if !selected_kind.is_empty() && selected_kind != adapter.id() {
+                continue;
+            }
             let detection = adapter.detect(&context);
             assert!(
                 matches!(detection.config_health, AgentConfigHealth::Healthy),
@@ -2905,6 +3566,13 @@ mod tests {
                 "{} selection",
                 adapter.display_name()
             );
+            if adapter.kind == TraeKind::Code {
+                let ide = adapter
+                    .ui
+                    .snapshot_label(adapter.kind, &detection, "ide_legacy")
+                    .expect("IDE selector snapshot");
+                assert!(!ide.selection.is_empty());
+            }
         }
     }
 
@@ -2969,6 +3637,12 @@ mod tests {
             let installation = detection.installation.as_ref().expect("Trae installation");
             let original_selection_state =
                 live_selection_state(detection.config_path.as_deref().expect("Trae profile"));
+            let original_ide_selection = if adapter.kind == TraeKind::Code {
+                ui::cached_ide_selection(detection.config_path.as_deref())
+                    .expect("pre-test IDE selection")
+            } else {
+                None
+            };
             let initial_runtime =
                 crate::agents::lifecycle::runtime_status(installation, adapter.display_name());
             let temp = tempfile::tempdir().expect("temporary checkpoint");
@@ -3010,6 +3684,36 @@ mod tests {
                 &selected.1,
             )
             .expect("stable persisted model key"));
+            for label in adapter.kind.additional_selection_labels() {
+                if *label == "ide_legacy" {
+                    let selected = ui::cached_ide_selection(detection.config_path.as_deref())
+                        .expect("IDE persisted model selection")
+                        .expect("IDE selected model");
+                    assert_eq!(selected.0, 0);
+                    assert!(stable_persisted_key_matches(
+                        detection.config_path.as_deref(),
+                        "solo_coder",
+                        &model_id,
+                        ApiProtocol::OpenaiChatCompletions,
+                        &format!("solo_coder_{}", selected.1),
+                    )
+                    .expect("IDE stable persisted model key"));
+                    continue;
+                }
+                let ide_selection =
+                    ui::cached_recent_selection(detection.config_path.as_deref(), label)
+                        .expect("IDE persisted model selection")
+                        .expect("IDE selected model");
+                assert_eq!(ide_selection.0, 0);
+                assert!(stable_persisted_key_matches(
+                    detection.config_path.as_deref(),
+                    label,
+                    &model_id,
+                    ApiProtocol::OpenaiChatCompletions,
+                    &ide_selection.1,
+                )
+                .expect("IDE stable persisted model key"));
+            }
             if let Ok(seconds) = std::env::var("AT_SWITCH_TRAE_INSPECT_AFTER_APPLY_SECONDS") {
                 let seconds = seconds.parse::<u64>().expect("inspection interval");
                 eprintln!(
@@ -3044,6 +3748,14 @@ mod tests {
                 "{} must preserve pre-test recent and session selections",
                 adapter.id()
             );
+            if adapter.kind == TraeKind::Code {
+                assert_eq!(
+                    ui::cached_ide_selection(detection.config_path.as_deref())
+                        .expect("restored IDE selection"),
+                    original_ide_selection,
+                    "TraeCode must preserve pre-test IDE model and mode"
+                );
+            }
             assert_eq!(
                 crate::agents::lifecycle::runtime_status(installation, adapter.display_name()),
                 initial_runtime,

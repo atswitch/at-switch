@@ -20,7 +20,9 @@ use crate::{
     services::endpoint_url,
 };
 
-use super::{endpoint_path, AgentDetection, TraeKind, TraeModelInput, TraeUiSnapshot};
+use super::{
+    endpoint_path, AgentDetection, IdeSelectionBaseline, TraeKind, TraeModelInput, TraeUiSnapshot,
+};
 
 const BRIDGE_SOURCE: &str = include_str!("../trae_bridge.cjs");
 
@@ -75,8 +77,22 @@ impl NativeTraeControl {
         kind: TraeKind,
         detection: &AgentDetection,
     ) -> AppResult<TraeUiSnapshot> {
+        self.snapshot_for_label(kind, detection, kind.selection_label())
+    }
+
+    pub(super) fn snapshot_for_label(
+        &self,
+        kind: TraeKind,
+        detection: &AgentDetection,
+        label: &str,
+    ) -> AppResult<TraeUiSnapshot> {
         self.with_session(kind, detection, |session| {
-            let raw: Snapshot = session.call(&json!({"operation": "snapshot"}))?;
+            let command = if kind == TraeKind::Code && label == "ide_legacy" {
+                json!({"operation": "snapshot_ide"})
+            } else {
+                json!({"operation": "snapshot", "label": label})
+            };
+            let raw: Snapshot = session.call(&command)?;
             if raw.code != 0 {
                 return Err(CommandError::new(
                     "trae_native_model_list_failed",
@@ -138,6 +154,7 @@ impl NativeTraeControl {
                 custom_models,
                 custom_models_by_id,
                 custom_endpoints_by_name,
+                ide_baseline: raw.ide_baseline,
             })
         })
     }
@@ -195,6 +212,57 @@ impl NativeTraeControl {
         session_id: Option<&str>,
     ) -> AppResult<()> {
         self.select_model_for_label(kind, detection, display_name, None, Some(session_id))
+    }
+
+    pub(super) fn select_model_for_selection_label(
+        &self,
+        kind: TraeKind,
+        detection: &AgentDetection,
+        label: &str,
+        display_name: &str,
+        session_id: Option<&str>,
+    ) -> AppResult<()> {
+        if kind == TraeKind::Code && label == "ide_legacy" {
+            return self.with_session(kind, detection, |session| {
+                let result: MutationResult = session.call(&json!({
+                    "operation": "select_ide", "displayName": display_name,
+                }))?;
+                if result.verified != Some(true) {
+                    return Err(CommandError::new(
+                        "trae_native_selection_unverified",
+                        "TraeCode IDE 模型选择未完成写回校验",
+                    ));
+                }
+                Ok(())
+            });
+        }
+        self.select_model_for_label(kind, detection, display_name, Some(label), Some(session_id))
+    }
+
+    pub(super) fn restore_ide_baseline(
+        &self,
+        kind: TraeKind,
+        detection: &AgentDetection,
+        baseline: &IdeSelectionBaseline,
+    ) -> AppResult<()> {
+        if kind != TraeKind::Code {
+            return Err(CommandError::new(
+                "trae_ide_unsupported",
+                "当前 Agent 不支持 IDE 模型选择",
+            ));
+        }
+        self.with_session(kind, detection, |session| {
+            let result: MutationResult = session.call(&json!({
+                "operation": "restore_ide", "baseline": baseline,
+            }))?;
+            if result.verified != Some(true) {
+                return Err(CommandError::new(
+                    "trae_native_selection_unverified",
+                    "TraeCode IDE 原模型恢复未完成校验",
+                ));
+            }
+            Ok(())
+        })
     }
 
     pub(super) fn restore_legacy_work_remote(
@@ -294,6 +362,8 @@ struct Snapshot {
     active_session_id: Option<String>,
     active_selection: Selection,
     models: Vec<Model>,
+    #[serde(default)]
+    ide_baseline: Option<IdeSelectionBaseline>,
 }
 
 #[derive(Deserialize)]
@@ -502,7 +572,7 @@ impl BridgeSession {
     fn read_response<T: for<'de> Deserialize<'de>>(&mut self) -> AppResult<BridgeResponse<T>> {
         let line = self
             .responses
-            .recv_timeout(Duration::from_secs(65))
+            .recv_timeout(Duration::from_secs(120))
             .map_err(|error| match error {
                 mpsc::RecvTimeoutError::Timeout => {
                     CommandError::new("trae_bridge_timeout", "Trae 原生模型服务响应超时")
