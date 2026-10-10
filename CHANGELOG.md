@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Write and verify TraeCode's Agent selectors and IDE's separate model/Manual-mode state in one controlled process, and restore each original selection independently. Keep TraeWork's selector unchanged.
+- Preserve TraeCode IDE's original application/workspace model keys and modes in the encrypted recovery checkpoint; ignore stale workspace keys, and retry delayed model-service initialization inside the same process.
+- Reuse the standard short Provider/model switch-success message for TraeCode and TraeWork instead of displaying native-service implementation details.
+- Ignore legacy unscoped Trae model-cache rows when validating account-scoped selection keys; retry transient native selector-list refreshes.
 - Replace visible Trae model-form automation with a version-gated bridge to TraeCode 3.4.1 and TraeWork 0.1.69 native model services. Unsupported versions fail closed.
 - Refresh Trae's authoritative model list before restoring a selection, and wait for the signed-in account before writing its current-session and recent selections.
 - Refresh the visible lite model catalogs for both TraeCode and TraeWork separately from their remote catalogs, preserve distinct task/default selections, and recheck the current task before committing.
@@ -18,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preserve exact same-ID model and endpoint conflict checks, encrypted recovery checkpoints, and user-owned models; no changes to other Agent adapters.
 
 ### Validation
+- TraeCode 3.4.1 passed a macOS local-mock add/select/restore run covering Agent and IDE persistent defaults and exact IDE baseline recovery; no temporary model remained. The installed, signed 3.16.1 app then selected GLM-5.2 in both visible modes after one TraeCode process restart. A real Agent task returned a Trae-side connection timeout (HTTP 500), so real-provider requests and Windows device validation are not passed.
 - On macOS, both agents passed native-service local-mock add/select in their visible lite selectors, original-selection restore, and managed-row cleanup. Windows device and new-path real-provider default-session/Streaming/Tool validation remain pending.
 
 ## [v3.16.1] - 2026-10-08

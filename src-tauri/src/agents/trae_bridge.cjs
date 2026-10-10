@@ -6,34 +6,74 @@ const { createInterface } = require('node:readline');
 
 const executable = process.argv[2];
 const kind = process.argv[3];
-// Visible Code and Work task composers use their lite selectors. The remote
-// selectors belong to different workflows and can diverge from the UI.
+// Code's Agent and IDE composers persist independent selectors.
 const modelLabel = kind === 'traework' ? 'solo_work_lite' : 'solo_agent_lite';
-// Generic fetchModels requests remote variants. Refresh the visible lite
-// selector explicitly after each native model-service mutation.
+const selectionLabels = kind === 'traecode'
+  ? ['solo_agent_lite', 'solo_agent', 'solo_coder'] : [modelLabel];
+// The IDE composer is owned by ai-modules-chat, not ModelAppService. Its
+// global model/mode pair uses the same account-scoped VS Code storage service.
+const ideStorage = `const q=window.__atSwitchTraeRequire;
+  const app=q(14284).$t.getInstance().resolve(q(97594).B.ModelAppService);
+  const di=q(97988).mc,container=di.getInstance();
+  di.applyContainerToInstance(app.modelPersistenceService,container);
+  di.applyContainerToInstance(app.modelPersistenceService.storagePort,container);
+  const account=app.modelPersistenceService.storagePort.getUserId();
+  const storage=container.resolveOrUndefined(q(13827).k.IStorageService);
+  if(!account||!storage)throw new Error('trae_ide_storage_unavailable');
+  const modelStorageKey=account+'_ai-chat:sessionRelation:globalModelMap';
+  const modeStorageKey=account+'_ai-chat:sessionRelation:globalModeMap';
+  const readScope=(key,scope)=>{const raw=storage.get(key,scope,'');
+    if(!raw)return{};const value=JSON.parse(raw);
+    if(!value||Array.isArray(value)||typeof value!=='object')
+      throw new Error('trae_ide_storage_invalid');
+    return value;};
+  const workspaceModels=readScope(modelStorageKey,1);
+  const workspaceModes=readScope(modeStorageKey,1);
+  const appModels=readScope(modelStorageKey,-1);
+  const appModes=readScope(modeStorageKey,-1);
+  const modelKey=(model)=>model.custom_model_id?
+    [model.config_source??'',model.provider??'-',model.name??'',
+      model.custom_model_id].join('_'):
+    [model.config_source??'',model.provider??'-',model.name??''].join('_');
+  const state=app.modelDomainService.modelStore.chatStore.getState().domain.model;
+  const known=(key)=>(state.byAgentLabel.solo_coder??[])
+    .some(id=>{const model=state.entities[id];return model&&modelKey(model)===key});
+  const workspaceValid=workspaceModes.solo_coder===1||
+    (workspaceModes.solo_coder===0&&known(workspaceModels.solo_coder));
+  const models=workspaceValid?workspaceModels:appModels;
+  const modes=workspaceValid?workspaceModes:appModes;`;
+// Generic fetchModels does not refresh both visible Code selectors.
 const refreshSelectionModels = `await app.fetchModels();
-     const lite=await app.traeApiPort.model.listModels({
-       functions:${JSON.stringify(modelLabel)},show_custom_model:true});
-     if(lite?.code!==0)throw new Error('trae_lite_model_list_failed');
      const native=await window.__atSwitchTraeRequest.request({
        service:'model',method:'model_list',data:{}});
      if(native?.code!==0)throw new Error('trae_native_model_list_failed');
+     window.__atSwitchTraeModelListCache=native;
      const nativeRows=(native.data?.model_list??[]).filter(row=>
        row.provider?.startsWith('custom_')&&row.name);
-     const canonicalList=(lite.data?.list??[]).map(group=>({
-       ...group,models:(group.models??[]).map(model=>{
-         if(!model.provider?.startsWith('custom_'))return model;
-         const byId=nativeRows.filter(row=>
-           row.provider===model.provider&&
-           String(row.custom_model_id)===String(model.custom_model_id));
-         const byName=nativeRows.filter(row=>
-           row.provider===model.provider&&
-           row.display_name===model.display_name);
-         const match=byId.length===1?byId[0]:byName.length===1?byName[0]:undefined;
-         return match?{...model,name:match.name}:model;
-       })}));
-     app.modelDomainService.batchRefreshModels(
-       app.convertToRawModelListMap(canonicalList));`;
+     for(const label of ${JSON.stringify(selectionLabels)}){
+       let listed;
+       for(let attempt=0;attempt<4;attempt++){
+         listed=await app.traeApiPort.model.listModels({
+           functions:label,show_custom_model:true});
+         if(listed?.code===0)break;
+         await new Promise(resolve=>setTimeout(resolve,250));
+       }
+       if(listed?.code!==0)throw new Error('trae_selection_model_list_failed');
+       const canonicalList=(listed.data?.list??[]).map(group=>({
+         ...group,models:(group.models??[]).map(model=>{
+           if(!model.provider?.startsWith('custom_'))return model;
+           const byId=nativeRows.filter(row=>
+             row.provider===model.provider&&
+             String(row.custom_model_id)===String(model.custom_model_id));
+           const byName=nativeRows.filter(row=>
+             row.provider===model.provider&&
+             row.display_name===model.display_name);
+           const match=byId.length===1?byId[0]:byName.length===1?byName[0]:undefined;
+           return match?{...model,name:match.name}:model;
+         })}));
+       app.modelDomainService.batchRefreshModels(
+         app.convertToRawModelListMap(canonicalList));
+     }`;
 const profile = process.argv[4];
 const terminateOnEof = process.argv[5] === 'true';
 if (!executable) {
@@ -207,7 +247,7 @@ async function start() {
       'async request(e){const[t,n]=await Promise.all([this.getDeviceId(),this.createUserInfo()])',
     ],
   };
-  for (const kind of ['runtime', 'workbench']) {
+  const armCapture = async (kind) => {
     const url = urls[kind];
     const location = positionFor(url, signatures[kind]);
     const result = await request('Debugger.setBreakpointByUrl', { url, ...location });
@@ -215,15 +255,32 @@ async function start() {
       throw new Error(`trae_debugger_breakpoint_failed:${kind}`);
     }
     breakpoints.set(result.breakpointId, kind);
-  }
+  };
+  for (const kind of ['runtime', 'workbench']) await armCapture(kind);
   await request('Page.enable');
   await request('Page.reload', { ignoreCache: false });
   await waitFor(() => captured.has('runtime'), 15000, 'runtime_capture');
-  await waitFor(async () => evaluate('!!window.__atSwitchTraeRequire?.m?.[97594]'),
+  await waitFor(async () => evaluate('!!window.__atSwitchTraeRequire?.m?.[97594]')
+    .catch(() => false),
     30000, 'model_module');
-  await waitFor(async () => evaluate('(()=>{try{const q=window.__atSwitchTraeRequire;'
+  const modelServiceReady = async () => evaluate('(()=>{try{const q=window.__atSwitchTraeRequire;'
     + 'return !!q(14284).$t.getInstance().resolve(q(97594).B.ModelAppService)'
-    + '}catch{return false}})()'), 30000, 'model_service');
+    + '}catch{return false}})()').catch(() => false);
+  try {
+    await waitFor(modelServiceReady, 20000, 'model_service');
+  } catch {
+    // The hidden solo-lite renderer can load before its model DI service.
+    // Reload that renderer once without restarting the desktop process.
+    for (const breakpointId of breakpoints.keys()) {
+      await request('Debugger.removeBreakpoint', { breakpointId });
+    }
+    breakpoints.clear();
+    captured.clear();
+    for (const kind of ['runtime', 'workbench']) await armCapture(kind);
+    await request('Page.reload', { ignoreCache: false });
+    await waitFor(() => captured.has('runtime'), 15000, 'runtime_recapture');
+    await waitFor(modelServiceReady, 30000, 'model_service');
+  }
   if (!captured.has('workbench')) {
     await evaluate('(async()=>{const q=window.__atSwitchTraeRequire;'
       + 'const a=q(14284).$t.getInstance().resolve(q(97594).B.ModelAppService);'
@@ -239,6 +296,92 @@ async function start() {
 }
 
 async function handle(command) {
+  if (command.operation === 'snapshot_ide') {
+    if (kind !== 'traecode') throw new Error('trae_ide_unsupported');
+    return evaluate(`(()=>{${ideStorage}
+      const key=models.solo_coder??'',mode=modes.solo_coder;
+      const matches=(state.byAgentLabel.solo_coder??[])
+        .map(id=>state.entities[id]).filter(model=>model&&modelKey(model)===key);
+      const selectedMode=mode===0&&matches.length===1?0:1;
+      const scopeState=(scope)=>{
+        const modelRaw=storage.get(modelStorageKey,scope,'');
+        const modeRaw=storage.get(modeStorageKey,scope,'');
+        const scopeModels=readScope(modelStorageKey,scope);
+        const scopeModes=readScope(modeStorageKey,scope);
+        return {modelKey:Object.hasOwn(scopeModels,'solo_coder')?
+          scopeModels.solo_coder:null,
+          mode:Object.hasOwn(scopeModes,'solo_coder')?scopeModes.solo_coder:null,
+          modelStoragePresent:!!modelRaw,modeStoragePresent:!!modeRaw};
+      };
+      return {code:0,selection:{mode:selectedMode,modelId:key,
+        displayName:selectedMode===0?
+          matches[0].display_name??matches[0].name??'':''},
+        activeSession:false,activeSessionId:null,
+        activeSelection:{mode:selectedMode,modelId:key,displayName:''},models:[],
+        ideBaseline:{workspace:scopeState(1),app:scopeState(-1)}};
+    })()`);
+  }
+  if (command.operation === 'restore_ide') {
+    if (kind !== 'traecode') throw new Error('trae_ide_unsupported');
+    const baseline = JSON.stringify(command.baseline);
+    return evaluate(`(()=>{${ideStorage}
+      const baseline=${baseline};
+      const restore=(scope,saved)=>{
+        if(!saved||!(saved.modelKey===null||typeof saved.modelKey==='string')||
+          !(saved.mode===null||Number.isInteger(saved.mode))||
+          typeof saved.modelStoragePresent!=='boolean'||
+          typeof saved.modeStoragePresent!=='boolean')
+          throw new Error('trae_ide_baseline_invalid');
+        const nextModels={...readScope(modelStorageKey,scope)};
+        const nextModes={...readScope(modeStorageKey,scope)};
+        if(saved.modelKey===null)delete nextModels.solo_coder;
+        else nextModels.solo_coder=saved.modelKey;
+        if(saved.mode===null)delete nextModes.solo_coder;
+        else nextModes.solo_coder=saved.mode;
+        if(!saved.modelStoragePresent&&!Object.keys(nextModels).length)
+          storage.remove(modelStorageKey,scope);
+        else storage.store(modelStorageKey,JSON.stringify(nextModels),scope,1);
+        if(!saved.modeStoragePresent&&!Object.keys(nextModes).length)
+          storage.remove(modeStorageKey,scope);
+        else storage.store(modeStorageKey,JSON.stringify(nextModes),scope,1);
+        const modelsAfter=readScope(modelStorageKey,scope);
+        const modesAfter=readScope(modeStorageKey,scope);
+        return (modelsAfter.solo_coder??null)===saved.modelKey&&
+          (modesAfter.solo_coder??null)===saved.mode;
+      };
+      const workspaceRestored=restore(1,baseline.workspace);
+      const appRestored=restore(-1,baseline.app);
+      return {verified:workspaceRestored&&appRestored};
+    })()`);
+  }
+  if (command.operation === 'select_ide') {
+    if (kind !== 'traecode') throw new Error('trae_ide_unsupported');
+    const name = JSON.stringify(command.displayName);
+    return evaluate(`(()=>{${ideStorage}
+      const name=${name};let nextKey=known(models.solo_coder)?models.solo_coder:
+        undefined,nextMode=1;
+      if(name!=='Auto'&&name!=='Auto Mode'){
+        const matches=(state.byAgentLabel.solo_coder??[])
+          .map(id=>state.entities[id]).filter(model=>
+            model?.display_name===name||model?.name===name);
+        if(matches.length!==1)return{verified:false,reason:'model_not_unique',
+          count:matches.length};
+        nextKey=modelKey(matches[0]);nextMode=0;
+      }
+      const nextModels={...models,solo_coder:nextKey};
+      if(nextKey===undefined)delete nextModels.solo_coder;
+      const nextModes={...modes,solo_coder:nextMode};
+      for(const scope of [1,-1]){
+        storage.store(modelStorageKey,JSON.stringify(nextModels),scope,1);
+        storage.store(modeStorageKey,JSON.stringify(nextModes),scope,1);
+      }
+      return{verified:[1,-1].every(scope=>{
+        const savedModels=readScope(modelStorageKey,scope);
+        const savedModes=readScope(modeStorageKey,scope);
+        return savedModels.solo_coder===nextKey&&savedModes.solo_coder===nextMode;
+      })};
+    })()`);
+  }
   if (command.operation === 'restore_selection') {
     return evaluate(`(async()=>{
       const q=window.__atSwitchTraeRequire;
@@ -407,21 +550,19 @@ async function handle(command) {
     const expression = `(async()=>{
       const input=${input},q=window.__atSwitchTraeRequire;
       const app=q(14284).$t.getInstance().resolve(q(97594).B.ModelAppService);
-      await app.ensureModelsLoaded();
       const domain=app.modelDomainService;
       const di=q(97988).mc,container=di.getInstance();
       di.applyContainerToInstance(app.traeApiPort,container);
       di.applyContainerToInstance(app.traeApiPort.model,container);
       let keys=[];
       for(let attempt=0;attempt<4;attempt++){
-        ${refreshSelectionModels}
         const state=domain.modelStore.chatStore.getState().domain.model;
         keys=(state.byAgentLabel[input.label]??[]).filter(key=>{
           const model=state.entities[key];
           return model?.display_name===input.displayName||model?.name===input.displayName;
         });
-        if(keys.length===1)break;
-        if(keys.length>1)break;
+        if(keys.length)break;
+        ${refreshSelectionModels}
         await new Promise(resolve=>setTimeout(resolve,250));
       }
       if(keys.length!==1) return {verified:false,reason:'model_not_unique',count:keys.length};
@@ -446,14 +587,16 @@ async function handle(command) {
     return evaluate(expression, true, 50000);
   }
   if (command.operation === 'snapshot') {
-    const label = modelLabel;
+    const label = command.label || modelLabel;
+    if (!selectionLabels.includes(label)) throw new Error('trae_invalid_selection_label');
     const expression = `(async()=>{
       const q=window.__atSwitchTraeRequire;
       const app=q(14284).$t.getInstance().resolve(q(97594).B.ModelAppService);
-      await app.ensureModelsLoaded();
       const domain=app.modelDomainService;
       let activeSession=q(6970).cN(q(6970).u7.getState().route);
-      if(!activeSession&&${JSON.stringify(kind === 'traecode')}){
+      if(!activeSession&&${JSON.stringify(kind === 'traecode')}&&
+          !window.__atSwitchTraeRouteWaited){
+        window.__atSwitchTraeRouteWaited=true;
         for(let attempt=0;attempt<24&&!activeSession;attempt++){
           await new Promise(resolve=>setTimeout(resolve,250));
           activeSession=q(6970).cN(q(6970).u7.getState().route);
@@ -466,8 +609,9 @@ async function handle(command) {
         ${JSON.stringify(label)},app.getModelSelectionPolicy()):undefined;
       const activeModel=activeSelected?.modelId?
         domain.getModelByKey(activeSelected.modelId):undefined;
-      const response=await window.__atSwitchTraeRequest.request({
-        service:'model',method:'model_list',data:{}});
+      const response=window.__atSwitchTraeModelListCache??
+        await window.__atSwitchTraeRequest.request({
+          service:'model',method:'model_list',data:{}});
       if(response?.code!==0) return {code:response?.code??-1};
       return {code:0,selection:{mode:selected?.mode,
         modelId:selected?.modelId??'',displayName:current?.display_name??current?.name??''},
@@ -480,7 +624,7 @@ async function handle(command) {
           displayName:model.display_name??'',provider:model.provider??'',
           baseUrl:model.base_url??''}))};
     })()`;
-    return evaluate(expression, true);
+    return evaluate(expression, true, 50000);
   }
   if (command.operation === 'shutdown') {
     closing = true;

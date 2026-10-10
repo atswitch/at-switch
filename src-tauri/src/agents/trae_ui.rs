@@ -2,6 +2,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use zeroize::Zeroizing;
 
@@ -18,6 +19,23 @@ pub(super) struct TraeUiSnapshot {
     pub custom_models: HashSet<String>,
     pub custom_models_by_id: HashMap<String, BTreeSet<String>>,
     pub custom_endpoints_by_name: HashMap<String, BTreeSet<String>>,
+    pub ide_baseline: Option<IdeSelectionBaseline>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct IdeSelectionBaseline {
+    pub workspace: IdeScopeBaseline,
+    pub app: IdeScopeBaseline,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct IdeScopeBaseline {
+    pub model_key: Option<String>,
+    pub mode: Option<i64>,
+    pub model_storage_present: bool,
+    pub mode_storage_present: bool,
 }
 
 #[derive(Default)]
@@ -42,6 +60,12 @@ pub(super) trait TraeUi: Send + Sync {
         kind: TraeKind,
         detection: &AgentDetection,
     ) -> AppResult<TraeUiSnapshot>;
+    fn snapshot_label(
+        &self,
+        kind: TraeKind,
+        detection: &AgentDetection,
+        label: &str,
+    ) -> AppResult<TraeUiSnapshot>;
     fn add_model(
         &self,
         kind: TraeKind,
@@ -64,6 +88,20 @@ pub(super) trait TraeUi: Send + Sync {
     ) -> AppResult<()> {
         self.select_model(kind, detection, display_name)
     }
+    fn select_model_label_scoped(
+        &self,
+        kind: TraeKind,
+        detection: &AgentDetection,
+        label: &str,
+        display_name: &str,
+        session_id: Option<&str>,
+    ) -> AppResult<()>;
+    fn restore_ide_baseline(
+        &self,
+        kind: TraeKind,
+        detection: &AgentDetection,
+        baseline: &IdeSelectionBaseline,
+    ) -> AppResult<()>;
     fn delete_model(
         &self,
         kind: TraeKind,
@@ -111,6 +149,15 @@ impl TraeUi for SystemTraeUi {
         self.native.snapshot(kind, detection)
     }
 
+    fn snapshot_label(
+        &self,
+        kind: TraeKind,
+        detection: &AgentDetection,
+        label: &str,
+    ) -> AppResult<TraeUiSnapshot> {
+        self.native.snapshot_for_label(kind, detection, label)
+    }
+
     fn add_model(
         &self,
         kind: TraeKind,
@@ -138,6 +185,32 @@ impl TraeUi for SystemTraeUi {
     ) -> AppResult<()> {
         self.native
             .select_model_scoped(kind, detection, display_name, session_id)
+    }
+
+    fn select_model_label_scoped(
+        &self,
+        kind: TraeKind,
+        detection: &AgentDetection,
+        label: &str,
+        display_name: &str,
+        session_id: Option<&str>,
+    ) -> AppResult<()> {
+        self.native.select_model_for_selection_label(
+            kind,
+            detection,
+            label,
+            display_name,
+            session_id,
+        )
+    }
+
+    fn restore_ide_baseline(
+        &self,
+        kind: TraeKind,
+        detection: &AgentDetection,
+        baseline: &IdeSelectionBaseline,
+    ) -> AppResult<()> {
+        self.native.restore_ide_baseline(kind, detection, baseline)
     }
 
     fn delete_model(
@@ -211,6 +284,43 @@ pub(super) fn cached_recent_selection(
         .map(|(mode, key)| (mode, key.to_owned())))
 }
 
+pub(super) fn cached_ide_selection(path: Option<&Path>) -> AppResult<Option<(i64, String)>> {
+    let Some(path) = path.filter(|path| path.is_file()) else {
+        return Ok(None);
+    };
+    let account = super::active_account(path, TraeKind::Code)?;
+    let connection =
+        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|_| {
+            CommandError::new("trae_profile_unreadable", "无法读取 TraeCode IDE 模型选择")
+        })?;
+    let load = |suffix: &str| -> AppResult<Option<Value>> {
+        let key = format!("{account}_ai-chat:sessionRelation:{suffix}");
+        let raw: Option<String> = connection
+            .query_row("SELECT value FROM ItemTable WHERE key = ?1", [key], |row| {
+                row.get(0)
+            })
+            .optional()
+            .map_err(|_| {
+                CommandError::new("trae_profile_unreadable", "TraeCode IDE 模型状态无法读取")
+            })?;
+        raw.map(|raw| {
+            serde_json::from_str(&raw).map_err(|_| {
+                CommandError::new("trae_profile_unreadable", "TraeCode IDE 模型状态格式无效")
+            })
+        })
+        .transpose()
+    };
+    let model = load("globalModelMap")?.and_then(|value| {
+        value
+            .get("solo_coder")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    });
+    let mode =
+        load("globalModeMap")?.and_then(|value| value.get("solo_coder").and_then(Value::as_i64));
+    Ok(mode.zip(model))
+}
+
 pub(super) fn cached_model_key_matches(
     path: Option<&Path>,
     label: &str,
@@ -224,7 +334,7 @@ pub(super) fn cached_model_key_matches(
         .map_err(|_| CommandError::new("trae_profile_unreadable", "无法读取 Trae 模型缓存"))?;
     let raw: Option<String> = connection
         .query_row(
-            "SELECT value FROM ItemTable WHERE key LIKE '%AI.agent.model.model_list_map' LIMIT 1",
+            "SELECT value FROM ItemTable WHERE key LIKE '%:AI.agent.model.model_list_map' LIMIT 1",
             [],
             |row| row.get(0),
         )
@@ -378,6 +488,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ide_selection_reads_account_scoped_model_and_mode_together() {
+        let temp = tempfile::tempdir().expect("temporary profile");
+        let path = temp.path().join("state.vscdb");
+        let connection = Connection::open(&path).expect("state database");
+        connection
+            .execute("CREATE TABLE ItemTable (key TEXT, value TEXT)", [])
+            .expect("item table");
+        for (key, value) in [
+            ("12345:AI.agent.model.model_list_map", "{}"),
+            (
+                "12345_ai-chat:sessionRelation:globalModelMap",
+                r#"{"solo_coder":"3_custom_openai_compatible_custom_openai_compatible//fictional-model_123","other":"preserved"}"#,
+            ),
+            (
+                "12345_ai-chat:sessionRelation:globalModeMap",
+                r#"{"solo_coder":1,"other":0}"#,
+            ),
+            (
+                "98765_ai-chat:sessionRelation:globalModeMap",
+                r#"{"solo_coder":0}"#,
+            ),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO ItemTable (key, value) VALUES (?1, ?2)",
+                    [key, value],
+                )
+                .expect("fake selection");
+        }
+        assert_eq!(
+            cached_ide_selection(Some(&path)).expect("IDE selection"),
+            Some((
+                1,
+                "3_custom_openai_compatible_custom_openai_compatible//fictional-model_123"
+                    .to_owned()
+            ))
+        );
+    }
+
+    #[test]
     fn cached_selection_must_use_key_from_restart_model_catalog() {
         let temp = tempfile::tempdir().expect("temporary profile");
         let path = temp.path().join("state.vscdb");
@@ -416,6 +566,47 @@ mod tests {
                 "solo_work_lite_3_custom_openai_compatible_fictional-model_123"
             )
             .expect("transient model key"),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn cached_key_validation_ignores_legacy_unscoped_catalog_row() {
+        let temp = tempfile::tempdir().expect("temporary profile");
+        let path = temp.path().join("state.vscdb");
+        let connection = Connection::open(&path).expect("state database");
+        connection
+            .execute("CREATE TABLE ItemTable (key TEXT, value TEXT)", [])
+            .expect("item table");
+        connection
+            .execute(
+                "INSERT INTO ItemTable (key, value) VALUES (?1, ?2)",
+                ["test_AI.agent.model.model_list_map", "{}"],
+            )
+            .expect("legacy catalog");
+        let account_catalog = json!({"solo_agent": [{
+            "config_source": 3,
+            "provider": "custom_openai_compatible",
+            "name": "custom_openai_compatible//fictional-model",
+            "custom_model_id": 123,
+        }]});
+        connection
+            .execute(
+                "INSERT INTO ItemTable (key, value) VALUES (?1, ?2)",
+                [
+                    "test:AI.agent.model.model_list_map",
+                    account_catalog.to_string().as_str(),
+                ],
+            )
+            .expect("account catalog");
+        assert_eq!(
+            cached_model_key_matches(
+                Some(&path),
+                "solo_agent",
+                "fictional-model",
+                "solo_agent_3_custom_openai_compatible_custom_openai_compatible//fictional-model_999",
+            )
+            .expect("stale custom model ID"),
             Some(false)
         );
     }
