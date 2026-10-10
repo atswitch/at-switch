@@ -82,8 +82,8 @@ All official release binaries are hosted on [GitHub Releases](https://github.com
 | **Codex** | macOS / Windows | ✅ Supported | OpenAI Responses | Updates `$CODEX_HOME/config.toml` or `~/.codex/config.toml` cleanly |
 | **Baidu DuMate** | macOS / Windows | ✅ Supported | OpenAI Chat Completions | Updates the active account's persistent XDG override for every session directory and built-in model alias |
 | **Tencent ima** | macOS / Windows | Implemented; validation scope below | Public OpenAI Chat Completions | Connects the locally signed-in account and synchronizes ima account settings with both local entry selections |
-| **TraeCode** | macOS / Windows | Implemented; validation scope below | OpenAI Chat / Responses / Anthropic Messages | Configures Direct mode through the official custom-model UI without modifying Trae's private database |
-| **TraeWork** | macOS / Windows | Implemented; validation scope below | OpenAI Chat / Responses / Anthropic Messages | Configures Direct mode through the official custom-model UI without modifying Trae's private database |
+| **TraeCode** | macOS / Windows | Implemented; validation scope below | OpenAI Chat / Responses / Anthropic Messages | Version-gated native Trae model service; no model-form interaction; Direct provider requests |
+| **TraeWork** | macOS / Windows | Implemented; validation scope below | OpenAI Chat / Responses / Anthropic Messages | Version-gated native Trae model service; no model-form interaction; Direct provider requests |
 
 ### Using ima
 
@@ -96,17 +96,18 @@ See [ima integration and validation](IMA_INTEGRATION.md) for the current impleme
 ### Using TraeCode and TraeWork
 
 Select **TraeCode** or **TraeWork** in the top bar and click **Switch** beside an existing provider
-model. The first operation asks you to authorize AT-Switch to use Trae's official custom-model UI;
-macOS also requires Accessibility permission once. AT-Switch fills the endpoint, model ID, and API
-key, waits for Trae's own connectivity test, and selects the model. Requests travel directly from
-Trae to the provider and never use AT-Switch's local proxy.
+model. The first operation confirms that Trae may need to restart. AT-Switch uses the verified
+version's native Trae model service to add and select the model without opening its settings form
+or requiring Accessibility permission. Requests travel directly from Trae to the provider and
+never use AT-Switch's local proxy. Only TraeCode 3.4.1 and TraeWork 0.1.69 are currently enabled;
+other versions are rejected rather than falling back to visible UI automation.
 
 **Restore original model** returns to the pre-takeover selection and removes only custom models
-created by AT-Switch. Existing user models remain untouched. On macOS, both TraeCode and TraeWork
-passed local-mock model creation, switching between two third-party models, full-restart persistence,
-original-selection restore, and managed-row cleanup. Windows has the equivalent implementation and
-automated checks but no device validation yet; real-provider default-session and tool-call validation
-also remain pending. See [TraeCode / TraeWork integration and validation](TRAE_INTEGRATION.md).
+created by AT-Switch. Existing user models remain untouched. On macOS, both agents passed local-mock
+creation, selection, restart reread, original-selection restore, and managed-row cleanup. Windows
+shares the business flow but has no device validation yet. Default-session routing, real-provider
+streaming, and tool-call validation on the new path also remain pending. See
+[TraeCode / TraeWork integration and validation](TRAE_INTEGRATION.md).
 
 ---
 

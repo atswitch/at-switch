@@ -5,6 +5,20 @@ import type { AgentSummary, ProviderSummary } from "../types";
 import { SwitchboardPage } from "./SwitchboardPage";
 
 describe("SwitchboardPage", () => {
+  it("labels Trae's headless connection as a native service", () => {
+    render(<SwitchboardPage
+      agent={{
+        id: "traework", displayName: "TraeWork", installStatus: "installed",
+        runtimeStatus: "not_running", configHealth: "healthy", adapterVerified: true,
+        needsRestart: true, automaticRestartSupported: true,
+      }}
+      providers={[]} onCreateProvider={vi.fn()} onEditProvider={vi.fn()}
+      onTestProvider={vi.fn()} onSwitchModel={vi.fn()} onRestoreNative={vi.fn()}
+    />);
+    expect(screen.getByText("NATIVE SERVICE")).toBeInTheDocument();
+    expect(screen.queryByText("OFFICIAL UI")).not.toBeInTheDocument();
+  });
+
   it.each([
     { configHealth: "takeover_interrupted", state: "an interrupted first switch" },
     { configHealth: "external_changed", state: "managed account settings without a matching database binding" },

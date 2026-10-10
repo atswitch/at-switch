@@ -1,4 +1,9 @@
-use std::{collections::HashSet, path::Path, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashSet},
+    path::Path,
+    sync::Arc,
+    time::Duration,
+};
 
 use futures_util::future::BoxFuture;
 use rusqlite::{Connection, OpenFlags};
@@ -8,13 +13,14 @@ use zeroize::Zeroizing;
 
 use crate::{
     domain::{
-        AgentBindingMode, AgentConfigHealth, AgentInstallStatus, ApiProtocol, AppResult,
-        CommandError,
+        AgentBindingMode, AgentConfigHealth, AgentInstallStatus, AgentRuntimeStatus, ApiProtocol,
+        AppResult, CommandError,
     },
     services::{endpoint_url, BaselineSnapshot, ConfigTransaction},
 };
 
 use super::{
+    lifecycle,
     locator::{locate_desktop_app, DiscoveryContext},
     service_adapter::{CommitBinding, ServiceConfigAdapter, ServiceConfigOutcome},
     AgentAdapter, AgentDetection, DesiredAgentBinding,
@@ -53,11 +59,33 @@ impl TraeKind {
             Self::Work => "TRAE SOLO CN",
         }
     }
+
+    fn selection_label(self) -> &'static str {
+        match self {
+            Self::Code => "solo_agent_lite",
+            Self::Work => "solo_work_lite",
+        }
+    }
+
+    fn supports_native_bridge(self, version: Option<&str>) -> bool {
+        matches!(
+            (self, version),
+            (Self::Code, Some("3.4.1" | "3.4.1.0")) | (Self::Work, Some("0.1.69" | "0.1.69.0"))
+        )
+    }
 }
 
 pub(super) struct TraeAdapter {
     kind: TraeKind,
     ui: Arc<dyn ui::TraeUi>,
+}
+
+struct TraeOperationGuard(Arc<dyn ui::TraeUi>, TraeKind);
+
+impl Drop for TraeOperationGuard {
+    fn drop(&mut self) {
+        self.0.finish_operation(self.1);
+    }
 }
 
 impl TraeAdapter {
@@ -72,7 +100,7 @@ impl TraeAdapter {
     fn new(kind: TraeKind) -> Self {
         Self {
             kind,
-            ui: Arc::new(ui::SystemTraeUi),
+            ui: Arc::new(ui::SystemTraeUi::new()),
         }
     }
 
@@ -126,20 +154,34 @@ impl AgentAdapter for TraeAdapter {
         if detection.installation.is_none() {
             return detection;
         }
+        if !self.kind.supports_native_bridge(
+            detection
+                .installation
+                .as_ref()
+                .and_then(|installation| installation.version.as_deref()),
+        ) {
+            detection.install_status = AgentInstallStatus::Installed;
+            detection.config_health = AgentConfigHealth::UnsupportedVersion;
+            detection.message = Some(format!(
+                "{} 当前版本尚未通过无界面原生服务接入验证，AT-Switch 不会回退到可见界面操作。",
+                self.display_name()
+            ));
+            return detection;
+        }
         match active_account(&state_database, self.kind) {
             Ok(_) if cfg!(any(target_os = "macos", target_os = "windows")) => {
                 detection.install_status = AgentInstallStatus::Installed;
                 detection.config_health = AgentConfigHealth::Healthy;
                 detection.write_supported = true;
-                detection.needs_restart = false;
+                detection.needs_restart = true;
                 detection.message = Some(format!(
-                    "{} 已识别；AT-Switch 通过官方自定义模型界面完成直连切换，不修改私有数据库。",
+                    "{} 已识别；AT-Switch 将通过版本限定的 Trae 原生服务无界面切换直连模型。",
                     self.display_name()
                 ));
             }
             Ok(_) => {
                 detection.message = Some(format!(
-                    "{} 界面自动化目前仅支持 macOS 和 Windows。",
+                    "{} 原生模型服务接入目前仅支持 macOS 和 Windows。",
                     self.display_name()
                 ));
             }
@@ -225,6 +267,11 @@ impl ServiceConfigAdapter for TraeAdapter {
         Box::pin(async move {
             self.validate_binding(desired)?;
             let resource = self.account_scope(detection)?;
+            let _session_guard = TraeOperationGuard(Arc::clone(&self.ui), self.kind);
+            let was_running = detection.installation.as_ref().is_some_and(|installation| {
+                lifecycle::runtime_status(installation, self.display_name())
+                    == AgentRuntimeStatus::Running
+            });
             let ui = Arc::clone(&self.ui);
             let kind = self.kind;
             let detection = detection.clone();
@@ -237,11 +284,18 @@ impl ServiceConfigAdapter for TraeAdapter {
                         ui.snapshot_interactive(kind, &detection_for_snapshot)
                     })
                     .await
-                    .map_err(|_| CommandError::internal("Trae 界面读取任务异常终止"))??;
+                    .map_err(|_| CommandError::internal("Trae 模型状态读取任务异常终止"))??;
                     Checkpoint {
                         version: CHECKPOINT_VERSION,
                         account_scope: resource.clone(),
-                        baseline_selection: snapshot.selection,
+                        baseline_selection: snapshot.recent_selection,
+                        session_baselines: snapshot
+                            .active_session_id
+                            .zip(snapshot.active_selection)
+                            .into_iter()
+                            .collect(),
+                        selection_label: Some(kind.selection_label().to_owned()),
+                        legacy_work_remote_baseline: None,
                         owned: Vec::new(),
                         borrowed: Vec::new(),
                         active: None,
@@ -291,7 +345,7 @@ impl ServiceConfigAdapter for TraeAdapter {
                         })
                         .cloned()
                 });
-            let plan = tokio::task::spawn_blocking(move || {
+            let mut plan = tokio::task::spawn_blocking(move || {
                 plan_ui_change(
                     ui.as_ref(),
                     kind,
@@ -303,7 +357,29 @@ impl ServiceConfigAdapter for TraeAdapter {
                 )
             })
             .await
-            .map_err(|_| CommandError::internal("Trae 界面规划任务异常终止"))??;
+            .map_err(|_| CommandError::internal("Trae 模型切换规划任务异常终止"))??;
+
+            if checkpoint.selection_label.as_deref() != Some(kind.selection_label()) {
+                // Baselines from an older selector label do not describe the
+                // visible lite composer and must not be replayed into it.
+                checkpoint.session_baselines.clear();
+                if kind == TraeKind::Work {
+                    // Older Work checkpoints recorded the remote selector,
+                    // while the visible task composer uses the lite selector.
+                    checkpoint.legacy_work_remote_baseline =
+                        Some(checkpoint.baseline_selection.clone());
+                    checkpoint.baseline_selection = plan.previous_selection.clone();
+                } else {
+                    checkpoint.baseline_selection = plan.previous_selection.clone();
+                }
+                checkpoint.selection_label = Some(kind.selection_label().to_owned());
+            }
+            if let Some((session_id, selection)) = plan.previous_session.as_ref() {
+                checkpoint
+                    .session_baselines
+                    .entry(session_id.clone())
+                    .or_insert_with(|| selection.clone());
+            }
 
             let previous_active = checkpoint.active.clone();
             let previous_borrowed = checkpoint.borrowed.clone();
@@ -321,7 +397,7 @@ impl ServiceConfigAdapter for TraeAdapter {
             } else {
                 upsert_managed_row(&mut checkpoint.owned, &plan.row);
             }
-            // Record the exact cleanup target before mutating the official UI.
+            // Record the exact cleanup target before mutating Trae's native model service.
             // If the process stops later, recovery can restore the previous
             // selection and remove only this AT-Switch-managed row.
             checkpoint.pending = true;
@@ -334,10 +410,140 @@ impl ServiceConfigAdapter for TraeAdapter {
                 apply_ui_change(ui.as_ref(), kind, &detection_for_ui, &plan_for_ui)
             })
             .await
-            .map_err(|_| CommandError::internal("Trae 界面切换任务异常终止"))?;
+            .map_err(|_| CommandError::internal("Trae 原生模型切换任务异常终止"))?;
             let ui_mutation = attempt.mutation;
 
             if let Err(error) = attempt.result {
+                let rollback = rollback_ui_change(
+                    Arc::clone(&self.ui),
+                    kind,
+                    detection.clone(),
+                    plan.clone(),
+                    ui_mutation,
+                )
+                .await;
+                record_rollback_checkpoint(
+                    &mut checkpoint,
+                    &previous_active,
+                    &previous_borrowed,
+                    &plan,
+                    &rollback,
+                );
+                let _ = save_checkpoint(transaction, self.id(), &resource, &checkpoint);
+                return Err(error);
+            }
+
+            // Code's task route may become available only after native model
+            // registration. Re-read the visible composer before committing:
+            // writing only the recent default can leave an existing task on
+            // Auto while AT-Switch incorrectly reports success.
+            let visible: AppResult<()> = async {
+                let ui = Arc::clone(&self.ui);
+                let detection_for_snapshot = detection.clone();
+                let snapshot = tokio::task::spawn_blocking(move || {
+                    ui.snapshot_interactive(kind, &detection_for_snapshot)
+                })
+                .await
+                .map_err(|_| CommandError::internal("Trae 当前任务校验任务异常终止"))??;
+                if let Some(session_id) = snapshot.active_session_id.as_deref() {
+                    if plan
+                        .previous_session
+                        .as_ref()
+                        .is_some_and(|(id, _)| id != session_id)
+                    {
+                        return Err(CommandError::new(
+                            "trae_active_session_changed",
+                            "Trae 当前任务在切换期间发生变化，已回滚本次切换",
+                        ));
+                    }
+                    if snapshot.active_selection.as_deref() != Some(plan.row.display_name.as_str())
+                    {
+                        if plan.previous_session.is_none() {
+                            let baseline = snapshot.active_selection.clone().ok_or_else(|| {
+                                CommandError::new(
+                                    "trae_native_selection_missing",
+                                    "Trae 当前任务的原模型尚未加载完成",
+                                )
+                            })?;
+                            checkpoint
+                                .session_baselines
+                                .entry(session_id.to_owned())
+                                .or_insert_with(|| baseline.clone());
+                            plan.previous_session = Some((session_id.to_owned(), baseline));
+                            save_checkpoint(transaction, self.id(), &resource, &checkpoint)?;
+                        }
+                        let ui = Arc::clone(&self.ui);
+                        let detection_for_select = detection.clone();
+                        let display_name = plan.row.display_name.clone();
+                        let session_id = session_id.to_owned();
+                        tokio::task::spawn_blocking(move || {
+                            ui.select_model_scoped(
+                                kind,
+                                &detection_for_select,
+                                &display_name,
+                                Some(&session_id),
+                            )
+                        })
+                        .await
+                        .map_err(|_| CommandError::internal("Trae 当前任务切换任务异常终止"))??;
+                    }
+                }
+                let ui = Arc::clone(&self.ui);
+                let detection_for_snapshot = detection.clone();
+                let final_snapshot = tokio::task::spawn_blocking(move || {
+                    ui.snapshot_interactive(kind, &detection_for_snapshot)
+                })
+                .await
+                .map_err(|_| CommandError::internal("Trae 当前任务复核任务异常终止"))??;
+                if final_snapshot.selection != plan.row.display_name {
+                    return Err(CommandError::new(
+                        "trae_visible_selection_mismatch",
+                        "Trae 当前任务没有选中目标模型，已回滚本次切换",
+                    ));
+                }
+                Ok(())
+            }
+            .await;
+            if let Err(error) = visible {
+                let rollback = rollback_ui_change(
+                    Arc::clone(&self.ui),
+                    kind,
+                    detection.clone(),
+                    plan.clone(),
+                    ui_mutation,
+                )
+                .await;
+                record_rollback_checkpoint(
+                    &mut checkpoint,
+                    &previous_active,
+                    &previous_borrowed,
+                    &plan,
+                    &rollback,
+                );
+                let _ = save_checkpoint(transaction, self.id(), &resource, &checkpoint);
+                return Err(error);
+            }
+
+            // The controlled Trae is the final instance. Verify its durable
+            // default before committing; a successful operation releases the
+            // control channel without starting Trae a second time.
+            let detection_for_verification = detection.clone();
+            let model_id = plan.row.input.model_id.clone();
+            let protocol = plan.row.input.protocol;
+            let selected_session = plan.previous_session.as_ref().map(|(id, _)| id.clone());
+            let persisted = tokio::task::spawn_blocking(move || {
+                verify_persisted_default_in_running_session(
+                    &detection_for_verification,
+                    kind,
+                    &model_id,
+                    protocol,
+                    selected_session.as_deref(),
+                    was_running,
+                )
+            })
+            .await
+            .map_err(|_| CommandError::internal("Trae 重启后模型校验任务异常终止"))?;
+            if let Err(error) = persisted {
                 let rollback = rollback_ui_change(
                     Arc::clone(&self.ui),
                     kind,
@@ -422,6 +628,10 @@ impl ServiceConfigAdapter for TraeAdapter {
                     error.message
                 );
             }
+            let ui = Arc::clone(&self.ui);
+            tokio::task::spawn_blocking(move || ui.complete_operation(kind))
+                .await
+                .map_err(|_| CommandError::internal("Trae 原生模型服务交接任务异常终止"))??;
             Ok(ServiceConfigOutcome {
                 needs_restart: false,
                 message: if plan.borrowed {
@@ -431,7 +641,7 @@ impl ServiceConfigAdapter for TraeAdapter {
                     )
                 } else if legacy_cleanup_complete {
                     format!(
-                        "{} 已通过官方自定义模型界面切换为直连模型；请求不经过 AT-Switch。",
+                        "{} 已通过 Trae 原生模型服务切换为直连模型；请求不经过 AT-Switch。",
                         self.display_name()
                     )
                 } else {
@@ -452,6 +662,7 @@ impl ServiceConfigAdapter for TraeAdapter {
     ) -> BoxFuture<'a, AppResult<ServiceConfigOutcome>> {
         Box::pin(async move {
             let resource = self.account_scope(detection)?;
+            let _session_guard = TraeOperationGuard(Arc::clone(&self.ui), self.kind);
             let Some(mut checkpoint) = load_checkpoint(transaction, self.id(), &resource)? else {
                 commit()?;
                 return Ok(ServiceConfigOutcome {
@@ -469,11 +680,19 @@ impl ServiceConfigAdapter for TraeAdapter {
             let kind = self.kind;
             let detection_for_ui = detection.clone();
             let baseline = checkpoint.baseline_selection.clone();
+            let session_baselines = checkpoint.session_baselines.clone();
             tokio::task::spawn_blocking(move || {
+                for (session_id, selection) in session_baselines {
+                    ui.select_model_scoped(kind, &detection_for_ui, &selection, Some(&session_id))?;
+                }
                 select_model_with_transient_retry(ui.as_ref(), kind, &detection_for_ui, &baseline)
             })
             .await
             .map_err(|_| CommandError::internal("Trae 原模型恢复任务异常终止"))??;
+            if let Some(legacy_baseline) = checkpoint.legacy_work_remote_baseline.as_deref() {
+                self.ui
+                    .restore_legacy_work_remote(detection, legacy_baseline)?;
+            }
 
             if let Err(error) = commit() {
                 let selection_restored = if let Some(active) = checkpoint.active.as_deref() {
@@ -512,6 +731,10 @@ impl ServiceConfigAdapter for TraeAdapter {
             checkpoint.owned = retained;
             checkpoint.pending = !checkpoint.owned.is_empty();
             save_checkpoint(transaction, self.id(), &resource, &checkpoint)?;
+            let ui = Arc::clone(&self.ui);
+            tokio::task::spawn_blocking(move || ui.complete_operation(kind))
+                .await
+                .map_err(|_| CommandError::internal("Trae 原生模型服务交接任务异常终止"))??;
             Ok(ServiceConfigOutcome {
                 needs_restart: false,
                 message: if checkpoint.pending {
@@ -558,21 +781,120 @@ impl ServiceConfigAdapter for TraeAdapter {
                 "Trae 已管理模型与当前绑定不一致",
             ));
         }
-        let cached_models = ui::cached_custom_models(detection.config_path.as_deref())?;
-        if !cached_models.contains(active) {
+        // A status refresh must never launch a second Trae instance. The
+        // model-list cache can lag, but the persisted recent selection is the
+        // default used by a newly created task after a normal restart.
+        let (mode, model_key) = ui::cached_recent_selection(
+            detection.config_path.as_deref(),
+            self.kind.selection_label(),
+        )?
+        .ok_or_else(|| {
+            CommandError::new(
+                "trae_binding_unverified",
+                "Trae 尚未持久化新任务的默认模型选择",
+            )
+        })?;
+        if mode != 0
+            || !stable_persisted_key_matches(
+                detection.config_path.as_deref(),
+                self.kind.selection_label(),
+                &expected.model_id,
+                expected.protocol,
+                &model_key,
+            )?
+        {
             return Err(CommandError::new(
                 "trae_binding_changed",
-                "Trae 已管理模型不再存在",
+                "Trae 新任务的默认模型与目标模型不一致",
             ));
         }
         Ok(())
     }
 }
 
+fn stable_persisted_key_matches(
+    path: Option<&Path>,
+    label: &str,
+    model_id: &str,
+    protocol: ApiProtocol,
+    selected_key: &str,
+) -> AppResult<bool> {
+    let provider = match protocol {
+        ApiProtocol::OpenaiChatCompletions => "custom_openai_compatible",
+        ApiProtocol::OpenaiResponses => "custom_responses_compatible",
+        ApiProtocol::AnthropicMessages => "custom_anthropic_compatible",
+    };
+    let prefix = format!("{label}_3_{provider}_{provider}//{model_id}_");
+    let Some(custom_id) = selected_key.strip_prefix(&prefix) else {
+        return Ok(false);
+    };
+    if custom_id.is_empty() || !custom_id.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Ok(false);
+    }
+    Ok(ui::cached_model_key_matches(path, label, model_id, selected_key)?.unwrap_or(true))
+}
+
+fn verify_persisted_default_in_running_session(
+    detection: &AgentDetection,
+    kind: TraeKind,
+    model_id: &str,
+    protocol: ApiProtocol,
+    selected_session: Option<&str>,
+    was_running: bool,
+) -> AppResult<()> {
+    if was_running {
+        std::thread::sleep(Duration::from_secs(3));
+    }
+    for _ in 0..12 {
+        let recent =
+            ui::cached_recent_selection(detection.config_path.as_deref(), kind.selection_label())?
+                .is_some_and(|(mode, key)| {
+                    mode == 0
+                        && stable_persisted_key_matches(
+                            detection.config_path.as_deref(),
+                            kind.selection_label(),
+                            model_id,
+                            protocol,
+                            &key,
+                        )
+                        .unwrap_or(false)
+                });
+        let session = selected_session.is_none_or(|session_id| {
+            ui::cached_session_selection(
+                detection.config_path.as_deref(),
+                session_id,
+                kind.selection_label(),
+            )
+            .is_ok_and(|selection| {
+                selection.is_some_and(|(mode, key)| {
+                    mode == 0
+                        && stable_persisted_key_matches(
+                            detection.config_path.as_deref(),
+                            kind.selection_label(),
+                            model_id,
+                            protocol,
+                            &key,
+                        )
+                        .unwrap_or(false)
+                })
+            })
+        });
+        if recent && session {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    Err(CommandError::new(
+        "trae_persisted_selection_mismatch",
+        "Trae 当前实例的默认模型未保持为目标模型，已回滚本次切换",
+    ))
+}
+
 #[derive(Clone)]
 struct UiApplyPlan {
     row: ManagedRow,
     previous_selection: String,
+    previous_session: Option<(String, String)>,
     created: bool,
     borrowed: bool,
     replaced_row: Option<ManagedRow>,
@@ -659,7 +981,11 @@ fn plan_ui_change(
             ensure_existing_endpoint(&snapshot, &row.display_name, input)?;
             return Ok(UiApplyPlan {
                 row: row.clone(),
-                previous_selection: snapshot.selection,
+                previous_selection: snapshot.recent_selection.clone(),
+                previous_session: snapshot
+                    .active_session_id
+                    .clone()
+                    .zip(snapshot.active_selection.clone()),
                 created: false,
                 borrowed: false,
                 replaced_row: None,
@@ -711,7 +1037,11 @@ fn plan_ui_change(
                     display_name,
                     input: input.clone(),
                 },
-                previous_selection: snapshot.selection,
+                previous_selection: snapshot.recent_selection.clone(),
+                previous_session: snapshot
+                    .active_session_id
+                    .clone()
+                    .zip(snapshot.active_selection.clone()),
                 created: false,
                 borrowed: true,
                 replaced_row: None,
@@ -731,7 +1061,11 @@ fn plan_ui_change(
             display_name,
             input: input.clone(),
         },
-        previous_selection: snapshot.selection,
+        previous_selection: snapshot.recent_selection.clone(),
+        previous_session: snapshot
+            .active_session_id
+            .clone()
+            .zip(snapshot.active_selection.clone()),
         created: true,
         borrowed: false,
         replaced_row,
@@ -789,12 +1123,9 @@ fn apply_ui_change(
     if plan.created {
         mutation.model_creation_attempted = true;
         if let Err(error) = ui.add_model(kind, detection, &ui_model_input(&plan.row, None)) {
-            // Trae performs its connectivity test and persists the custom
-            // model asynchronously. In some releases the official form can
-            // disappear between those two UI states, causing the immediate
-            // UI confirmation to fail even though the exact model is already
-            // durable. Re-read through the adapter contract and finish this
-            // operation instead of making the user click Switch again.
+            // Trae persists custom models asynchronously. A timed-out native
+            // acknowledgement can still leave the exact model durable; re-read
+            // before deciding whether to roll back.
             let persisted = ui
                 .snapshot_interactive(kind, detection)
                 .is_ok_and(|snapshot| snapshot_contains_plan(&snapshot, plan));
@@ -807,19 +1138,30 @@ fn apply_ui_change(
         }
         mutation.model_created = true;
     }
-    let mut result = select_model_with_transient_retry(ui, kind, detection, &plan.row.display_name);
+    let mut result = select_model_scoped_with_transient_retry(
+        ui,
+        kind,
+        detection,
+        &plan.row.display_name,
+        plan.previous_session.as_ref().map(|(id, _)| id.as_str()),
+    );
     if result.is_err() {
         let selected = ui
             .snapshot_interactive(kind, detection)
-            .is_ok_and(|snapshot| snapshot.selection == plan.row.display_name);
+            .is_ok_and(|snapshot| {
+                snapshot.recent_selection == plan.row.display_name
+                    && plan.previous_session.as_ref().is_none_or(|(id, _)| {
+                        snapshot.active_session_id.as_deref() == Some(id)
+                            && snapshot.active_selection.as_deref()
+                                == Some(plan.row.display_name.as_str())
+                    })
+            });
         if selected {
             result = Ok(());
         }
     }
-    // select_model performs an exact selector reread on both platforms. Do
-    // not immediately gate that verified result on Trae's asynchronously
-    // persisted model-list cache: the UI can already be using the new model
-    // while that cache still contains the previous catalog.
+    // select_model verifies Trae's persisted selection on both platforms.
+    // Do not gate it again on Trae's asynchronously refreshed model cache.
     UiApplyAttempt { result, mutation }
 }
 
@@ -834,14 +1176,13 @@ fn select_model_with_transient_retry(
         Err(error)
             if matches!(
                 error.code.as_str(),
-                "trae_model_menu_missing"
-                    | "trae_model_selection_failed"
-                    | "trae_model_selector_missing"
+                "trae_native_model_missing"
+                    | "trae_native_selection_unverified"
+                    | "trae_native_selection_mismatch"
             ) =>
         {
-            // A focus change can make Electron reject the first click while
-            // still changing its selector. Re-read before one idempotent
-            // retry so a single user action survives that transient state.
+            // Trae may refresh the native model catalog or selection storage
+            // asynchronously. Re-read before one idempotent retry.
             if ui
                 .snapshot_interactive(kind, detection)
                 .is_ok_and(|snapshot| snapshot.selection == display_name)
@@ -849,6 +1190,29 @@ fn select_model_with_transient_retry(
                 return Ok(());
             }
             ui.select_model(kind, detection, display_name)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn select_model_scoped_with_transient_retry(
+    ui: &dyn ui::TraeUi,
+    kind: TraeKind,
+    detection: &AgentDetection,
+    display_name: &str,
+    session_id: Option<&str>,
+) -> AppResult<()> {
+    match ui.select_model_scoped(kind, detection, display_name, session_id) {
+        Ok(()) => Ok(()),
+        Err(error)
+            if matches!(
+                error.code.as_str(),
+                "trae_native_model_missing"
+                    | "trae_native_selection_unverified"
+                    | "trae_native_selection_mismatch"
+            ) =>
+        {
+            ui.select_model_scoped(kind, detection, display_name, session_id)
         }
         Err(error) => Err(error),
     }
@@ -940,7 +1304,15 @@ async fn rollback_ui_change(
                     )
                     .is_ok()
             });
+        let session_restored = plan
+            .previous_session
+            .as_ref()
+            .is_none_or(|(id, selection)| {
+                ui.select_model_scoped(kind, &detection, selection, Some(id))
+                    .is_ok()
+            });
         let selection_restored = replaced_row_restored
+            && session_restored
             && select_model_with_transient_retry(
                 ui.as_ref(),
                 kind,
@@ -1051,6 +1423,12 @@ struct Checkpoint {
     version: u8,
     account_scope: String,
     baseline_selection: String,
+    #[serde(default)]
+    session_baselines: BTreeMap<String, String>,
+    #[serde(default)]
+    selection_label: Option<String>,
+    #[serde(default)]
+    legacy_work_remote_baseline: Option<String>,
     owned: Vec<ManagedRow>,
     #[serde(default)]
     borrowed: Vec<ManagedRow>,
@@ -1157,8 +1535,8 @@ fn state_database(detection: &AgentDetection) -> AppResult<&Path> {
 
 fn ui_required(display_name: &str) -> CommandError {
     CommandError::new(
-        "trae_ui_config_required",
-        format!("{display_name} 模型配置必须通过官方界面完成"),
+        "trae_native_service_required",
+        format!("{display_name} 模型配置必须通过原生模型服务完成"),
     )
 }
 
@@ -1171,12 +1549,98 @@ mod tests {
     };
 
     use crate::infrastructure::MemorySecretStore;
+    use uuid::Uuid;
 
     use super::*;
+
+    #[test]
+    fn native_service_rejects_unverified_trae_versions() {
+        assert!(TraeKind::Code.supports_native_bridge(Some("3.4.1")));
+        assert!(TraeKind::Work.supports_native_bridge(Some("0.1.69")));
+        assert!(!TraeKind::Code.supports_native_bridge(Some("3.4.2")));
+        assert!(!TraeKind::Work.supports_native_bridge(Some("0.1.70")));
+        assert!(!TraeKind::Code.supports_native_bridge(None));
+        assert_eq!(TraeKind::Code.selection_label(), "solo_agent_lite");
+        assert_eq!(TraeKind::Work.selection_label(), "solo_work_lite");
+    }
+
+    #[test]
+    fn work_plan_keeps_distinct_default_and_current_task_baselines() {
+        let temp = tempfile::tempdir().expect("temp");
+        let detection = test_detection(&temp);
+        let fake = FakeUi::new("Auto Mode");
+        {
+            let mut state = fake.state.lock().expect("fake UI state");
+            state.recent_selection = Some("Auto Mode".to_owned());
+            state.active_session = Some(("session-one".to_owned(), "User model".to_owned()));
+        }
+        let input = ManagedInput::from_desired(&desired("fictional-secret"));
+        let plan = plan_ui_change(
+            &fake,
+            TraeKind::Work,
+            &detection,
+            &input,
+            None,
+            None,
+            &HashSet::new(),
+        )
+        .expect("plan Work model change");
+        assert_eq!(plan.previous_selection, "Auto Mode");
+        assert_eq!(
+            plan.previous_session,
+            Some(("session-one".to_owned(), "User model".to_owned()))
+        );
+    }
+
+    #[tokio::test]
+    async fn delayed_code_task_route_is_selected_and_restored() {
+        let temp = tempfile::tempdir().expect("temp");
+        let detection = test_detection(&temp);
+        let fake = Arc::new(FakeUi::new("Auto Mode"));
+        fake.state
+            .lock()
+            .expect("fake UI state")
+            .reveal_session_at_snapshot = Some((3, "late-task".to_owned(), "Auto Mode".to_owned()));
+        let adapter = TraeAdapter::with_ui(TraeKind::Code, fake.clone());
+        let transaction = ConfigTransaction::new(
+            Arc::new(MemorySecretStore::default()),
+            temp.path().join("backups"),
+        );
+        adapter
+            .apply(
+                &detection,
+                &desired("fictional-secret"),
+                &transaction,
+                &|| Ok(()),
+            )
+            .await
+            .expect("late task selected");
+        {
+            let state = fake.state.lock().expect("fake UI state");
+            assert_eq!(
+                state.active_session,
+                Some((
+                    "late-task".to_owned(),
+                    "Fictional Provider · fictional-model".to_owned()
+                ))
+            );
+        }
+        adapter
+            .restore(&detection, &transaction, &|| Ok(()))
+            .await
+            .expect("late task restored");
+        assert_eq!(
+            fake.state.lock().expect("fake UI state").active_session,
+            Some(("late-task".to_owned(), "Auto Mode".to_owned()))
+        );
+    }
 
     #[derive(Default)]
     struct FakeUiState {
         selection: String,
+        recent_selection: Option<String>,
+        active_session: Option<(String, String)>,
+        reveal_session_at_snapshot: Option<(usize, String, String)>,
         models: HashSet<String>,
         model_ids: HashMap<String, String>,
         endpoints: HashMap<String, String>,
@@ -1184,6 +1648,7 @@ mod tests {
         fail_after_persisting_next_add: bool,
         transient_selection_failures: usize,
         selection_attempts: usize,
+        snapshots: usize,
         additions: usize,
         deletions: usize,
     }
@@ -1214,7 +1679,20 @@ mod tests {
                     .insert(display_name.clone());
             }
             ui::TraeUiSnapshot {
-                selection: state.selection.clone(),
+                selection: state
+                    .active_session
+                    .as_ref()
+                    .map(|(_, selected)| selected.clone())
+                    .unwrap_or_else(|| state.selection.clone()),
+                recent_selection: state
+                    .recent_selection
+                    .clone()
+                    .unwrap_or_else(|| state.selection.clone()),
+                active_session_id: state.active_session.as_ref().map(|(id, _)| id.clone()),
+                active_selection: state
+                    .active_session
+                    .as_ref()
+                    .map(|(_, selected)| selected.clone()),
                 custom_models: if state.cache_visible {
                     state.models.clone()
                 } else {
@@ -1249,6 +1727,18 @@ mod tests {
             _: TraeKind,
             _: &AgentDetection,
         ) -> AppResult<ui::TraeUiSnapshot> {
+            let mut state = self.state.lock().expect("fake UI state");
+            state.snapshots += 1;
+            if state
+                .reveal_session_at_snapshot
+                .as_ref()
+                .is_some_and(|(threshold, _, _)| state.snapshots >= *threshold)
+            {
+                if let Some((_, id, selection)) = state.reveal_session_at_snapshot.take() {
+                    state.active_session = Some((id, selection));
+                }
+            }
+            drop(state);
             Ok(self.snapshot_value())
         }
 
@@ -1290,8 +1780,8 @@ mod tests {
 
         fn select_model(
             &self,
-            _: TraeKind,
-            _: &AgentDetection,
+            kind: TraeKind,
+            detection: &AgentDetection,
             display_name: &str,
         ) -> AppResult<()> {
             let mut state = self.state.lock().expect("fake UI state");
@@ -1299,12 +1789,88 @@ mod tests {
             if state.transient_selection_failures > 0 {
                 state.transient_selection_failures -= 1;
                 return Err(CommandError::new(
-                    "trae_model_selection_failed",
+                    "trae_native_selection_unverified",
                     "test transient model selection failure",
                 ));
             }
             if display_name == "Auto Mode" || state.models.contains(display_name) {
                 state.selection = display_name.to_owned();
+                let mode = if display_name == "Auto Mode" { 1 } else { 0 };
+                let model_id = state
+                    .model_ids
+                    .get(display_name)
+                    .cloned()
+                    .unwrap_or_default();
+                let selection_key = if mode == 0 {
+                    format!(
+                        "{}_3_custom_responses_compatible_custom_responses_compatible//{model_id}_123",
+                        kind.selection_label()
+                    )
+                } else {
+                    String::new()
+                };
+                if let Some(path) = detection.config_path.as_deref() {
+                    let connection = Connection::open(path).expect("fake state database");
+                    if mode == 0 {
+                        let catalog_key = "12345:AI.agent.model.model_list_map";
+                        let raw: String = connection
+                            .query_row(
+                                "SELECT value FROM ItemTable WHERE key = ?1 LIMIT 1",
+                                [catalog_key],
+                                |row| row.get(0),
+                            )
+                            .expect("fake catalog");
+                        let mut catalog: serde_json::Value =
+                            serde_json::from_str(&raw).expect("fake catalog JSON");
+                        if !catalog[kind.selection_label()].is_array() {
+                            catalog[kind.selection_label()] = serde_json::json!([]);
+                        }
+                        let models = catalog[kind.selection_label()]
+                            .as_array_mut()
+                            .expect("fake catalog label");
+                        models.retain(|model| {
+                            model
+                                .get("display_name")
+                                .and_then(serde_json::Value::as_str)
+                                != Some(display_name)
+                        });
+                        models.push(serde_json::json!({
+                            "config_source": 3,
+                            "provider": "custom_responses_compatible",
+                            "name": format!("custom_responses_compatible//{model_id}"),
+                            "custom_model_id": 123,
+                            "display_name": display_name,
+                        }));
+                        connection
+                            .execute(
+                                "UPDATE ItemTable SET value = ?2 WHERE key = ?1",
+                                [catalog_key, catalog.to_string().as_str()],
+                            )
+                            .expect("fake catalog update");
+                    }
+                    let storage_key = "12345:AI.agent.model.recent_user_selection_by_agent_label";
+                    let mut selected = connection
+                        .query_row(
+                            "SELECT value FROM ItemTable WHERE key = ?1 LIMIT 1",
+                            [storage_key],
+                            |row| row.get::<_, String>(0),
+                        )
+                        .ok()
+                        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+                        .unwrap_or_else(|| serde_json::json!({}));
+                    selected[kind.selection_label()] =
+                        serde_json::json!({"mode": mode, "modelId": selection_key});
+                    let serialized = selected.to_string();
+                    connection
+                        .execute("DELETE FROM ItemTable WHERE key = ?1", [storage_key])
+                        .expect("remove prior fake selection");
+                    connection
+                        .execute(
+                            "INSERT INTO ItemTable (key, value) VALUES (?1, ?2)",
+                            [storage_key, serialized.as_str()],
+                        )
+                        .expect("fake persisted selection");
+                }
                 Ok(())
             } else {
                 Err(CommandError::new(
@@ -1326,6 +1892,61 @@ mod tests {
             }
             state.model_ids.remove(display_name);
             state.endpoints.remove(display_name);
+            Ok(())
+        }
+
+        fn select_model_scoped(
+            &self,
+            kind: TraeKind,
+            detection: &AgentDetection,
+            display_name: &str,
+            session_id: Option<&str>,
+        ) -> AppResult<()> {
+            self.select_model(kind, detection, display_name)?;
+            let Some(session_id) = session_id else {
+                return Ok(());
+            };
+            let mut state = self.state.lock().expect("fake UI state");
+            state.active_session = Some((session_id.to_owned(), display_name.to_owned()));
+            let mode = if display_name == "Auto Mode" { 1 } else { 0 };
+            let model_id = state
+                .model_ids
+                .get(display_name)
+                .cloned()
+                .unwrap_or_default();
+            drop(state);
+            let selection_key = if mode == 0 {
+                format!(
+                    "{}_3_custom_responses_compatible_custom_responses_compatible//{model_id}_123",
+                    kind.selection_label()
+                )
+            } else {
+                String::new()
+            };
+            if let Some(path) = detection.config_path.as_deref() {
+                let connection = Connection::open(path).expect("fake state database");
+                let storage_key = "12345:AI.agent.model.session_selected_model";
+                let mut selected = connection
+                    .query_row(
+                        "SELECT value FROM ItemTable WHERE key = ?1 LIMIT 1",
+                        [storage_key],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .ok()
+                    .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+                    .unwrap_or_else(|| serde_json::json!({}));
+                selected[session_id][kind.selection_label()] =
+                    serde_json::json!({"mode": mode, "modelId": selection_key});
+                connection
+                    .execute("DELETE FROM ItemTable WHERE key = ?1", [storage_key])
+                    .expect("remove prior fake session selection");
+                connection
+                    .execute(
+                        "INSERT INTO ItemTable (key, value) VALUES (?1, ?2)",
+                        [storage_key, selected.to_string().as_str()],
+                    )
+                    .expect("fake persisted session selection");
+            }
             Ok(())
         }
     }
@@ -1693,6 +2314,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cached_verification_never_restarts_trae_and_checks_default_selection() {
+        let temp = tempfile::tempdir().expect("temp");
+        let detection = test_detection(&temp);
+        let fake = Arc::new(FakeUi::new("Auto Mode"));
+        let adapter = TraeAdapter::with_ui(TraeKind::Code, fake.clone());
+        let transaction = ConfigTransaction::new(
+            Arc::new(MemorySecretStore::default()),
+            temp.path().join("backups"),
+        );
+
+        adapter
+            .apply(
+                &detection,
+                &desired("fictional-secret"),
+                &transaction,
+                &|| Ok(()),
+            )
+            .await
+            .expect("native-service apply");
+        let database = detection.config_path.as_ref().expect("state database");
+        let connection = Connection::open(database).expect("state database");
+        let snapshots = fake.state.lock().expect("fake UI state").snapshots;
+        adapter
+            .verify_cached(&detection, &desired("fictional-secret"), &transaction)
+            .expect("canonical persisted selection confirms the binding");
+        connection
+            .execute(
+                "UPDATE ItemTable SET value = ?2 WHERE key = ?1",
+                [
+                    "12345:AI.agent.model.recent_user_selection_by_agent_label",
+                    r#"{"solo_agent_lite":{"mode":0,"modelId":"solo_agent_lite_3_custom_responses_compatible_fictional-model_123"}}"#,
+                ],
+            )
+            .expect("persisted selection");
+        assert_eq!(
+            adapter
+                .verify_cached(&detection, &desired("fictional-secret"), &transaction)
+                .expect_err("a transient model key must not be reported as active")
+                .code,
+            "trae_binding_changed"
+        );
+        assert_eq!(
+            fake.state.lock().expect("fake UI state").snapshots,
+            snapshots
+        );
+
+        connection
+            .execute(
+                "UPDATE ItemTable SET value = ?1 WHERE key LIKE '%AI.agent.model.recent_user_selection_by_agent_label'",
+                [r#"{"solo_agent_lite":{"mode":1,"modelId":""}}"#],
+            )
+            .expect("change persisted default");
+        assert_eq!(
+            adapter
+                .verify_cached(&detection, &desired("fictional-secret"), &transaction)
+                .expect_err("a changed default must not be reported as active")
+                .code,
+            "trae_binding_changed"
+        );
+        assert_eq!(
+            fake.state.lock().expect("fake UI state").snapshots,
+            snapshots
+        );
+    }
+
+    #[tokio::test]
     async fn persisted_model_survives_a_lost_add_confirmation_without_a_second_click() {
         let temp = tempfile::tempdir().expect("temp");
         let detection = test_detection(&temp);
@@ -1756,6 +2443,7 @@ mod tests {
                     input,
                 },
                 previous_selection: "Auto Mode".to_owned(),
+                previous_session: None,
                 created: true,
                 borrowed: false,
                 replaced_row: Some(legacy),
@@ -1798,6 +2486,9 @@ mod tests {
                 version: CHECKPOINT_VERSION,
                 account_scope: "traecode:12345".to_owned(),
                 baseline_selection: "Auto Mode".to_owned(),
+                session_baselines: BTreeMap::new(),
+                selection_label: None,
+                legacy_work_remote_baseline: None,
                 owned: vec![ManagedRow {
                     display_name: legacy_name.clone(),
                     input: input.clone(),
@@ -1900,6 +2591,9 @@ mod tests {
                 version: CHECKPOINT_VERSION,
                 account_scope: "traecode:12345".to_owned(),
                 baseline_selection: "Auto Mode".to_owned(),
+                session_baselines: BTreeMap::new(),
+                selection_label: None,
+                legacy_work_remote_baseline: None,
                 owned: vec![ManagedRow {
                     display_name: legacy_name.clone(),
                     input,
@@ -1968,6 +2662,9 @@ mod tests {
                 version: CHECKPOINT_VERSION,
                 account_scope: "traecode:12345".to_owned(),
                 baseline_selection: "Auto Mode".to_owned(),
+                session_baselines: BTreeMap::new(),
+                selection_label: None,
+                legacy_work_remote_baseline: None,
                 owned: vec![ManagedRow {
                     display_name: display_name.clone(),
                     input: previous_input,
@@ -2027,6 +2724,9 @@ mod tests {
                 version: CHECKPOINT_VERSION,
                 account_scope: "traecode:12345".to_owned(),
                 baseline_selection: "Auto Mode".to_owned(),
+                session_baselines: BTreeMap::new(),
+                selection_label: None,
+                legacy_work_remote_baseline: None,
                 owned: vec![ManagedRow {
                     display_name: display_name.clone(),
                     input: previous_input,
@@ -2045,6 +2745,9 @@ mod tests {
                 version: CHECKPOINT_VERSION,
                 account_scope: "traecode:12345".to_owned(),
                 baseline_selection: "Auto Mode".to_owned(),
+                session_baselines: BTreeMap::new(),
+                selection_label: None,
+                legacy_work_remote_baseline: None,
                 owned: Vec::new(),
                 borrowed: Vec::new(),
                 active: None,
@@ -2203,5 +2906,241 @@ mod tests {
                 adapter.display_name()
             );
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "mutates signed-in Trae account with a temporary local-only QA model"]
+    async fn live_native_bridge_applies_and_restores_temporary_model() {
+        if std::env::var("AT_SWITCH_TRAE_LIVE_MUTATION").as_deref() != Ok("1") {
+            return;
+        }
+        let selected_kind = std::env::var("AT_SWITCH_TRAE_KIND").unwrap_or_default();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("local mock listener");
+        let port = listener.local_addr().expect("local mock address").port();
+        listener
+            .set_nonblocking(true)
+            .expect("local mock nonblocking");
+        let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let running_for_server = Arc::clone(&running);
+        let server = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            while running_for_server.load(std::sync::atomic::Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let mut request = [0_u8; 8192];
+                        let count = stream.read(&mut request).unwrap_or(0);
+                        let streaming = request[..count]
+                            .windows(13)
+                            .any(|part| part == b"\"stream\":true");
+                        let body = if streaming {
+                            "data: {\"id\":\"atswitch-qa\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+                        } else {
+                            "{\"id\":\"atswitch-qa\",\"object\":\"chat.completion\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}"
+                        };
+                        let mime = if streaming {
+                            "text/event-stream"
+                        } else {
+                            "application/json"
+                        };
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        let _ = stream.write_all(response.as_bytes());
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        let context = DiscoveryContext::native();
+        for adapter in [TraeAdapter::code(), TraeAdapter::work()] {
+            if !selected_kind.is_empty() && selected_kind != adapter.id() {
+                continue;
+            }
+            let detection = adapter.detect(&context);
+            assert!(
+                detection.write_supported,
+                "{} must be writable",
+                adapter.id()
+            );
+            let installation = detection.installation.as_ref().expect("Trae installation");
+            let original_selection_state =
+                live_selection_state(detection.config_path.as_deref().expect("Trae profile"));
+            let initial_runtime =
+                crate::agents::lifecycle::runtime_status(installation, adapter.display_name());
+            let temp = tempfile::tempdir().expect("temporary checkpoint");
+            let transaction = ConfigTransaction::new(
+                Arc::new(MemorySecretStore::default()),
+                temp.path().join("backups"),
+            );
+            let base_url = format!("http://127.0.0.1:{port}/v1");
+            let model_id = format!("atswitch-qa-{}", Uuid::new_v4().simple());
+            let desired = DesiredAgentBinding {
+                mode: AgentBindingMode::Direct,
+                provider_name: "ATSwitch QA",
+                model_id: &model_id,
+                supports_tools: false,
+                source_protocol: ApiProtocol::OpenaiChatCompletions,
+                upstream_protocol: ApiProtocol::OpenaiChatCompletions,
+                base_url: &base_url,
+                credential: "sk-atswitch-qa-fake",
+            };
+            let apply_result = adapter
+                .apply(&detection, &desired, &transaction, &|| Ok(()))
+                .await;
+            if let Err(error) = apply_result {
+                panic!("{} apply failed: {}", adapter.id(), error.code);
+            }
+            let verification = adapter.verify_cached(&detection, &desired, &transaction);
+            let selected = ui::cached_recent_selection(
+                detection.config_path.as_deref(),
+                adapter.kind.selection_label(),
+            )
+            .expect("persisted model selection")
+            .expect("selected model");
+            assert_eq!(selected.0, 0);
+            assert!(stable_persisted_key_matches(
+                detection.config_path.as_deref(),
+                adapter.kind.selection_label(),
+                &model_id,
+                ApiProtocol::OpenaiChatCompletions,
+                &selected.1,
+            )
+            .expect("stable persisted model key"));
+            if let Ok(seconds) = std::env::var("AT_SWITCH_TRAE_INSPECT_AFTER_APPLY_SECONDS") {
+                let seconds = seconds.parse::<u64>().expect("inspection interval");
+                eprintln!(
+                    "{} live apply complete; holding for visible inspection",
+                    adapter.id()
+                );
+                std::thread::sleep(Duration::from_secs(seconds));
+            }
+            let restore_result = adapter.restore(&detection, &transaction, &|| Ok(())).await;
+            verification.expect("managed model verified");
+            let restored_outcome = restore_result.expect("restore original selection");
+            let restored_checkpoint = load_checkpoint(
+                &transaction,
+                adapter.id(),
+                &adapter.account_scope(&detection).expect("account scope"),
+            )
+            .expect("restore checkpoint")
+            .expect("checkpoint retained");
+            assert!(
+                !restored_checkpoint.pending,
+                "{} restore remains pending: {}",
+                adapter.id(),
+                restored_outcome.message
+            );
+            let models = ui::cached_custom_model_catalog(detection.config_path.as_deref())
+                .expect("restored custom models");
+            assert!(!models.names_by_id.contains_key(&model_id));
+            let restored_selection_state =
+                live_selection_state(detection.config_path.as_deref().expect("Trae profile"));
+            assert!(
+                original_selection_state == restored_selection_state,
+                "{} must preserve pre-test recent and session selections",
+                adapter.id()
+            );
+            assert_eq!(
+                crate::agents::lifecycle::runtime_status(installation, adapter.display_name()),
+                initial_runtime,
+                "{} runtime must be restored",
+                adapter.id()
+            );
+        }
+        running.store(false, std::sync::atomic::Ordering::Relaxed);
+        server.join().expect("local mock shutdown");
+    }
+
+    #[test]
+    #[ignore = "removes only local-only QA models left by an interrupted live test"]
+    fn live_remove_interrupted_local_qa_models() {
+        if std::env::var("AT_SWITCH_TRAE_CLEAN_QA").as_deref() != Ok("1") {
+            return;
+        }
+        let context = DiscoveryContext::native();
+        for adapter in [TraeAdapter::code(), TraeAdapter::work()] {
+            let detection = adapter.detect(&context);
+            let snapshot = adapter
+                .ui
+                .snapshot_interactive(adapter.kind, &detection)
+                .expect("native QA model inventory");
+            let names = snapshot
+                .custom_models_by_id
+                .iter()
+                .filter(|(id, _)| id.starts_with("atswitch-qa-"))
+                .flat_map(|(_, names)| names)
+                .filter(|name| {
+                    name.starts_with("ATSwitch QA")
+                        && snapshot
+                            .custom_endpoints_by_name
+                            .get(*name)
+                            .is_some_and(|endpoints| {
+                                !endpoints.is_empty()
+                                    && endpoints
+                                        .iter()
+                                        .all(|endpoint| endpoint.starts_with("http://127.0.0.1:"))
+                            })
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            for name in &names {
+                adapter
+                    .ui
+                    .delete_model(adapter.kind, &detection, name)
+                    .expect("delete interrupted local QA model");
+            }
+            eprintln!("{} removed {} local QA models", adapter.id(), names.len());
+            adapter.ui.finish_operation(adapter.kind);
+        }
+    }
+
+    fn live_selection_state(path: &Path) -> Vec<(String, String, i64, String)> {
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .expect("read Trae profile");
+        let mut selections = Vec::new();
+        for suffix in [
+            "AI.agent.model.recent_user_selection_by_agent_label",
+            "AI.agent.model.session_selected_model",
+        ] {
+            let raw: String = connection
+                .query_row(
+                    "SELECT value FROM ItemTable WHERE key LIKE ?1 LIMIT 1",
+                    [format!("%{suffix}")],
+                    |row| row.get(0),
+                )
+                .expect("stored Trae selection");
+            let value: serde_json::Value = serde_json::from_str(&raw).expect("selection JSON");
+            if suffix.contains("recent_user_selection") {
+                for (label, selection) in value.as_object().expect("recent selections") {
+                    selections.push(normalized_selection("recent", label, selection));
+                }
+            } else {
+                for (session, labels) in value.as_object().expect("session selections") {
+                    for (label, selection) in labels.as_object().expect("session labels") {
+                        selections.push(normalized_selection(session, label, selection));
+                    }
+                }
+            }
+        }
+        selections.sort();
+        selections
+    }
+
+    fn normalized_selection(
+        scope: &str,
+        label: &str,
+        selection: &serde_json::Value,
+    ) -> (String, String, i64, String) {
+        let mode = selection["mode"].as_i64().unwrap_or(-1);
+        let key = if mode == 1 {
+            String::new()
+        } else {
+            selection["modelId"].as_str().unwrap_or_default().to_owned()
+        };
+        (scope.to_owned(), label.to_owned(), mode, key)
     }
 }

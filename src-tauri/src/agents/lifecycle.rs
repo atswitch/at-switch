@@ -75,7 +75,7 @@ fn desktop_app_running(installation: &Installation, display_name: &str) -> AppRe
     }
     let process_list = String::from_utf8_lossy(&output.stdout);
     let executable = executable.to_string_lossy();
-    Ok(!macos_main_process_ids(&process_list, &executable).is_empty())
+    Ok(!macos_main_process_ids(&process_list, &executable, display_name).is_empty())
 }
 
 #[cfg(target_os = "windows")]
@@ -100,6 +100,48 @@ pub(crate) struct DesktopAppPause {
 }
 
 impl DesktopAppPause {
+    pub(crate) fn keep_current_running(&mut self) -> AppResult<()> {
+        let Some(installation) = &self.installation else {
+            return Err(CommandError::new(
+                "agent_relaunch_unverified",
+                "Trae 当前运行状态无法核对",
+            ));
+        };
+        if !self.was_running || !desktop_app_running(installation, self.display_name)? {
+            return Err(CommandError::new(
+                "agent_relaunch_unverified",
+                format!("{} 切换后的进程未保持运行", self.display_name),
+            ));
+        }
+        self.resumed = true;
+        Ok(())
+    }
+
+    pub(crate) fn was_running(&self) -> bool {
+        self.was_running
+    }
+
+    pub(crate) fn resume_and_wait(self) -> AppResult<RestartOutcome> {
+        let installation = self.installation.clone();
+        let display_name = self.display_name;
+        let outcome = self.resume()?;
+        if outcome == RestartOutcome::Relaunched {
+            if let Some(installation) = installation {
+                for _ in 0..50 {
+                    if desktop_app_running(&installation, display_name)? {
+                        return Ok(outcome);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                return Err(CommandError::new(
+                    "agent_relaunch_unverified",
+                    format!("{display_name} 未在重启后恢复运行"),
+                ));
+            }
+        }
+        Ok(outcome)
+    }
+
     pub(crate) fn resume(mut self) -> AppResult<RestartOutcome> {
         self.resumed = true;
         let Some(installation) = &self.installation else {
@@ -176,7 +218,7 @@ fn stop_desktop_app_if_running(installation: &Installation, display_name: &str) 
     }
     let process_list = String::from_utf8_lossy(&output.stdout);
     let executable = executable.to_string_lossy();
-    let mut pids = macos_main_process_ids(&process_list, &executable);
+    let mut pids = macos_main_process_ids(&process_list, &executable, display_name);
     if pids.is_empty() {
         return Ok(false);
     }
@@ -202,7 +244,7 @@ fn stop_desktop_app_if_running(installation: &Installation, display_name: &str) 
         {
             if output.status.success() {
                 let process_list = String::from_utf8_lossy(&output.stdout);
-                pids = macos_main_process_ids(&process_list, &executable);
+                pids = macos_main_process_ids(&process_list, &executable, display_name);
             }
         }
         if pids.is_empty() {
@@ -293,21 +335,32 @@ fn macos_bundle_executable(app_path: &Path, display_name: &str) -> AppResult<Pat
 }
 
 #[cfg(target_os = "macos")]
-fn macos_main_process_ids(process_list: &str, executable: &str) -> Vec<u32> {
+fn macos_main_process_ids(process_list: &str, executable: &str, display_name: &str) -> Vec<u32> {
     process_list
         .lines()
         .filter_map(|line| {
             let mut parts = line.trim().splitn(2, char::is_whitespace);
             let pid = parts.next()?.parse::<u32>().ok()?;
             let command = parts.next()?.trim_start();
-            (command == executable).then_some(pid)
+            (command == executable
+                || (matches!(display_name, "TraeCode" | "TraeWork")
+                    && command == format!("{executable} --remote-debugging-pipe")))
+            .then_some(pid)
         })
         .collect()
 }
 
 #[cfg(target_os = "macos")]
 fn wait_for_macos_process_exit(pids: &[u32], display_name: &str) -> AppResult<()> {
-    let deadline = Instant::now() + Duration::from_secs(12);
+    // Trae can keep its Electron main process alive while flushing its
+    // account-backed model state after SIGTERM. Do not report a false stop
+    // failure before that bounded, orderly shutdown finishes.
+    let timeout = if matches!(display_name, "TraeCode" | "TraeWork") {
+        Duration::from_secs(25)
+    } else {
+        Duration::from_secs(12)
+    };
+    let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         let any_running = pids.iter().any(|pid| {
             Command::new("/bin/kill")
@@ -845,7 +898,26 @@ mod tests {
                103 /usr/local/bin/codex app-server\n"
         );
 
-        assert_eq!(macos_main_process_ids(&process_list, executable), vec![101]);
+        assert_eq!(
+            macos_main_process_ids(&process_list, executable, "Codex"),
+            vec![101]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_process_match_recognizes_only_trae_controlled_main_process() {
+        let executable = "/Applications/Trae.app/Contents/MacOS/Electron";
+        let process_list = format!(
+            "  101 {executable} --remote-debugging-pipe\n\
+               102 {executable} --type=renderer --remote-debugging-pipe\n\
+               103 {executable} /tmp/bridge.cjs\n"
+        );
+        assert_eq!(
+            macos_main_process_ids(&process_list, executable, "TraeCode"),
+            vec![101]
+        );
+        assert!(macos_main_process_ids(&process_list, executable, "Codex").is_empty());
     }
 
     // 跨平台不变量：错误构造器必须携带稳定错误码和面向用户的恢复建议，

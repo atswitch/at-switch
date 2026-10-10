@@ -923,8 +923,8 @@ function AppContent() {
               <p className="affected-agents-alert__note">
                 {deletingProviderAlertState.inUseAgents.some((agent) => usesServiceModelSettings(agent.id))
                   ? text(
-                      "使用账号或官方模型界面的智能体会先恢复接管前的模型配置；恢复失败时保留供应商和模型。",
-                      "Agents using account-backed or official model settings restore their pre-takeover models first. If restoration fails, the provider and models are kept.",
+                      "使用账号或原生模型服务的智能体会先恢复接管前的模型配置；恢复失败时保留供应商和模型。",
+                      "Agents using account-backed or native model settings restore their pre-takeover models first. If restoration fails, the provider and models are kept.",
                     )
                   : deletingProviderAlertState.mode === "unbind_only"
                   ? text(
@@ -1013,8 +1013,8 @@ function AppContent() {
               <p className="affected-agents-alert__note">
                 {(deletingModelTarget?.provider.models.length ?? 0) <= 1 && deletingModelAlertState.inUseAgents.some((agent) => usesServiceModelSettings(agent.id))
                   ? text(
-                      "使用账号或官方模型界面的智能体会先恢复接管前的模型配置；恢复失败时保留供应商和模型。",
-                      "Agents using account-backed or official model settings restore their pre-takeover models first. If restoration fails, the provider and models are kept.",
+                      "使用账号或原生模型服务的智能体会先恢复接管前的模型配置；恢复失败时保留供应商和模型。",
+                      "Agents using account-backed or native model settings restore their pre-takeover models first. If restoration fails, the provider and models are kept.",
                     )
                   : deletingModelAlertState.mode === "unbind_only"
                   ? text(

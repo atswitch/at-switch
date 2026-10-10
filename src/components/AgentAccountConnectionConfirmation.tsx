@@ -1,6 +1,6 @@
 import { Cloud, KeyRound, RotateCw, ShieldCheck } from "lucide-react";
 import { useLanguage } from "../i18n";
-import { usesInteractiveModelSettings } from "../lib/agentCapabilities";
+import { usesNativeTraeModelService } from "../lib/agentCapabilities";
 import type { AgentSummary } from "../types";
 import { Modal } from "./Modal";
 
@@ -19,7 +19,7 @@ export function AgentAccountConnectionConfirmation({
 }: AgentAccountConnectionConfirmationProps) {
   const { text } = useLanguage();
   const restoring = operation === "restore";
-  const trae = usesInteractiveModelSettings(agent?.id ?? "");
+  const trae = usesNativeTraeModelService(agent?.id ?? "");
   const title = restoring
     ? trae
       ? text(`恢复 ${agent?.displayName ?? "Trae"} 原始模型`, `Restore original ${agent?.displayName ?? "Trae"} model`)
@@ -32,7 +32,7 @@ export function AgentAccountConnectionConfirmation({
     <Modal
       open={Boolean(agent)}
       onClose={onCancel}
-      eyebrow={trae ? "OFFICIAL MODEL UI" : "CONNECT IMA"}
+      eyebrow={trae ? "NATIVE TRAE SERVICE" : "CONNECT IMA"}
       title={title}
       footer={
         <div className="restart-confirmation__actions">
@@ -53,10 +53,10 @@ export function AgentAccountConnectionConfirmation({
           <span aria-hidden="true"><Cloud size={22} /></span>
           {trae ? (
             <div>
-              <strong>{text(`使用 ${agent?.displayName ?? "Trae"} 官方自定义模型界面`, `Use the official ${agent?.displayName ?? "Trae"} custom-model UI`)}</strong>
+              <strong>{text(`使用 ${agent?.displayName ?? "Trae"} 原生模型服务`, `Use the native ${agent?.displayName ?? "Trae"} model service`)}</strong>
               <p>{text(
-                "AT-Switch 会打开已运行的 Trae 模型界面并完成填写、连通性测试和模型选择。macOS 首次使用需要授予 AT-Switch 辅助功能权限；Windows 使用系统 UI Automation。",
-                "AT-Switch opens the running Trae model UI and completes form entry, connectivity testing, and selection. macOS requires Accessibility permission once; Windows uses system UI Automation.",
+                "AT-Switch 会在需要时安全重启 Trae，并通过其原生服务添加和选择模型；不会打开模型设置表单，也不需要辅助功能权限。",
+                "AT-Switch may safely restart Trae and uses its native service to add and select models. It does not open the model settings form or require Accessibility permission.",
               )}</p>
             </div>
           ) : (
@@ -97,8 +97,12 @@ export function AgentAccountConnectionConfirmation({
             <div>
               <strong>{text("请先等待当前生成完成", "Wait for the current generation to finish")}</strong>
               <p>{text(
-                "为确保两个入口读取新的模型选择，AT-Switch 会安全退出并重新打开 ima。",
-                "AT-Switch will safely quit and reopen ima so both entries load the new model selections.",
+                trae
+                  ? `AT-Switch 会安全退出并重新打开 ${agent.displayName}，使模型选择生效。`
+                  : "为确保两个入口读取新的模型选择，AT-Switch 会安全退出并重新打开 ima。",
+                trae
+                  ? `AT-Switch will safely quit and reopen ${agent.displayName} to apply the model selection.`
+                  : "AT-Switch will safely quit and reopen ima so both entries load the new model selections.",
               )}</p>
             </div>
           </div>

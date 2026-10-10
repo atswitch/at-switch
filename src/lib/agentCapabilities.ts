@@ -34,7 +34,7 @@ export function supportsDirectBinding(
       hasPublicEndpoint(provider.baseUrl)
     );
   }
-  if (usesInteractiveModelSettings(agentId)) {
+  if (usesNativeTraeModelService(agentId)) {
     return providerSupportedProtocols(provider).some((protocol) =>
       [
         "openai_chat_completions",
@@ -53,12 +53,12 @@ export function usesCloudModelSettings(agentId: string): boolean {
   return agentId === "ima";
 }
 
-export function usesInteractiveModelSettings(agentId: string): boolean {
+export function usesNativeTraeModelService(agentId: string): boolean {
   return agentId === "traecode" || agentId === "traework";
 }
 
 export function usesServiceModelSettings(agentId: string): boolean {
-  return usesCloudModelSettings(agentId) || usesInteractiveModelSettings(agentId);
+  return usesCloudModelSettings(agentId) || usesNativeTraeModelService(agentId);
 }
 
 export function supportsProxyBinding(agentId: string): boolean {
@@ -126,7 +126,7 @@ export function directBindingUnavailableReason(
       ? "ima 需要公网可访问的 OpenAI Chat 接口，无法使用本机或局域网地址。"
       : "ima requires a public OpenAI Chat endpoint. Local and private-network addresses are unavailable.";
   }
-  if (usesInteractiveModelSettings(agentId)) {
+  if (usesNativeTraeModelService(agentId)) {
     return language === "zh-CN"
       ? "Trae 直连支持 OpenAI Chat、OpenAI Responses 和 Anthropic Messages 协议。"
       : "Trae Direct mode supports OpenAI Chat, OpenAI Responses, and Anthropic Messages.";
@@ -152,7 +152,7 @@ export function directBindingRequirement(
   if (usesCloudModelSettings(agentId)) {
     return language === "zh-CN" ? "公网 OpenAI Chat 接口" : "a public OpenAI Chat endpoint";
   }
-  if (usesInteractiveModelSettings(agentId)) {
+  if (usesNativeTraeModelService(agentId)) {
     return language === "zh-CN"
       ? "OpenAI Chat、OpenAI Responses 或 Anthropic Messages"
       : "OpenAI Chat, OpenAI Responses, or Anthropic Messages";
