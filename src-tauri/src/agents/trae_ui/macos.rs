@@ -329,6 +329,26 @@ impl AxElement {
         }
         None
     }
+
+    fn click_model_label(&self, model_names: &std::collections::HashSet<String>) -> bool {
+        let mut stack = self.children();
+        let mut visited = 0_usize;
+        while let Some(element) = stack.pop() {
+            visited += 1;
+            if visited > 64 {
+                break;
+            }
+            if ["AXValue", "AXTitle", "AXDescription"]
+                .into_iter()
+                .any(|attribute| model_names.contains(&element.string(attribute)))
+                && element.click_center()
+            {
+                return true;
+            }
+            stack.extend(element.children());
+        }
+        false
+    }
 }
 
 struct UiSession {
@@ -525,6 +545,13 @@ impl UiSession {
         false
     }
 
+    fn close_code_settings(&self) -> bool {
+        if self.has_exact("返回应用") || self.has_exact("Back to app") {
+            return self.click_text(&["返回应用", "Back to app"]).is_ok();
+        }
+        send_key(13, CG_COMMAND_FLAG).is_ok()
+    }
+
     fn open_settings_drawer(&self) -> bool {
         let window = self
             .matching(|element| element.role() == "AXWindow")
@@ -618,6 +645,18 @@ pub(super) fn snapshot(
 ) -> AppResult<TraeUiSnapshot> {
     let mut session = UiSession::new(detection, activate)?;
     let model_names = cached_model_names(detection.config_path.as_deref())?;
+    if kind == TraeKind::Work && (session.has_exact("添加模型") || session.has_exact("Add model"))
+    {
+        if !session.close_model_settings() {
+            return Err(ui_unavailable());
+        }
+        session = UiSession::new(detection, false)?;
+    }
+    if kind == TraeKind::Code && (session.has_exact("返回应用") || session.has_exact("Back to app"))
+    {
+        session.close_code_settings();
+        session = UiSession::new(detection, false)?;
+    }
     let mut selection = wait_until(MODEL_SELECTOR_LOAD_TIMEOUT, || {
         let combo = session.model_combo(&model_names)?;
         session.combo_selection(&combo, &model_names)
@@ -628,7 +667,7 @@ pub(super) fn snapshot(
             TraeKind::Work if session.has_exact("添加模型") || session.has_exact("Add model") => {
                 session.close_model_settings()
             }
-            TraeKind::Code => send_key(13, CG_COMMAND_FLAG).is_ok(),
+            TraeKind::Code => session.close_code_settings(),
             _ => false,
         };
         if returned_to_chat {
@@ -651,6 +690,7 @@ pub(super) fn snapshot(
         selection,
         custom_models: catalog.names,
         custom_models_by_id: catalog.names_by_id,
+        custom_endpoints_by_name: catalog.endpoints_by_name,
     })
 }
 
@@ -756,44 +796,40 @@ pub(super) fn select_model(
     for candidate in selection_candidates(display_name) {
         model_names.insert(candidate.to_owned());
     }
-    let mut session = UiSession::new(detection, true)?;
+    let session = UiSession::new(detection, true)?;
     session.dismiss_transient_overlays();
-    if kind == TraeKind::Work && (session.has_exact("添加模型") || session.has_exact("Add model"))
-    {
-        if !session.close_model_settings() {
+    if session.has_exact("添加模型") || session.has_exact("Add model") {
+        match kind {
+            TraeKind::Work if !session.close_model_settings() => return Err(ui_unavailable()),
+            TraeKind::Code if !session.close_code_settings() => return Err(ui_unavailable()),
+            _ => {}
+        }
+    }
+    let mut ready = wait_until(MODEL_SELECTOR_LOAD_TIMEOUT, || {
+        let current = UiSession::new(detection, false).ok()?;
+        current
+            .model_combo(&model_names)
+            .map(|combo| (current, combo))
+    });
+    if ready.is_none() && kind == TraeKind::Code {
+        // TraeCode renders settings in an editor tab. Close that tab
+        // after adding or deleting a model before addressing the chat
+        // model selector; otherwise unrelated settings comboboxes can be
+        // mistaken for the selector.
+        let current = UiSession::new(detection, false)?;
+        if !current.close_code_settings() {
             return Err(ui_unavailable());
         }
-        session = wait_until(MODEL_SELECTOR_LOAD_TIMEOUT, || {
+        ready = wait_until(MODEL_SELECTOR_LOAD_TIMEOUT, || {
             let session = UiSession::new(detection, false).ok()?;
-            session.model_combo(&model_names).map(|_| session)
-        })
-        .ok_or_else(|| {
-            CommandError::new("trae_model_selector_missing", "未找到 Trae 模型选择器")
-        })?;
+            session
+                .model_combo(&model_names)
+                .map(|combo| (session, combo))
+        });
     }
-    let combo = match session.model_combo(&model_names) {
-        Some(combo) => combo,
-        None if kind == TraeKind::Code => {
-            // TraeCode renders settings in an editor tab. Close that tab
-            // after adding or deleting a model before addressing the chat
-            // model selector; otherwise unrelated settings comboboxes can be
-            // mistaken for the selector.
-            send_key(13, CG_COMMAND_FLAG)?;
-            wait_until(MODEL_SELECTOR_LOAD_TIMEOUT, || {
-                let session = UiSession::new(detection, false).ok()?;
-                session.model_combo(&model_names)
-            })
-            .ok_or_else(|| {
-                CommandError::new("trae_model_selector_missing", "未找到 Trae 模型选择器")
-            })?
-        }
-        None => {
-            return Err(CommandError::new(
-                "trae_model_selector_missing",
-                "未找到 Trae 模型选择器",
-            ));
-        }
-    };
+    let (session, combo) = ready.ok_or_else(|| {
+        CommandError::new("trae_model_selector_missing", "未找到 Trae 模型选择器")
+    })?;
     if session
         .combo_selection(&combo, &model_names)
         .as_deref()
@@ -801,16 +837,35 @@ pub(super) fn select_model(
     {
         return Ok(());
     }
-    let opened = if kind == TraeKind::Code {
-        combo.click_center() || combo.press_self_or_parent()
-    } else {
-        combo.press_self_or_parent() || combo.click_center()
-    };
-    if !opened {
-        return Err(ui_unavailable());
-    }
+    // Electron can acknowledge AXPress without opening the model menu. Click
+    // the visible label first, then verify that the requested menu item exists.
     let candidates = selection_candidates(display_name);
-    let session = refreshed(detection, &candidates, Duration::from_secs(3))?;
+    let session = open_menu_with_retry(
+        || combo.click_model_label(&model_names) || combo.click_center(),
+        |timeout| refreshed(detection, &candidates, timeout).ok(),
+        || {
+            combo.click_model_label(&model_names)
+                || combo.click_center()
+                || combo.press_self_or_parent()
+        },
+    )
+    .or_else(|| {
+        // The first physical click can only raise Trae's window. Reacquire
+        // the live Electron element before the final attempt so that a stale
+        // accessibility reference cannot turn a recoverable focus change into
+        // a failed model switch.
+        let current = UiSession::new(detection, true).ok()?;
+        let combo = current.model_combo(&model_names)?;
+        (combo.click_model_label(&model_names)
+            || combo.click_center()
+            || combo.press_self_or_parent())
+        .then(|| refreshed(detection, &candidates, Duration::from_secs(5)).ok())
+        .flatten()
+    })
+    .ok_or_else(|| {
+        CommandError::new("trae_model_menu_missing", "Trae 模型菜单未打开")
+            .with_recovery("请保持 Trae 主窗口可见并关闭遮挡弹窗，然后重新切换。")
+    })?;
     session.press_text(&candidates)?;
     let verified = refreshed(detection, &candidates, Duration::from_secs(3))?;
     if verified
@@ -859,6 +914,21 @@ fn selection_candidates(selection: &str) -> Vec<&str> {
     } else {
         vec![selection]
     }
+}
+
+fn open_menu_with_retry<T>(
+    mut primary: impl FnMut() -> bool,
+    mut visible: impl FnMut(Duration) -> Option<T>,
+    mut fallback: impl FnMut() -> bool,
+) -> Option<T> {
+    if primary() {
+        if let Some(menu) = visible(Duration::from_secs(2)) {
+            return Some(menu);
+        }
+    }
+    fallback()
+        .then(|| visible(Duration::from_secs(3)))
+        .flatten()
 }
 
 fn selections_match(actual: &str, expected: &str) -> bool {
@@ -926,16 +996,46 @@ fn open_model_settings(kind: TraeKind, detection: &AgentDetection) -> AppResult<
         return Ok(());
     }
     if session.has_exact("模型") || session.has_exact("Models") {
-        session.press_text(&["模型", "Models"])?;
-        return refreshed(
-            detection,
-            &["添加模型", "Add model"],
-            MODEL_SELECTOR_LOAD_TIMEOUT,
-        )
-        .map(|_| ());
+        return enter_model_category(&session, detection);
     }
     match kind {
         TraeKind::Code => {
+            // Current TraeCode exposes Settings under the account menu, while
+            // older builds still accept the keyboard/drawer route below.
+            if let Some(account_button) = session
+                .matching(|element| {
+                    element.role() == "AXButton"
+                        && (element.string("AXTitle").contains("免费")
+                            || element
+                                .string("AXTitle")
+                                .to_ascii_lowercase()
+                                .contains("free"))
+                })
+                .into_iter()
+                .next()
+            {
+                if account_button.press() || account_button.click_center() {
+                    if let Some(menu) = wait_until(Duration::from_secs(3), || {
+                        let current = UiSession::new(detection, false).ok()?;
+                        (current.has_exact("设置")
+                            || current.has_exact("Settings")
+                            || current.has_exact("模型")
+                            || current.has_exact("Models"))
+                        .then_some(current)
+                    }) {
+                        if menu.has_exact("设置") || menu.has_exact("Settings") {
+                            menu.press_button(&["设置", "Settings"])?;
+                        }
+                        if let Some(settings) = wait_until(Duration::from_secs(5), || {
+                            let current = UiSession::new(detection, false).ok()?;
+                            (current.has_exact("模型") || current.has_exact("Models"))
+                                .then_some(current)
+                        }) {
+                            return enter_model_category(&settings, detection);
+                        }
+                    }
+                }
+            }
             send_key(43, CG_COMMAND_FLAG)?;
         }
         TraeKind::Work => {
@@ -971,7 +1071,7 @@ fn open_model_settings(kind: TraeKind, detection: &AgentDetection) -> AppResult<
         let session = UiSession::new(detection, false).ok()?;
         (session.has_exact("模型") || session.has_exact("Models")).then_some(session)
     }) {
-        settings.press_text(&["模型", "Models"])?;
+        return enter_model_category(&settings, detection);
     } else {
         // TraeCode keeps the settings categories behind an unlabelled drawer.
         // Locate it relative to the app window so window movement and display
@@ -984,13 +1084,7 @@ fn open_model_settings(kind: TraeKind, detection: &AgentDetection) -> AppResult<
             let session = UiSession::new(detection, false).ok()?;
             (session.has_exact("模型") || session.has_exact("Models")).then_some(session)
         }) {
-            settings.press_text(&["模型", "Models"])?;
-            return refreshed(
-                detection,
-                &["添加模型", "Add model"],
-                MODEL_SELECTOR_LOAD_TIMEOUT,
-            )
-            .map(|_| ());
+            return enter_model_category(&settings, detection);
         }
         let search = wait_until(Duration::from_secs(5), || {
             let session = UiSession::new(detection, false).ok()?;
@@ -1014,6 +1108,28 @@ fn open_model_settings(kind: TraeKind, detection: &AgentDetection) -> AppResult<
         };
         settings.press_text(&["模型管理", "Model management", "Models", "Model"])?;
     }
+    refreshed(
+        detection,
+        &["添加模型", "Add model"],
+        MODEL_SELECTOR_LOAD_TIMEOUT,
+    )
+    .map(|_| ())
+}
+
+fn enter_model_category(session: &UiSession, detection: &AgentDetection) -> AppResult<()> {
+    let labels = &["模型", "Models"];
+    session.press_text(labels)?;
+    if refreshed(
+        detection,
+        &["添加模型", "Add model"],
+        Duration::from_secs(2),
+    )
+    .is_ok()
+    {
+        return Ok(());
+    }
+    let current = UiSession::new(detection, false)?;
+    current.click_text(labels)?;
     refreshed(
         detection,
         &["添加模型", "Add model"],
@@ -1153,7 +1269,9 @@ fn ui_unavailable() -> CommandError {
 
 #[cfg(test)]
 mod tests {
-    use super::{selection_candidates, selections_match};
+    use std::cell::Cell;
+
+    use super::{open_menu_with_retry, selection_candidates, selections_match};
 
     #[test]
     fn auto_labels_are_interchangeable_across_trae_versions() {
@@ -1162,5 +1280,31 @@ mod tests {
         assert_eq!(selection_candidates("Auto"), ["Auto", "Auto Mode"]);
         assert_eq!(selection_candidates("custom"), ["custom"]);
         assert!(!selections_match("custom", "Auto"));
+    }
+
+    #[test]
+    fn acknowledged_click_without_a_visible_menu_uses_the_fallback() {
+        let reads = Cell::new(0);
+        let fallback_clicks = Cell::new(0);
+        let result = open_menu_with_retry(
+            || true,
+            |_| {
+                reads.set(reads.get() + 1);
+                (reads.get() == 2).then_some("model menu")
+            },
+            || {
+                fallback_clicks.set(fallback_clicks.get() + 1);
+                true
+            },
+        );
+        assert_eq!(result, Some("model menu"));
+        assert_eq!(fallback_clicks.get(), 1);
+
+        let result = open_menu_with_retry(
+            || true,
+            |_| Some("already open"),
+            || panic!("a visible menu must not be clicked again"),
+        );
+        assert_eq!(result, Some("already open"));
     }
 }

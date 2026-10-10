@@ -101,8 +101,9 @@ AT-Switch 会填写 Endpoint、模型 ID 和 API Key，等待 Trae 自带连通�
 
 「恢复原始模型」会选回首次接管前的模型，并只删除 AT-Switch 创建的模型项，保留用户
 已有自定义模型。当前 macOS 已对 TraeCode 与 TraeWork 完成本地 Mock 模型新增、两模型
-互切、完全重启持久化、恢复原选择和受管项清理。Windows 已完成同语义实现与自动化检查，
-但尚未经 Windows 真机；真实上游默认新会话与 Tool 调用也仍需验收。详见
+互切、完全重启持久化、恢复原选择和受管项清理；使用已有真实 Provider 模型的新任务
+默认选择、真实回复与重启保留也已通过。Windows 已完成同语义实现与自动化检查，但尚未经
+Windows 真机；真实上游 Streaming 与 Tool 调用仍需验收。详见
 [TraeCode / TraeWork 接入与验收记录](TRAE_INTEGRATION.md)。
 
 ---

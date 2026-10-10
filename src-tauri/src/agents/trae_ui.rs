@@ -14,12 +14,14 @@ pub(super) struct TraeUiSnapshot {
     pub selection: String,
     pub custom_models: HashSet<String>,
     pub custom_models_by_id: HashMap<String, BTreeSet<String>>,
+    pub custom_endpoints_by_name: HashMap<String, BTreeSet<String>>,
 }
 
 #[derive(Default)]
 pub(super) struct CachedCustomModelCatalog {
     pub names: HashSet<String>,
     pub names_by_id: HashMap<String, BTreeSet<String>>,
+    pub endpoints_by_name: HashMap<String, BTreeSet<String>>,
 }
 
 #[derive(Clone)]
@@ -222,6 +224,13 @@ fn collect_custom_model_catalog(value: &Value, catalog: &mut CachedCustomModelCa
             if custom {
                 if let Some(display_name) = object.get("display_name").and_then(Value::as_str) {
                     catalog.names.insert(display_name.to_owned());
+                    if let Some(endpoint) = object.get("base_url").and_then(Value::as_str) {
+                        catalog
+                            .endpoints_by_name
+                            .entry(display_name.to_owned())
+                            .or_default()
+                            .insert(endpoint.to_owned());
+                    }
                     let model_id = ["config_name", "name"].into_iter().find_map(|field| {
                         object
                             .get(field)
@@ -293,6 +302,7 @@ mod tests {
                 {
                     "provider": "custom_openai_compatible",
                     "display_name": "User model",
+                    "base_url": "https://provider.example.test/v1/chat/completions",
                     "name": "custom_openai_compatible//fictional/model"
                 }
             ]
@@ -313,6 +323,12 @@ mod tests {
         assert_eq!(
             catalog.names_by_id.get("fictional/model"),
             Some(&BTreeSet::from(["User model".to_owned()]))
+        );
+        assert_eq!(
+            catalog.endpoints_by_name.get("User model"),
+            Some(&BTreeSet::from([
+                "https://provider.example.test/v1/chat/completions".to_owned()
+            ]))
         );
     }
 }
