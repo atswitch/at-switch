@@ -11,7 +11,7 @@ use crate::{
         AgentBindingMode, AgentConfigHealth, AgentInstallStatus, ApiProtocol, AppResult,
         CommandError,
     },
-    services::{BaselineSnapshot, ConfigTransaction},
+    services::{endpoint_url, BaselineSnapshot, ConfigTransaction},
 };
 
 use super::{
@@ -470,7 +470,7 @@ impl ServiceConfigAdapter for TraeAdapter {
             let detection_for_ui = detection.clone();
             let baseline = checkpoint.baseline_selection.clone();
             tokio::task::spawn_blocking(move || {
-                ui.select_model(kind, &detection_for_ui, &baseline)
+                select_model_with_transient_retry(ui.as_ref(), kind, &detection_for_ui, &baseline)
             })
             .await
             .map_err(|_| CommandError::internal("Trae 原模型恢复任务异常终止"))??;
@@ -480,9 +480,11 @@ impl ServiceConfigAdapter for TraeAdapter {
                     let ui = Arc::clone(&self.ui);
                     let detection = detection.clone();
                     let active = active.to_owned();
-                    tokio::task::spawn_blocking(move || ui.select_model(kind, &detection, &active))
-                        .await
-                        .is_ok_and(|result| result.is_ok())
+                    tokio::task::spawn_blocking(move || {
+                        select_model_with_transient_retry(ui.as_ref(), kind, &detection, &active)
+                    })
+                    .await
+                    .is_ok_and(|result| result.is_ok())
                 } else {
                     true
                 };
@@ -654,6 +656,7 @@ fn plan_ui_change(
     let snapshot = ui.snapshot_interactive(kind, detection)?;
     if let Some(row) = matching {
         if snapshot.custom_models.contains(&row.display_name) {
+            ensure_existing_endpoint(&snapshot, &row.display_name, input)?;
             return Ok(UiApplyPlan {
                 row: row.clone(),
                 previous_selection: snapshot.selection,
@@ -702,6 +705,7 @@ fn plan_ui_change(
                     .then_some(expected_name.clone())
             });
         if let Some(display_name) = existing_name {
+            ensure_existing_endpoint(&snapshot, &display_name, input)?;
             return Ok(UiApplyPlan {
                 row: ManagedRow {
                     display_name,
@@ -732,6 +736,34 @@ fn plan_ui_change(
         borrowed: false,
         replaced_row,
     })
+}
+
+fn ensure_existing_endpoint(
+    snapshot: &ui::TraeUiSnapshot,
+    display_name: &str,
+    input: &ManagedInput,
+) -> AppResult<()> {
+    let Some(endpoints) = snapshot.custom_endpoints_by_name.get(display_name) else {
+        return Err(CommandError::new(
+            "trae_existing_model_unverified",
+            "无法核对 Trae 已有模型的服务地址",
+        )
+        .with_recovery("请核对 Trae 中已有模型的服务地址；未验证前不会改动原配置。"));
+    };
+    let expected_endpoint = endpoint_url(&input.base_url, ui::endpoint_path(input.protocol))?;
+    if endpoints.is_empty()
+        || !endpoints.iter().all(|endpoint| {
+            endpoint.trim_end_matches('/') == input.base_url.trim_end_matches('/')
+                || endpoint.trim_end_matches('/') == expected_endpoint.as_str()
+        })
+    {
+        return Err(CommandError::new(
+            "trae_existing_model_conflict",
+            "Trae 已有同模型 ID，但服务地址与当前供应商不一致",
+        )
+        .with_recovery("请核对 Trae 中已有模型与 AT-Switch 供应商的服务地址；不会改动原配置。"));
+    }
+    Ok(())
 }
 
 fn apply_ui_change(
@@ -775,7 +807,7 @@ fn apply_ui_change(
         }
         mutation.model_created = true;
     }
-    let mut result = ui.select_model(kind, detection, &plan.row.display_name);
+    let mut result = select_model_with_transient_retry(ui, kind, detection, &plan.row.display_name);
     if result.is_err() {
         let selected = ui
             .snapshot_interactive(kind, detection)
@@ -789,6 +821,37 @@ fn apply_ui_change(
     // persisted model-list cache: the UI can already be using the new model
     // while that cache still contains the previous catalog.
     UiApplyAttempt { result, mutation }
+}
+
+fn select_model_with_transient_retry(
+    ui: &dyn ui::TraeUi,
+    kind: TraeKind,
+    detection: &AgentDetection,
+    display_name: &str,
+) -> AppResult<()> {
+    match ui.select_model(kind, detection, display_name) {
+        Ok(()) => Ok(()),
+        Err(error)
+            if matches!(
+                error.code.as_str(),
+                "trae_model_menu_missing"
+                    | "trae_model_selection_failed"
+                    | "trae_model_selector_missing"
+            ) =>
+        {
+            // A focus change can make Electron reject the first click while
+            // still changing its selector. Re-read before one idempotent
+            // retry so a single user action survives that transient state.
+            if ui
+                .snapshot_interactive(kind, detection)
+                .is_ok_and(|snapshot| snapshot.selection == display_name)
+            {
+                return Ok(());
+            }
+            ui.select_model(kind, detection, display_name)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn snapshot_contains_plan(snapshot: &ui::TraeUiSnapshot, plan: &UiApplyPlan) -> bool {
@@ -869,14 +932,22 @@ async fn rollback_ui_change(
                             &ui_model_input(replaced, Some(&plan.row.input.credential)),
                         )
                         .is_ok()
-                    || ui
-                        .select_model(kind, &detection, &replaced.display_name)
-                        .is_ok()
+                    || select_model_with_transient_retry(
+                        ui.as_ref(),
+                        kind,
+                        &detection,
+                        &replaced.display_name,
+                    )
+                    .is_ok()
             });
         let selection_restored = replaced_row_restored
-            && ui
-                .select_model(kind, &detection, &plan.previous_selection)
-                .is_ok();
+            && select_model_with_transient_retry(
+                ui.as_ref(),
+                kind,
+                &detection,
+                &plan.previous_selection,
+            )
+            .is_ok();
         UiRollback {
             selection_restored,
             model_removed,
@@ -1108,8 +1179,11 @@ mod tests {
         selection: String,
         models: HashSet<String>,
         model_ids: HashMap<String, String>,
+        endpoints: HashMap<String, String>,
         cache_visible: bool,
         fail_after_persisting_next_add: bool,
+        transient_selection_failures: usize,
+        selection_attempts: usize,
         additions: usize,
         deletions: usize,
     }
@@ -1151,6 +1225,20 @@ mod tests {
                 } else {
                     Default::default()
                 },
+                custom_endpoints_by_name: if state.cache_visible {
+                    state
+                        .endpoints
+                        .iter()
+                        .map(|(name, endpoint)| {
+                            (
+                                name.clone(),
+                                std::collections::BTreeSet::from([endpoint.clone()]),
+                            )
+                        })
+                        .collect()
+                } else {
+                    Default::default()
+                },
             }
         }
     }
@@ -1186,6 +1274,10 @@ mod tests {
             state
                 .model_ids
                 .insert(input.display_name.clone(), input.model_id.clone());
+            state.endpoints.insert(
+                input.display_name.clone(),
+                endpoint_url(&input.base_url, ui::endpoint_path(input.protocol))?.to_string(),
+            );
             if state.fail_after_persisting_next_add {
                 state.fail_after_persisting_next_add = false;
                 return Err(CommandError::new(
@@ -1203,6 +1295,14 @@ mod tests {
             display_name: &str,
         ) -> AppResult<()> {
             let mut state = self.state.lock().expect("fake UI state");
+            state.selection_attempts += 1;
+            if state.transient_selection_failures > 0 {
+                state.transient_selection_failures -= 1;
+                return Err(CommandError::new(
+                    "trae_model_selection_failed",
+                    "test transient model selection failure",
+                ));
+            }
             if display_name == "Auto Mode" || state.models.contains(display_name) {
                 state.selection = display_name.to_owned();
                 Ok(())
@@ -1225,6 +1325,7 @@ mod tests {
                 state.deletions += 1;
             }
             state.model_ids.remove(display_name);
+            state.endpoints.remove(display_name);
             Ok(())
         }
     }
@@ -1260,6 +1361,50 @@ mod tests {
     }
 
     #[test]
+    fn transient_model_selection_is_retried_once_without_recreating_a_model() {
+        let temp = tempfile::tempdir().expect("temp");
+        let detection = test_detection(&temp);
+        let fake = FakeUi::new("Auto Mode");
+        {
+            let mut state = fake.state.lock().expect("fake UI state");
+            state
+                .models
+                .insert("Fictional Provider · fictional-model".into());
+            state.transient_selection_failures = 1;
+        }
+
+        select_model_with_transient_retry(
+            &fake,
+            TraeKind::Code,
+            &detection,
+            "Fictional Provider · fictional-model",
+        )
+        .expect("transient selection recovers");
+
+        let state = fake.state.lock().expect("fake UI state");
+        assert_eq!(state.selection, "Fictional Provider · fictional-model");
+        assert_eq!(state.selection_attempts, 2);
+        assert_eq!(state.additions, 0);
+    }
+
+    #[test]
+    fn missing_model_is_not_retried_as_a_transient_selection_failure() {
+        let temp = tempfile::tempdir().expect("temp");
+        let detection = test_detection(&temp);
+        let fake = FakeUi::new("Auto Mode");
+
+        let error =
+            select_model_with_transient_retry(&fake, TraeKind::Code, &detection, "Missing model")
+                .expect_err("permanent error must surface");
+
+        assert_eq!(error.code, "test_model_missing");
+        assert_eq!(
+            fake.state.lock().expect("fake UI state").selection_attempts,
+            1
+        );
+    }
+
+    #[test]
     fn display_names_are_bounded_and_do_not_duplicate_existing_rows() {
         let input = ManagedInput {
             provider_name: "A very long fictional provider name".into(),
@@ -1284,11 +1429,16 @@ mod tests {
         let input = ManagedInput::from_desired(&desired("fictional-secret"));
         let orphan = format!("{} · 2", managed_display_name_base(&input));
         let fake = FakeUi::new(&orphan);
-        fake.state
-            .lock()
-            .expect("fake UI state")
-            .models
-            .insert(orphan.clone());
+        {
+            let mut state = fake.state.lock().expect("fake UI state");
+            state.models.insert(orphan.clone());
+            state.endpoints.insert(
+                orphan.clone(),
+                endpoint_url(&input.base_url, ui::endpoint_path(input.protocol))
+                    .expect("test endpoint")
+                    .to_string(),
+            );
+        }
 
         let plan = plan_ui_change(
             &fake,
@@ -1421,6 +1571,12 @@ mod tests {
             state
                 .model_ids
                 .insert(display_name.clone(), desired.model_id.to_owned());
+            state.endpoints.insert(
+                display_name.clone(),
+                endpoint_url(desired.base_url, ui::endpoint_path(desired.source_protocol))
+                    .expect("test endpoint")
+                    .to_string(),
+            );
         }
         let adapter = TraeAdapter::with_ui(TraeKind::Work, fake.clone());
         let transaction = ConfigTransaction::new(
@@ -1461,6 +1617,46 @@ mod tests {
         assert!(checkpoint.borrowed.is_empty());
         assert!(checkpoint.active.is_none());
         assert!(!checkpoint.pending);
+    }
+
+    #[test]
+    fn existing_model_with_another_endpoint_is_not_misreported_as_the_requested_provider() {
+        let temp = tempfile::tempdir().expect("temp");
+        let detection = test_detection(&temp);
+        let input = ManagedInput::from_desired(&desired("fictional-secret"));
+        let display_name = "User configured fictional model".to_owned();
+        let fake = FakeUi::new("Auto Mode");
+        {
+            let mut state = fake.state.lock().expect("fake UI state");
+            state.models.insert(display_name.clone());
+            state
+                .model_ids
+                .insert(display_name.clone(), input.model_id.clone());
+            state.endpoints.insert(
+                display_name.clone(),
+                "https://another-provider.example.test/v1/responses".to_owned(),
+            );
+        }
+        for kind in [TraeKind::Code, TraeKind::Work] {
+            let error =
+                plan_ui_change(&fake, kind, &detection, &input, None, None, &HashSet::new())
+                    .err()
+                    .expect("conflicting existing model must not be borrowed");
+            assert_eq!(error.code, "trae_existing_model_conflict");
+        }
+        fake.state.lock().expect("fake UI state").endpoints.clear();
+        for kind in [TraeKind::Code, TraeKind::Work] {
+            let error =
+                plan_ui_change(&fake, kind, &detection, &input, None, None, &HashSet::new())
+                    .err()
+                    .expect("unverified existing model must not be borrowed");
+            assert_eq!(error.code, "trae_existing_model_unverified");
+        }
+        let state = fake.state.lock().expect("fake UI state");
+        assert_eq!(state.selection, "Auto Mode");
+        assert_eq!(state.models, HashSet::from([display_name]));
+        assert_eq!(state.additions, 0);
+        assert_eq!(state.deletions, 0);
     }
 
     #[tokio::test]

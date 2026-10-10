@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Navigate TraeCode 3.4.1 model settings through its account menu and return to the chat selector without requiring the user to close settings manually; retain the older shortcut route as a fallback.
+- Reacquire the live Trae model selector after an activation-only click, verify that the requested menu item is visible, and retry one transient selection failure internally before preserving a recoverable pending state.
+- Refuse to reuse a same-ID Trae custom model when its saved service address cannot be verified or differs from the selected Provider, without changing that user-owned model.
+
+### Validation
+- On macOS, TraeCode and TraeWork each selected an existing real-Provider model, completed a default-model task with a real reply, retained the selection across a full restart, and returned to their original model. Windows device, real-provider Streaming/Tool, and distributable-package notarization remain unverified.
+
 ## [v3.16.1] - 2026-10-08
 
 ### Added

@@ -83,6 +83,7 @@ pub(super) fn snapshot(
         selection: response.selection,
         custom_models: catalog.names,
         custom_models_by_id: catalog.names_by_id,
+        custom_endpoints_by_name: catalog.endpoints_by_name,
     })
 }
 
@@ -359,6 +360,27 @@ function Wait-Exact($root, [string[]]$labels, [int]$seconds) {
   throw "CONTROL_MISSING"
 }
 
+function Open-ModelMenu($root, $combo, [string[]]$selectionNames, [string]$current) {
+  $label = if ($current) { @(Exact $combo @($current)) | Select-Object -First 1 } else { $null }
+  if (-not (($null -ne $label -and (Click-Center $label)) -or (Click-Center $combo) -or (Press $combo))) {
+    throw 'SELECTOR_MISSING'
+  }
+  try {
+    Wait-Exact $root $selectionNames 2
+  } catch {
+    if (-not (($null -ne $label -and (Click-Center $label)) -or (Click-Center $combo) -or (Press $combo))) { throw 'MENU_MISSING' }
+    try {
+      Wait-Exact $root $selectionNames 3
+    } catch {
+      $fresh = Model-Combo $root @($current)
+      if ($null -eq $fresh) { throw 'SELECTOR_MISSING' }
+      $freshLabel = if ($current) { @(Exact $fresh @($current)) | Select-Object -First 1 } else { $null }
+      if (-not (($null -ne $freshLabel -and (Click-Center $freshLabel)) -or (Click-Center $fresh) -or (Press $fresh))) { throw 'MENU_MISSING' }
+      try { Wait-Exact $root $selectionNames 5 } catch { throw 'MENU_MISSING' }
+    }
+  }
+}
+
 function Contains-Text($root, [string[]]$fragments) {
   foreach ($element in (Elements $root)) {
     foreach ($value in (Texts $element)) {
@@ -426,6 +448,27 @@ function Close-ModelSettings($root) {
   throw 'CONTROL_MISSING'
 }
 
+function Close-CodeSettings($root) {
+  $back = @(Exact $root @('返回应用', 'Back to app'))
+  for ($index = $back.Count - 1; $index -ge 0; $index--) {
+    if (Click-Center $back[$index]) { return }
+  }
+  [System.Windows.Forms.SendKeys]::SendWait('^w')
+}
+
+function Enter-ModelCategory($root) {
+  Press-Exact $root @('模型', 'Models')
+  try { Wait-Exact $root @('添加模型', 'Add model') 2; return } catch {}
+  $category = @(Exact $root @('模型', 'Models'))
+  for ($index = $category.Count - 1; $index -ge 0; $index--) {
+    if (Click-Center $category[$index]) {
+      Wait-Exact $root @('添加模型', 'Add model') 15
+      return
+    }
+  }
+  throw 'CONTROL_MISSING'
+}
+
 function Dismiss-TransientOverlays($root) {
   for ($attempt = 0; $attempt -lt 3; $attempt++) {
     $button = $null
@@ -482,8 +525,36 @@ function Set-Edit($root, [string[]]$fragments, [string]$value, [int]$fallbackInd
 function Open-Settings($root, $request) {
   Dismiss-TransientOverlays $root
   if (@(Exact $root @('添加模型', 'Add model')).Count -gt 0) { return }
+  if (@(Exact $root @('模型', 'Models')).Count -gt 0) {
+    Enter-ModelCategory $root
+    return
+  }
   if ($request.kind -eq 'code') {
-    [System.Windows.Forms.SendKeys]::SendWait('^,')
+    $account = $null
+    foreach ($element in (Elements $root)) {
+      if ((Role $element) -ne 'ControlType.Button') { continue }
+      foreach ($value in (Texts $element)) {
+        if ($value -like '*免费*' -or $value -like '*Free*') { $account = $element; break }
+      }
+      if ($null -ne $account) { break }
+    }
+    if ($null -ne $account -and (Press $account)) {
+      try {
+        Wait-Exact $root @('设置', 'Settings') 3
+        Press-Exact $root @('设置', 'Settings')
+      } catch {}
+    }
+    try {
+      Wait-Exact $root @('模型', 'Models') 5
+    } catch {
+      $settings = @(Exact $root @('设置', 'Settings'))
+      for ($index = $settings.Count - 1; $index -ge 0; $index--) {
+        if (Click-Center $settings[$index]) { break }
+      }
+      try { Wait-Exact $root @('模型', 'Models') 5 } catch {
+        [System.Windows.Forms.SendKeys]::SendWait('^,')
+      }
+    }
   } else {
     $account = $null
     foreach ($element in (Elements $root)) {
@@ -502,7 +573,8 @@ function Open-Settings($root, $request) {
   $directCategory = $false
   try { Wait-Exact $root @('模型', 'Models') 1; $directCategory = $true } catch {}
   if ($directCategory) {
-    Press-Exact $root @('模型', 'Models')
+    Enter-ModelCategory $root
+    return
   } else {
     # Newer Trae releases keep settings categories in an unlabelled drawer.
     # Locate it relative to the app window, independent of window position and
@@ -511,7 +583,7 @@ function Open-Settings($root, $request) {
     if (Open-SettingsDrawer $root) {
       try {
         Wait-Exact $root @('模型', 'Models') 3
-        Press-Exact $root @('模型', 'Models')
+        Enter-ModelCategory $root
         $foundCategory = $true
       } catch {}
     }
@@ -561,7 +633,7 @@ try {
         if ($request.kind -eq 'work' -and @(Exact $root @('添加模型', 'Add model')).Count -gt 0) {
           Close-ModelSettings $root
         } elseif ($request.kind -eq 'code') {
-          [System.Windows.Forms.SendKeys]::SendWait('^w')
+          Close-CodeSettings $root
         }
         $deadline = [DateTime]::UtcNow.AddSeconds(15)
         while ([DateTime]::UtcNow -lt $deadline -and -not $selection) {
@@ -578,31 +650,37 @@ try {
       Dismiss-TransientOverlays $root
       $selectionNames = if ($request.displayName -in @('Auto', 'Auto Mode')) { @('Auto', 'Auto Mode') } else { @($request.displayName) }
       $modelNames = @($request.modelNames) + $selectionNames
-      if ($request.kind -eq 'work' -and @(Exact $root @('添加模型', 'Add model')).Count -gt 0) {
-        Close-ModelSettings $root
+      if (@(Exact $root @('添加模型', 'Add model', '返回应用', 'Back to app')).Count -gt 0) {
+        if ($request.kind -eq 'work') { Close-ModelSettings $root }
+        if ($request.kind -eq 'code') { Close-CodeSettings $root }
         Start-Sleep -Milliseconds 250
       }
       $current = Combo-Selection $root $modelNames
       if ($current -in $selectionNames) { Result $true '' ''; break }
       $combo = Model-Combo $root $modelNames
+      $deadline = [DateTime]::UtcNow.AddSeconds(15)
+      while ([DateTime]::UtcNow -lt $deadline -and $null -eq $combo) {
+        Start-Sleep -Milliseconds 100
+        $combo = Model-Combo $root $modelNames
+      }
       if ($null -eq $combo -and $request.kind -eq 'code') {
-        [System.Windows.Forms.SendKeys]::SendWait('^w')
+        Close-CodeSettings $root
         $deadline = [DateTime]::UtcNow.AddSeconds(15)
         while ([DateTime]::UtcNow -lt $deadline -and $null -eq $combo) {
           Start-Sleep -Milliseconds 100
           $combo = Model-Combo $root $modelNames
         }
       }
-      if ($null -eq $combo -or -not (Press $combo)) { throw 'SELECTOR_MISSING' }
-      Wait-Exact $root $selectionNames 3
+      if ($null -eq $combo) { throw 'SELECTOR_MISSING' }
+      Open-ModelMenu $root $combo $selectionNames $current
       Press-Exact $root $selectionNames
       Start-Sleep -Milliseconds 250
       if ((Combo-Selection $root $modelNames) -notin $selectionNames) {
         $candidate = @(Exact $root $selectionNames) | Select-Object -Last 1
         if ($null -eq $candidate) {
           $combo = Model-Combo $root $modelNames
-          if ($null -eq $combo -or -not (Press $combo)) { throw 'SELECTOR_MISSING' }
-          Wait-Exact $root $selectionNames 3
+          if ($null -eq $combo) { throw 'SELECTOR_MISSING' }
+          Open-ModelMenu $root $combo $selectionNames ''
           $candidate = @(Exact $root $selectionNames) | Select-Object -Last 1
         }
         if ($null -eq $candidate -or -not (Click-Center $candidate)) { throw 'SELECTION_FAILED' }
@@ -673,6 +751,7 @@ try {
     'CONTROL_MISSING' { Result $false 'trae_ui_control_missing' 'Trae 当前界面缺少所需控件' }
     'FIELD_UNWRITABLE' { Result $false 'trae_ui_field_unwritable' 'Trae 模型表单字段无法写入' }
     'SELECTOR_MISSING' { Result $false 'trae_model_selector_missing' '未找到 Trae 模型选择器' }
+    'MENU_MISSING' { Result $false 'trae_model_menu_missing' 'Trae 模型菜单未打开' }
     'SELECTION_FAILED' { Result $false 'trae_model_selection_failed' 'Trae 未确认新的模型选择' }
     'CONNECTIVITY_TIMEOUT' { Result $false 'trae_connectivity_check_timeout' '等待 Trae 自定义模型连通性测试超时' }
     'DELETE_CONTROL_MISSING' { Result $false 'trae_model_delete_control_missing' '未找到 Trae 自定义模型删除按钮' }
