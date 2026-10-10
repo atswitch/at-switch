@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useLanguage } from "../i18n";
-import { supportsDirectBinding, supportsProxyBinding, usesCloudModelSettings, usesInteractiveModelSettings, usesServiceModelSettings } from "../lib/agentCapabilities";
+import { supportsDirectBinding, supportsProxyBinding, usesCloudModelSettings, usesNativeTraeModelService, usesServiceModelSettings } from "../lib/agentCapabilities";
 import { protocolLabels } from "../lib/format";
 import { modelIsReady } from "../lib/modelCapabilities";
 import type {
@@ -43,7 +43,7 @@ export function AgentBindingForm({
 }: AgentBindingFormProps) {
   const { text } = useLanguage();
   const cloudModelSettings = usesCloudModelSettings(agent.id);
-  const interactiveModelSettings = usesInteractiveModelSettings(agent.id);
+  const nativeTraeModelService = usesNativeTraeModelService(agent.id);
   const serviceModelSettings = usesServiceModelSettings(agent.id);
   const availableProviders = useMemo(
     () =>
@@ -144,8 +144,8 @@ export function AgentBindingForm({
             <code title={agent.configPath}>
               {cloudModelSettings
                 ? text("腾讯 ima 当前账号", "Current Tencent ima account")
-                : interactiveModelSettings
-                  ? text(`${agent.displayName} 官方模型界面`, `${agent.displayName} official model UI`)
+                : nativeTraeModelService
+                  ? text(`${agent.displayName} 原生模型服务`, `${agent.displayName} native model service`)
                   : agent.configPath ??
                 text("首次切换时创建", "Created on first switch")}
             </code>
@@ -194,13 +194,13 @@ export function AgentBindingForm({
                 {text(
                   cloudModelSettings
                     ? "在首页选择公网 OpenAI Chat 模型，同时应用到「问问 ima」和「我的 copilot」。模型接口与 API Key 按 ima 原有机制保存到腾讯 ima。"
-                    : interactiveModelSettings
-                      ? `AT-Switch 通过 ${agent.displayName} 官方自定义模型界面配置直连并选择模型，请求不经过本地代理。`
+                    : nativeTraeModelService
+                      ? `AT-Switch 通过 ${agent.displayName} 原生模型服务无界面配置直连并选择模型，请求不经过本地代理。`
                     : "模型切换统一在主页面完成；请求不经过 AT-Switch，本页只展示配置与安装位置。",
                   cloudModelSettings
                     ? "Choose a public OpenAI Chat model on the main page for both Ask ima and My copilot. The endpoint and API key are saved to Tencent ima using its model settings."
-                    : interactiveModelSettings
-                      ? `AT-Switch configures Direct mode through ${agent.displayName}'s official custom-model UI. Requests bypass the local proxy.`
+                    : nativeTraeModelService
+                      ? `AT-Switch configures Direct mode through ${agent.displayName}'s native model service without model-form interaction. Requests bypass the local proxy.`
                     : "Switch models from the main page. Requests bypass AT-Switch; this view only shows configuration and installation details.",
                 )}
               </small>
@@ -225,15 +225,15 @@ export function AgentBindingForm({
     return (
       <div className="binding-empty" role="status">
         <Network size={24} />
-        <h3>{interactiveModelSettings
+        <h3>{nativeTraeModelService
           ? text(`请在首页切换 ${agent.displayName} 模型`, `Switch ${agent.displayName} models on the main page`)
           : text("请在首页切换 ima 模型", "Switch ima models on the main page")}</h3>
         <p>{text(
-          interactiveModelSettings
-            ? `${agent.displayName} 当前仅支持通过官方模型界面配置直连，不使用 AT-Switch 本地代理。`
+          nativeTraeModelService
+            ? `${agent.displayName} 当前仅支持通过原生模型服务配置直连，不使用 AT-Switch 本地代理。`
             : "ima 通过云端访问模型，无法连接本机代理。请选择公网可访问的 OpenAI Chat 接口。",
-          interactiveModelSettings
-            ? `${agent.displayName} currently supports Direct configuration through its official model UI and does not use the AT-Switch local proxy.`
+          nativeTraeModelService
+            ? `${agent.displayName} currently supports Direct configuration through its native model service and does not use the AT-Switch local proxy.`
             : "ima reaches models through its cloud and cannot connect to the local proxy. Choose a public OpenAI Chat endpoint.",
         )}</p>
       </div>

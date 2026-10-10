@@ -9,13 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- Navigate TraeCode 3.4.1 model settings through its account menu and return to the chat selector without requiring the user to close settings manually; retain the older shortcut route as a fallback.
-- Reacquire the live Trae model selector after an activation-only click, verify that the requested menu item is visible, and retry one transient selection failure internally before preserving a recoverable pending state.
-- Refuse to reuse a same-ID Trae custom model when its saved service address cannot be verified or differs from the selected Provider, without changing that user-owned model.
+### Changed
+- Replace visible Trae model-form automation with a version-gated bridge to TraeCode 3.4.1 and TraeWork 0.1.69 native model services. Unsupported versions fail closed.
+- Refresh Trae's authoritative model list before restoring a selection, and wait for the signed-in account before writing its current-session and recent selections.
+- Refresh the visible lite model catalogs for both TraeCode and TraeWork separately from their remote catalogs, preserve distinct task/default selections, and recheck the current task before committing.
+- Normalize lite custom-model names to Trae's stable restart-time model keys, and reject cached selections that cannot resolve to that key instead of reporting a false success before a later Auto fallback.
+- Keep the first restarted Trae instance running after a successful switch, instead of closing and relaunching it again; passive status checks remain read-only.
+- Preserve exact same-ID model and endpoint conflict checks, encrypted recovery checkpoints, and user-owned models; no changes to other Agent adapters.
 
 ### Validation
-- On macOS, TraeCode and TraeWork each selected an existing real-Provider model, completed a default-model task with a real reply, retained the selection across a full restart, and returned to their original model. Windows device, real-provider Streaming/Tool, and distributable-package notarization remain unverified.
+- On macOS, both agents passed native-service local-mock add/select in their visible lite selectors, original-selection restore, and managed-row cleanup. Windows device and new-path real-provider default-session/Streaming/Tool validation remain pending.
 
 ## [v3.16.1] - 2026-10-08
 

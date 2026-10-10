@@ -81,8 +81,8 @@
 | **Codex** | macOS / Windows | ✅ 支持 | OpenAI Responses | 精确更新 `$CODEX_HOME/config.toml` 或 `~/.codex/config.toml`，保留原有注释 |
 | **百度搭子（DuMate）** | macOS / Windows | ✅ 支持 | OpenAI Chat Completions | 更新当前账号的 XDG 持久覆盖配置，兼容所有会话目录和内置模型别名 |
 | **腾讯 ima** | macOS / Windows | 当前实现，验收范围见下文 | 公网 OpenAI Chat Completions | 连接本机已登录账号，同步 ima 账号模型设置与两个入口的本地选择 |
-| **TraeCode** | macOS / Windows | 当前实现，验收范围见下文 | OpenAI Chat / Responses / Anthropic Messages | 通过官方自定义模型界面配置直连；不修改 Trae 私有数据库 |
-| **TraeWork** | macOS / Windows | 当前实现，验收范围见下文 | OpenAI Chat / Responses / Anthropic Messages | 通过官方自定义模型界面配置直连；不修改 Trae 私有数据库 |
+| **TraeCode** | macOS / Windows | 当前实现，验收范围见下文 | OpenAI Chat / Responses / Anthropic Messages | 版本限定的 Trae 原生模型服务，无表单操作；模型请求直连 Provider |
+| **TraeWork** | macOS / Windows | 当前实现，验收范围见下文 | OpenAI Chat / Responses / Anthropic Messages | 版本限定的 Trae 原生模型服务，无表单操作；模型请求直连 Provider |
 
 ### ima 使用说明
 
@@ -95,15 +95,15 @@ ima 当前仅提供**公网 OpenAI Chat 直连**，不支持 AT-Switch 本地代
 ### TraeCode / TraeWork 使用说明
 
 顶部选择 **TraeCode** 或 **TraeWork**，再从现有供应商与模型列表点击「切换」。首次操作
-会确认允许 AT-Switch 使用 Trae 官方自定义模型界面；macOS 还需要一次辅助功能权限。
-AT-Switch 会填写 Endpoint、模型 ID 和 API Key，等待 Trae 自带连通性测试成功后选择
-该模型。请求由 Trae 直达 Provider，不经过 AT-Switch 本地代理。
+会确认切换可能重启 Trae；AT-Switch 通过已验证版本的 Trae 原生模型服务添加和选择模型，
+不打开模型设置表单，也不需要辅助功能权限。请求由 Trae 直达 Provider，不经过
+AT-Switch 本地代理。当前仅支持 TraeCode 3.4.1 和 TraeWork 0.1.69；版本不匹配时拒绝
+切换，不回退到可见界面操作。
 
 「恢复原始模型」会选回首次接管前的模型，并只删除 AT-Switch 创建的模型项，保留用户
-已有自定义模型。当前 macOS 已对 TraeCode 与 TraeWork 完成本地 Mock 模型新增、两模型
-互切、完全重启持久化、恢复原选择和受管项清理；使用已有真实 Provider 模型的新任务
-默认选择、真实回复与重启保留也已通过。Windows 已完成同语义实现与自动化检查，但尚未经
-Windows 真机；真实上游 Streaming 与 Tool 调用仍需验收。详见
+已有自定义模型。当前 macOS 已对 TraeCode 与 TraeWork 完成本地 Mock 模型新增、选择、
+重启回读、恢复原选择和受管项清理；Windows 共用业务流程，但尚未经 Windows 真机。
+新链路的真实上游默认会话、Streaming 与 Tool 调用仍需验收。详见
 [TraeCode / TraeWork 接入与验收记录](TRAE_INTEGRATION.md)。
 
 ---

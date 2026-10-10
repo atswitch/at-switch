@@ -449,14 +449,14 @@ export function SwitchboardPage({
             "同时切换「问问 ima」和「我的 copilot」；保留接管前的模型选择，恢复时只撤销 AT-Switch 的更改。",
             "Switch both Ask ima and My copilot. Preserve their original model selections and undo only AT-Switch changes when restoring.",
           ) : serviceModelSettings ? text(
-            `通过 ${agent.displayName} 官方自定义模型界面配置直连；恢复时删除 AT-Switch 管理模型并还原接管前选择。`,
-            `Configure Direct mode through ${agent.displayName}'s official custom-model UI. Restore removes AT-Switch-managed models and reinstates the original selection.`,
+            `通过 ${agent.displayName} 原生模型服务无界面配置直连；恢复时删除 AT-Switch 管理模型并还原接管前选择。`,
+            `Configure Direct mode through ${agent.displayName}'s native model service without form interaction. Restore removes AT-Switch-managed models and reinstates the original selection.`,
           ) : text(
             "切换前自动建立加密备份；只修改 AT-Switch 管理的字段，失败时自动恢复。",
             "An encrypted backup is created before switching. Only AT-Switch-managed fields are changed, with automatic recovery on failure.",
           )}
         </span>
-        <b>{usesCloudModelSettings(agent.id) ? "IMA ACCOUNT" : serviceModelSettings ? "OFFICIAL UI" : "LOCAL FIRST"}</b>
+        <b>{usesCloudModelSettings(agent.id) ? "IMA ACCOUNT" : serviceModelSettings ? "NATIVE SERVICE" : "LOCAL FIRST"}</b>
       </footer>
     </div>
   );
