@@ -21,7 +21,8 @@ use crate::{
 };
 
 use super::{
-    endpoint_path, AgentDetection, IdeSelectionBaseline, TraeKind, TraeModelInput, TraeUiSnapshot,
+    endpoint_path, AgentDetection, IdeSelectionBaseline, SelectionStorageBaseline, TraeKind,
+    TraeModelInput, TraeUiSnapshot,
 };
 
 const BRIDGE_SOURCE: &str = include_str!("../trae_bridge.cjs");
@@ -37,6 +38,25 @@ impl NativeTraeControl {
         }
     }
 
+    pub(super) fn requires_initial_restart(
+        &self,
+        kind: TraeKind,
+        detection: &AgentDetection,
+    ) -> bool {
+        // Passive refresh must not start/rebind a bridge or block behind an
+        // operation. Only a completed, live, same-installation/account session
+        // can suppress the one initial restart warning.
+        let Ok(mut guard) = self.session.try_lock() else {
+            return true;
+        };
+        !guard.as_mut().is_some_and(|session| {
+            session.completed
+                && session.keep_running
+                && !session.is_finished()
+                && session.matches_context(kind, detection)
+        })
+    }
+
     fn with_session<T>(
         &self,
         kind: TraeKind,
@@ -46,18 +66,42 @@ impl NativeTraeControl {
         let mut guard = self.session.lock().map_err(|_| {
             CommandError::new("trae_bridge_lock_failed", "Trae 原生模型服务锁不可用")
         })?;
-        if guard.as_mut().is_some_and(BridgeSession::is_finished) {
+        if guard.as_mut().is_some_and(|session| {
+            session.is_finished()
+                || (session.completed && !session.matches_context(kind, detection))
+        }) {
             *guard = None;
         }
         if guard.is_none() {
             *guard = Some(BridgeSession::start(kind, detection)?);
+        }
+        if guard.as_ref().is_some_and(|session| session.completed) {
+            let expected_account = super::super::active_account(
+                detection.config_path.as_deref().ok_or_else(|| {
+                    CommandError::new("trae_state_missing", "Trae 账号状态文件不存在")
+                })?,
+                kind,
+            )?;
+            let session = guard.as_mut().expect("existing Trae session");
+            session.completed = false;
+            let ready: StorageReady = session.call(&json!({
+                "operation": "begin_operation", "expectedAccount": expected_account,
+            }))?;
+            if !ready.ready {
+                return Err(CommandError::new(
+                    "trae_native_storage_unavailable",
+                    "Trae 运行中的账号状态已变化",
+                ));
+            }
         }
         operation(guard.as_mut().expect("Trae session was just initialized"))
     }
 
     pub(super) fn finish_operation(&self) {
         if let Ok(mut guard) = self.session.lock() {
-            *guard = None;
+            if !guard.as_ref().is_some_and(|session| session.completed) {
+                *guard = None;
+            }
         }
     }
 
@@ -66,7 +110,24 @@ impl NativeTraeControl {
             CommandError::new("trae_bridge_lock_failed", "Trae 原生模型服务锁不可用")
         })?;
         if let Some(session) = guard.as_mut() {
-            session.release()?;
+            if session
+                .pause
+                .as_ref()
+                .is_some_and(|pause| pause.was_running())
+            {
+                session
+                    .pause
+                    .as_mut()
+                    .expect("running pause")
+                    .keep_current_running()?;
+                session.pause.take();
+                session.keep_running = true;
+            }
+            if session.keep_running {
+                let _: Value = session.call(&json!({"operation": "retain"}))?;
+                session.completed = true;
+                return Ok(());
+            }
         }
         *guard = None;
         Ok(())
@@ -87,7 +148,7 @@ impl NativeTraeControl {
         label: &str,
     ) -> AppResult<TraeUiSnapshot> {
         self.with_session(kind, detection, |session| {
-            let command = if kind == TraeKind::Code && label == "ide_legacy" {
+            let command = if kind == TraeKind::Unified && label == "ide_composer" {
                 json!({"operation": "snapshot_ide"})
             } else {
                 json!({"operation": "snapshot", "label": label})
@@ -155,6 +216,7 @@ impl NativeTraeControl {
                 custom_models_by_id,
                 custom_endpoints_by_name,
                 ide_baseline: raw.ide_baseline,
+                selection_baseline: raw.selection_baseline,
             })
         })
     }
@@ -222,7 +284,7 @@ impl NativeTraeControl {
         display_name: &str,
         session_id: Option<&str>,
     ) -> AppResult<()> {
-        if kind == TraeKind::Code && label == "ide_legacy" {
+        if kind == TraeKind::Unified && label == "ide_composer" {
             return self.with_session(kind, detection, |session| {
                 let result: MutationResult = session.call(&json!({
                     "operation": "select_ide", "displayName": display_name,
@@ -230,7 +292,7 @@ impl NativeTraeControl {
                 if result.verified != Some(true) {
                     return Err(CommandError::new(
                         "trae_native_selection_unverified",
-                        "TraeCode IDE 模型选择未完成写回校验",
+                        "TRAE IDE 模型选择未完成写回校验",
                     ));
                 }
                 Ok(())
@@ -245,7 +307,7 @@ impl NativeTraeControl {
         detection: &AgentDetection,
         baseline: &IdeSelectionBaseline,
     ) -> AppResult<()> {
-        if kind != TraeKind::Code {
+        if kind != TraeKind::Unified {
             return Err(CommandError::new(
                 "trae_ide_unsupported",
                 "当前 Agent 不支持 IDE 模型选择",
@@ -258,25 +320,34 @@ impl NativeTraeControl {
             if result.verified != Some(true) {
                 return Err(CommandError::new(
                     "trae_native_selection_unverified",
-                    "TraeCode IDE 原模型恢复未完成校验",
+                    "TRAE IDE 原模型恢复未完成校验",
                 ));
             }
             Ok(())
         })
     }
 
-    pub(super) fn restore_legacy_work_remote(
+    pub(super) fn restore_selection_baseline(
         &self,
+        kind: TraeKind,
         detection: &AgentDetection,
-        display_name: &str,
+        label: &str,
+        baseline: &SelectionStorageBaseline,
     ) -> AppResult<()> {
-        self.select_model_for_label(
-            TraeKind::Work,
-            detection,
-            display_name,
-            Some("solo_work_remote"),
-            Some(None),
-        )
+        self.with_session(kind, detection, |session| {
+            let result: MutationResult = session.call(&json!({
+                "operation": "restore_selection_baseline",
+                "label": label,
+                "baseline": baseline,
+            }))?;
+            if result.verified != Some(true) {
+                return Err(CommandError::new(
+                    "trae_native_selection_unverified",
+                    "Trae 原模型选择未完成精确恢复",
+                ));
+            }
+            Ok(())
+        })
     }
 
     fn select_model_for_label(
@@ -364,6 +435,8 @@ struct Snapshot {
     models: Vec<Model>,
     #[serde(default)]
     ide_baseline: Option<IdeSelectionBaseline>,
+    #[serde(default)]
+    selection_baseline: Option<SelectionStorageBaseline>,
 }
 
 #[derive(Deserialize)]
@@ -399,6 +472,8 @@ struct MutationResult {
 #[derive(Deserialize)]
 struct StorageReady {
     ready: bool,
+    #[serde(default)]
+    reason: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -411,6 +486,8 @@ struct BridgeResponse<T> {
     ok: Option<bool>,
     ready: Option<bool>,
     result: Option<T>,
+    #[serde(default)]
+    error: Option<String>,
 }
 
 struct TemporaryScript(PathBuf);
@@ -446,11 +523,18 @@ struct BridgeSession {
     responses: mpsc::Receiver<String>,
     pause: Option<lifecycle::DesktopAppPause>,
     released: bool,
+    completed: bool,
+    keep_running: bool,
+    executable: PathBuf,
+    config_path: PathBuf,
+    account: String,
     _script: TemporaryScript,
 }
 
 impl BridgeSession {
     fn start(kind: TraeKind, detection: &AgentDetection) -> AppResult<Self> {
+        #[cfg(test)]
+        let started = std::time::Instant::now();
         let installation = detection
             .installation
             .as_ref()
@@ -469,8 +553,21 @@ impl BridgeSession {
                 "Trae 原生执行文件不存在",
             ));
         }
+        let expected_account = Some(super::super::active_account(
+            detection.config_path.as_deref().ok_or_else(|| {
+                CommandError::new("trae_state_missing", "Trae 账号状态文件不存在")
+            })?,
+            kind,
+        )?);
         let script = TemporaryScript::create()?;
         let pause = lifecycle::pause_for_config_update(detection)?;
+        #[cfg(test)]
+        if std::env::var("AT_SWITCH_TRAE_LIVE_MUTATION").as_deref() == Ok("1") {
+            eprintln!(
+                "TRAE_BRIDGE_TIME pause_ms={}",
+                started.elapsed().as_millis()
+            );
+        }
         let mut command = Command::new(&executable);
         command
             .env("ELECTRON_RUN_AS_NODE", "1")
@@ -512,12 +609,35 @@ impl BridgeSession {
             responses,
             pause: Some(pause),
             released: false,
+            completed: false,
+            keep_running: false,
+            executable,
+            config_path: detection
+                .config_path
+                .clone()
+                .expect("validated Trae profile"),
+            account: expected_account.clone().unwrap_or_default(),
             _script: script,
         };
         let ready: BridgeResponse<Value> = session.read_response()?;
+        #[cfg(test)]
+        if std::env::var("AT_SWITCH_TRAE_LIVE_MUTATION").as_deref() == Ok("1") {
+            eprintln!(
+                "TRAE_BRIDGE_TIME ready_ms={}",
+                started.elapsed().as_millis()
+            );
+        }
         if ready.ready == Some(true) {
-            let storage: StorageReady = session.call(&json!({"operation": "bind_storage"}))?;
+            let storage: StorageReady = session.call(&json!({
+                "operation": "bind_storage",
+                "expectedAccount": expected_account,
+            }))?;
             if !storage.ready {
+                if let Some(reason) = storage.reason.as_deref() {
+                    log::warn!("Trae native storage did not become ready: {reason}");
+                    #[cfg(test)]
+                    eprintln!("Trae native storage diagnostic: {reason}");
+                }
                 return Err(CommandError::new(
                     "trae_native_storage_unavailable",
                     "Trae 原生模型存储未就绪",
@@ -533,6 +653,11 @@ impl BridgeSession {
             }
             Ok(session)
         } else {
+            if let Some(diagnostic) = ready.error.as_deref() {
+                log::warn!("Trae native bridge did not become ready: {diagnostic}");
+                #[cfg(test)]
+                eprintln!("Trae native bridge readiness diagnostic: {diagnostic}");
+            }
             Err(CommandError::new(
                 "trae_bridge_not_ready",
                 "Trae 原生模型服务未就绪；版本或登录状态可能已变化",
@@ -545,8 +670,18 @@ impl BridgeSession {
         self.process.try_wait().ok().flatten().is_some()
     }
 
+    fn matches_context(&self, kind: TraeKind, detection: &AgentDetection) -> bool {
+        detection
+            .installation
+            .as_ref()
+            .is_some_and(|installation| trae_executable(&installation.path) == self.executable)
+            && detection.config_path.as_deref() == Some(self.config_path.as_path())
+            && super::super::active_account(&self.config_path, kind)
+                .is_ok_and(|account| account == self.account)
+    }
+
     fn release(&mut self) -> AppResult<()> {
-        if !self.pause.as_ref().is_some_and(|pause| pause.was_running()) {
+        if !self.keep_running && !self.pause.as_ref().is_some_and(|pause| pause.was_running()) {
             return Ok(());
         }
         let response: Value = self.call(&json!({"operation": "release"})).map_err(|_| {
@@ -587,9 +722,37 @@ impl BridgeSession {
     }
 
     fn call<T: for<'de> Deserialize<'de>>(&mut self, command: &Value) -> AppResult<T> {
+        let started = std::time::Instant::now();
         let line = serde_json::to_string(command)
             .map_err(|_| CommandError::internal("Trae 控制请求无法编码"))?;
-        self.call_line(&line)
+        let result = self.call_line(&line);
+        // Only protocol operation names, elapsed time and our error codes are
+        // recorded. Never serialize requests, accounts, endpoints or secrets.
+        if let Ok(mut file) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self._script.0.with_extension("timing.log"))
+        {
+            let operation = command["operation"].as_str().unwrap_or("unknown");
+            let code = result
+                .as_ref()
+                .err()
+                .map_or("ok", |error| error.code.as_str());
+            let _ = writeln!(
+                file,
+                "{operation} {}ms {code}",
+                started.elapsed().as_millis()
+            );
+        }
+        #[cfg(test)]
+        if std::env::var("AT_SWITCH_TRAE_LIVE_MUTATION").as_deref() == Ok("1") {
+            eprintln!(
+                "TRAE_BRIDGE_TIME {}_ms={}",
+                command["operation"].as_str().unwrap_or("unknown"),
+                started.elapsed().as_millis()
+            );
+        }
+        result
     }
 
     fn call_line<T: for<'de> Deserialize<'de>>(&mut self, line: &str) -> AppResult<T> {
@@ -598,14 +761,56 @@ impl BridgeSession {
         self.stdin.flush()?;
         let response: BridgeResponse<T> = self.read_response()?;
         if response.ok != Some(true) {
-            return Err(CommandError::new(
-                "trae_bridge_operation_failed",
-                "Trae 原生模型操作失败",
-            ));
+            if response.error.as_deref() == Some("trae_multiple_ide_windows") {
+                return Err(CommandError::new(
+                    "trae_multiple_ide_windows",
+                    "TRAE 打开了多个 IDE 工作区，已阻止不完整切换",
+                )
+                .with_recovery("请只保留一个 TRAE IDE 工作区后重试，避免只切换部分窗口。"));
+            }
+            let operation = serde_json::from_str::<Value>(line)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("operation")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .unwrap_or_else(|| "unknown".to_owned());
+            if let Some(diagnostic) = response.error.as_deref() {
+                log::warn!("Trae native bridge operation {operation} failed: {diagnostic}");
+                #[cfg(test)]
+                eprintln!("Trae native bridge operation diagnostic ({operation}): {diagnostic}");
+            }
+            return Err(
+                CommandError::new("trae_bridge_operation_failed", "Trae 原生模型操作失败")
+                    .with_recovery(format!(
+                        "失败阶段：{operation}；{}。未提交成功，不会显示为使用中。",
+                        bridge_failure_tag(response.error.as_deref())
+                    )),
+            );
         }
         response.result.ok_or_else(|| {
             CommandError::new("trae_bridge_invalid_response", "Trae 原生模型服务缺少结果")
         })
+    }
+}
+
+fn bridge_failure_tag(diagnostic: Option<&str>) -> &'static str {
+    let diagnostic = diagnostic.unwrap_or_default();
+    if diagnostic.starts_with("cdp_timeout:") {
+        "原生服务等待超时"
+    } else if diagnostic.contains("trae_live_selection_mismatch")
+        || diagnostic.contains("trae_ide_live_model_mismatch")
+        || diagnostic.contains("trae_ide_live_mode_mismatch")
+    {
+        "在线模型选择校验不一致"
+    } else if diagnostic.contains("trae_native_storage_invalid") {
+        "原生存储格式异常"
+    } else if diagnostic.contains("trae_native_account_mismatch") {
+        "账号状态发生变化"
+    } else {
+        "原生服务未完成操作"
     }
 }
 
@@ -627,6 +832,9 @@ fn spawn_response_reader(stdout: ChildStdout) -> mpsc::Receiver<String> {
 
 impl Drop for BridgeSession {
     fn drop(&mut self) {
+        if self.keep_running && !self.released {
+            let _ = self.release();
+        }
         if self.released {
             return;
         }
@@ -665,4 +873,29 @@ fn trae_executable(installation: &Path) -> PathBuf {
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn trae_executable(installation: &Path) -> PathBuf {
     installation.to_path_buf()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bridge_failure_tag;
+
+    #[test]
+    fn diagnostic_tags_do_not_expose_runtime_messages_or_credentials() {
+        assert_eq!(
+            bridge_failure_tag(Some("cdp_timeout:Runtime.evaluate")),
+            "原生服务等待超时"
+        );
+        assert_eq!(
+            bridge_failure_tag(Some(
+                "trae_internal_evaluation_failed:trae_live_selection_mismatch"
+            )),
+            "在线模型选择校验不一致"
+        );
+        assert_eq!(
+            bridge_failure_tag(Some(
+                "error secret=fake-private-key https://private.invalid"
+            )),
+            "原生服务未完成操作"
+        );
+    }
 }

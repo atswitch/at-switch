@@ -22,6 +22,7 @@ const MODEL_OUTPUT_MODALITY_MIGRATION: i64 = 2026080201;
 const PLACEHOLDER_PROVIDER_PURGE_MIGRATION: i64 = 2026080801;
 const CUSTOM_AGENT_INSTALL_PATH_MIGRATION: i64 = 2026081101;
 const PROVIDER_RECOMMENDATION_REMOVAL_MIGRATION: i64 = 2026090401;
+const RETIRED_TRAE_ENTRIES_REMOVAL: i64 = 2026101001;
 
 pub struct Database {
     connection: Mutex<Connection>,
@@ -344,6 +345,33 @@ impl Database {
             )?;
         }
 
+        // Start unified TRAE cleanly, without importing retired bindings or
+        // paths. External app data, credentials and recovery backups are kept.
+        let retired_trae_removed = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)",
+            [RETIRED_TRAE_ENTRIES_REMOVAL],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !retired_trae_removed {
+            let transaction = connection.unchecked_transaction()?;
+            transaction.execute(
+                "DELETE FROM agent_bindings WHERE agent_id IN ('traecode', 'traework')",
+                [],
+            )?;
+            transaction.execute(
+                "DELETE FROM agent_runtime_selections WHERE agent_id IN ('traecode', 'traework')",
+                [],
+            )?;
+            transaction.execute(
+                "DELETE FROM agents WHERE id IN ('traecode', 'traework')",
+                [],
+            )?;
+            transaction.execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, ?2)",
+                params![RETIRED_TRAE_ENTRIES_REMOVAL, Utc::now().to_rfc3339()],
+            )?;
+            transaction.commit()?;
+        }
         Ok(())
     }
 
@@ -1121,6 +1149,82 @@ mod tests {
         let database = Database::in_memory().expect("database");
         let providers = database.list_providers().expect("providers");
         assert!(providers.is_empty());
+    }
+
+    #[test]
+    fn retired_trae_cleanup_keeps_unified_trae_other_agents_and_provider_data() {
+        let database = Database::in_memory().expect("database");
+        {
+            let connection = database.connection().expect("connection");
+            connection.execute_batch(
+                "INSERT INTO providers(id,name,kind,protocol,base_url,api_key_ref,created_at,updated_at)
+                 VALUES ('provider','Provider','custom','openai_chat_completions','https://example.test','fake-reference','now','now');
+                 INSERT INTO models(id,provider_id,model_id,display_name)
+                 VALUES ('model','provider','model','Model');",
+            ).expect("provider fixtures");
+            for id in ["traecode", "traework", "trae", "codex", "workbuddy"] {
+                connection.execute(
+                    "INSERT INTO agents(id,custom_install_path,updated_at) VALUES (?1,'unchanged-path','now')", [id],
+                ).expect("agent");
+                connection.execute(
+                    "INSERT INTO agent_bindings(agent_id,mode,provider_id,default_model_id,request_protocol,updated_at)
+                     VALUES (?1,'direct','provider','model','openai_chat_completions','now')", [id],
+                ).expect("binding");
+                connection.execute(
+                    "INSERT INTO agent_runtime_selections(agent_id,scope_id,original_value,created_at)
+                     VALUES (?1,'scope','unchanged-value','now')", [id],
+                ).expect("selection");
+            }
+            connection
+                .execute(
+                    "DELETE FROM schema_migrations WHERE version = ?1",
+                    [RETIRED_TRAE_ENTRIES_REMOVAL],
+                )
+                .expect("simulate upgrade");
+        }
+        database.initialize().expect("retire old entries");
+        database.initialize().expect("idempotent initialization");
+        let connection = database.connection().expect("connection");
+        for table in ["agents", "agent_bindings", "agent_runtime_selections"] {
+            let column = if table == "agents" { "id" } else { "agent_id" };
+            let query = format!("SELECT {column} FROM {table} ORDER BY {column}");
+            let mut statement = connection.prepare(&query).expect("query");
+            let ids = statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .expect("rows")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("ids");
+            assert_eq!(ids, ["codex", "trae", "workbuddy"]);
+        }
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT api_key_ref FROM providers WHERE id='provider'",
+                    [],
+                    |row| row.get::<_, String>(0)
+                )
+                .expect("key reference"),
+            "fake-reference"
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM models WHERE id='model'", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .expect("model"),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT custom_install_path FROM agents WHERE id='codex'",
+                    [],
+                    |row| row.get::<_, String>(0)
+                )
+                .expect("other agent path"),
+            "unchanged-path"
+        );
+        assert_eq!(connection.query_row("SELECT original_value FROM agent_runtime_selections WHERE agent_id='workbuddy'", [], |row| row.get::<_, String>(0)).expect("other selection"), "unchanged-value");
     }
 
     #[test]

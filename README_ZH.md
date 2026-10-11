@@ -2,7 +2,7 @@
 
 # AT-Switch
 
-### WorkBuddy、CodeBuddy、QClaw、AutoClaw、Codex、百度搭子、ima、TraeCode 和 TraeWork 的全方位管理与模型切换工具
+### WorkBuddy、CodeBuddy、QClaw、AutoClaw、Codex、百度搭子、ima、TRAE 的全方位管理与模型切换工具
 
 [![Version](https://img.shields.io/github/v/release/atswitch/at-switch?color=blue&label=version)](https://github.com/atswitch/at-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/atswitch/at-switch/releases)
@@ -81,8 +81,7 @@
 | **Codex** | macOS / Windows | ✅ 支持 | OpenAI Responses | 精确更新 `$CODEX_HOME/config.toml` 或 `~/.codex/config.toml`，保留原有注释 |
 | **百度搭子（DuMate）** | macOS / Windows | ✅ 支持 | OpenAI Chat Completions | 更新当前账号的 XDG 持久覆盖配置，兼容所有会话目录和内置模型别名 |
 | **腾讯 ima** | macOS / Windows | 当前实现，验收范围见下文 | 公网 OpenAI Chat Completions | 连接本机已登录账号，同步 ima 账号模型设置与两个入口的本地选择 |
-| **TraeCode** | macOS / Windows | 当前实现，验收范围见下文 | OpenAI Chat / Responses / Anthropic Messages | 版本限定的 Trae 原生模型服务，无表单操作；模型请求直连 Provider |
-| **TraeWork** | macOS / Windows | 当前实现，验收范围见下文 | OpenAI Chat / Responses / Anthropic Messages | 版本限定的 Trae 原生模型服务，无表单操作；模型请求直连 Provider |
+| **TRAE** | macOS / Windows | 当前实现，验收范围见下文 | OpenAI Chat / Responses / Anthropic Messages | 版本限定的 Trae 原生模型服务，无表单操作；模型请求直连 Provider |
 
 ### ima 使用说明
 
@@ -92,19 +91,17 @@ ima 当前仅提供**公网 OpenAI Chat 直连**，不支持 AT-Switch 本地代
 
 当前实现与验证范围见 [ima 接入与验收记录](IMA_INTEGRATION.md)。macOS 完整切换与恢复验收尚未完成；Windows 目前仅完成静态研究与编译检查，未经真机验收。此说明不代表新增功能已经发布。
 
-### TraeCode / TraeWork 使用说明
+### TRAE 使用说明
 
-顶部选择 **TraeCode** 或 **TraeWork**，再从现有供应商与模型列表点击「切换」。首次操作
-会确认切换可能重启 Trae；AT-Switch 通过已验证版本的 Trae 原生模型服务添加和选择模型，
-不打开模型设置表单，也不需要辅助功能权限。请求由 Trae 直达 Provider，不经过
-AT-Switch 本地代理。当前仅支持 TraeCode 3.4.1 和 TraeWork 0.1.69；版本不匹配时拒绝
-切换，不回退到可见界面操作。
+顶部统一选择 **TRAE** 并点击模型「切换」。仅支持合并后的 TRAE CN 3.4.2，
+不兼容或迁移旧 TraeCode / TraeWork 配置。macOS 与 Windows 共用原生模型服务流程，
+不操作设置界面；同一有效控制会话首次最多重启一次，后续切换、恢复及状态刷新不重启。
+模型请求直达 Provider，不经过 AT-Switch 本地代理。
 
-「恢复原始模型」会选回首次接管前的模型，并只删除 AT-Switch 创建的模型项，保留用户
-已有自定义模型。当前 macOS 已对 TraeCode 与 TraeWork 完成本地 Mock 模型新增、选择、
-重启回读、恢复原选择和受管项清理。Windows 共用业务流程，但尚未经 Windows 真机；
-新链路的真实上游默认会话、Streaming 与 Tool 调用仍需验收。详见
-[TraeCode / TraeWork 接入与验收记录](TRAE_INTEGRATION.md)。
+「恢复原始模型」精确恢复接管前选择，只删除 AT-Switch 创建的模型，保留用户模型。
+Windows 3.4.2 的运行态和停止态本地 Mock 往返已通过，其他智能体不受影响；
+新版 macOS 由用户单独验收。真实 Provider 的推理、Streaming、Tool Calling 不由
+本地 Mock 验收替代。详见 [TRAE 接入与验收](TRAE_INTEGRATION.md)。
 
 ---
 

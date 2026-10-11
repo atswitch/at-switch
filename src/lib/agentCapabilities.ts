@@ -13,8 +13,7 @@ export const SWITCHABLE_AGENT_IDS = [
   "codex",
   "dumate",
   "ima",
-  "traecode",
-  "traework",
+  "trae",
 ] as const;
 
 export function isSwitchableAgent(agent: AgentSummary): boolean {
@@ -54,7 +53,7 @@ export function usesCloudModelSettings(agentId: string): boolean {
 }
 
 export function usesNativeTraeModelService(agentId: string): boolean {
-  return agentId === "traecode" || agentId === "traework";
+  return agentId === "trae";
 }
 
 export function usesServiceModelSettings(agentId: string): boolean {

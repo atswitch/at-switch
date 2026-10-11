@@ -20,6 +20,23 @@ pub(super) struct TraeUiSnapshot {
     pub custom_models_by_id: HashMap<String, BTreeSet<String>>,
     pub custom_endpoints_by_name: HashMap<String, BTreeSet<String>>,
     pub ide_baseline: Option<IdeSelectionBaseline>,
+    pub selection_baseline: Option<SelectionStorageBaseline>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct SelectionStorageBaseline {
+    pub present: bool,
+    pub model_id: Option<String>,
+    pub mode: Option<i64>,
+    #[serde(default)]
+    pub active_session_id: Option<String>,
+    #[serde(default)]
+    pub session_present: bool,
+    #[serde(default)]
+    pub session_model_id: Option<String>,
+    #[serde(default)]
+    pub session_mode: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,6 +44,20 @@ pub(super) struct TraeUiSnapshot {
 pub(super) struct IdeSelectionBaseline {
     pub workspace: IdeScopeBaseline,
     pub app: IdeScopeBaseline,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<IdeSessionBaseline>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct IdeSessionBaseline {
+    pub id: String,
+    pub model_key: Option<String>,
+    pub mode: Option<i64>,
+    #[serde(default)]
+    pub model_storage_present: bool,
+    #[serde(default)]
+    pub mode_storage_present: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,6 +133,13 @@ pub(super) trait TraeUi: Send + Sync {
         detection: &AgentDetection,
         baseline: &IdeSelectionBaseline,
     ) -> AppResult<()>;
+    fn restore_selection_baseline(
+        &self,
+        kind: TraeKind,
+        detection: &AgentDetection,
+        label: &str,
+        baseline: &SelectionStorageBaseline,
+    ) -> AppResult<()>;
     fn delete_model(
         &self,
         kind: TraeKind,
@@ -109,15 +147,11 @@ pub(super) trait TraeUi: Send + Sync {
         display_name: &str,
     ) -> AppResult<()>;
 
-    fn restore_legacy_work_remote(
-        &self,
-        _detection: &AgentDetection,
-        _display_name: &str,
-    ) -> AppResult<()> {
-        Ok(())
-    }
-
     fn finish_operation(&self, _kind: TraeKind) {}
+
+    fn requires_initial_restart(&self, _kind: TraeKind, _detection: &AgentDetection) -> bool {
+        true
+    }
 
     fn complete_operation(&self, kind: TraeKind) -> AppResult<()> {
         self.finish_operation(kind);
@@ -213,6 +247,17 @@ impl TraeUi for SystemTraeUi {
         self.native.restore_ide_baseline(kind, detection, baseline)
     }
 
+    fn restore_selection_baseline(
+        &self,
+        kind: TraeKind,
+        detection: &AgentDetection,
+        label: &str,
+        baseline: &SelectionStorageBaseline,
+    ) -> AppResult<()> {
+        self.native
+            .restore_selection_baseline(kind, detection, label, baseline)
+    }
+
     fn delete_model(
         &self,
         kind: TraeKind,
@@ -226,17 +271,12 @@ impl TraeUi for SystemTraeUi {
         self.native.finish_operation();
     }
 
-    fn complete_operation(&self, _kind: TraeKind) -> AppResult<()> {
-        self.native.complete_operation()
+    fn requires_initial_restart(&self, kind: TraeKind, detection: &AgentDetection) -> bool {
+        self.native.requires_initial_restart(kind, detection)
     }
 
-    fn restore_legacy_work_remote(
-        &self,
-        detection: &AgentDetection,
-        display_name: &str,
-    ) -> AppResult<()> {
-        self.native
-            .restore_legacy_work_remote(detection, display_name)
+    fn complete_operation(&self, _kind: TraeKind) -> AppResult<()> {
+        self.native.complete_operation()
     }
 }
 
@@ -288,11 +328,9 @@ pub(super) fn cached_ide_selection(path: Option<&Path>) -> AppResult<Option<(i64
     let Some(path) = path.filter(|path| path.is_file()) else {
         return Ok(None);
     };
-    let account = super::active_account(path, TraeKind::Code)?;
-    let connection =
-        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|_| {
-            CommandError::new("trae_profile_unreadable", "无法读取 TraeCode IDE 模型选择")
-        })?;
+    let account = super::active_account(path, TraeKind::Unified)?;
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|_| CommandError::new("trae_profile_unreadable", "无法读取 TRAE IDE 模型选择"))?;
     let load = |suffix: &str| -> AppResult<Option<Value>> {
         let key = format!("{account}_ai-chat:sessionRelation:{suffix}");
         let raw: Option<String> = connection
@@ -301,11 +339,11 @@ pub(super) fn cached_ide_selection(path: Option<&Path>) -> AppResult<Option<(i64
             })
             .optional()
             .map_err(|_| {
-                CommandError::new("trae_profile_unreadable", "TraeCode IDE 模型状态无法读取")
+                CommandError::new("trae_profile_unreadable", "TRAE IDE 模型状态无法读取")
             })?;
         raw.map(|raw| {
             serde_json::from_str(&raw).map_err(|_| {
-                CommandError::new("trae_profile_unreadable", "TraeCode IDE 模型状态格式无效")
+                CommandError::new("trae_profile_unreadable", "TRAE IDE 模型状态格式无效")
             })
         })
         .transpose()
@@ -535,7 +573,7 @@ mod tests {
         connection
             .execute("CREATE TABLE ItemTable (key TEXT, value TEXT)", [])
             .expect("item table");
-        let catalog = json!({"solo_work_lite": [{
+        let catalog = json!({"solo_agent_lite": [{
             "config_source": 3,
             "provider": "custom_openai_compatible",
             "name": "custom_openai_compatible//fictional-model",
@@ -553,17 +591,17 @@ mod tests {
             .expect("model catalog");
         assert_eq!(cached_model_key_matches(
             Some(&path),
-            "solo_work_lite",
+            "solo_agent_lite",
             "fictional-model",
-            "solo_work_lite_3_custom_openai_compatible_custom_openai_compatible//fictional-model_123"
+            "solo_agent_lite_3_custom_openai_compatible_custom_openai_compatible//fictional-model_123"
         )
         .expect("canonical model key"), Some(true));
         assert_eq!(
             cached_model_key_matches(
                 Some(&path),
-                "solo_work_lite",
+                "solo_agent_lite",
                 "fictional-model",
-                "solo_work_lite_3_custom_openai_compatible_fictional-model_123"
+                "solo_agent_lite_3_custom_openai_compatible_fictional-model_123"
             )
             .expect("transient model key"),
             Some(false)
