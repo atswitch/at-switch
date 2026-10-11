@@ -2,7 +2,7 @@
 
 # AT-Switch
 
-### The All-in-One Manager & Model Switcher for WorkBuddy, CodeBuddy, QClaw, AutoClaw, Codex, DuMate, ima, TraeCode & TraeWork
+### The All-in-One Manager & Model Switcher for WorkBuddy, CodeBuddy, QClaw, AutoClaw, Codex, DuMate, ima, TRAE
 
 [![Version](https://img.shields.io/github/v/release/atswitch/at-switch?color=blue&label=version)](https://github.com/atswitch/at-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/atswitch/at-switch/releases)
@@ -82,8 +82,7 @@ All official release binaries are hosted on [GitHub Releases](https://github.com
 | **Codex** | macOS / Windows | ✅ Supported | OpenAI Responses | Updates `$CODEX_HOME/config.toml` or `~/.codex/config.toml` cleanly |
 | **Baidu DuMate** | macOS / Windows | ✅ Supported | OpenAI Chat Completions | Updates the active account's persistent XDG override for every session directory and built-in model alias |
 | **Tencent ima** | macOS / Windows | Implemented; validation scope below | Public OpenAI Chat Completions | Connects the locally signed-in account and synchronizes ima account settings with both local entry selections |
-| **TraeCode** | macOS / Windows | Implemented; validation scope below | OpenAI Chat / Responses / Anthropic Messages | Version-gated native Trae model service; no model-form interaction; Direct provider requests |
-| **TraeWork** | macOS / Windows | Implemented; validation scope below | OpenAI Chat / Responses / Anthropic Messages | Version-gated native Trae model service; no model-form interaction; Direct provider requests |
+| **TRAE** | macOS / Windows | Implemented; validation scope below | OpenAI Chat / Responses / Anthropic Messages | Version-gated native Trae model service; no model-form interaction; Direct provider requests |
 
 ### Using ima
 
@@ -93,21 +92,18 @@ ima currently accepts **public OpenAI Chat endpoints in Direct mode**. AT-Switch
 
 See [ima integration and validation](IMA_INTEGRATION.md) for the current implementation and evidence. Full macOS switching and restoration validation remains incomplete. Windows has only undergone static investigation and compilation checks, with no device validation. This describes the working tree, not a published release.
 
-### Using TraeCode and TraeWork
+### Using TRAE
 
-Select **TraeCode** or **TraeWork** in the top bar and click **Switch** beside an existing provider
-model. The first operation confirms that Trae may need to restart. AT-Switch uses the verified
-version's native Trae model service to add and select the model without opening its settings form
-or requiring Accessibility permission. Requests travel directly from Trae to the provider and
-never use AT-Switch's local proxy. Only TraeCode 3.4.1 and TraeWork 0.1.69 are currently enabled;
-other versions are rejected rather than falling back to visible UI automation.
+Select the single **TRAE** entry and switch a model. Only merged TRAE CN 3.4.2 is supported;
+retired product bindings and configurations are not imported. Windows and macOS share the
+native-service flow without settings-form interaction. Within the same valid control session,
+a running target restarts at most once initially; subsequent switches, restores and passive
+refreshes do not restart it. Requests go directly to the provider.
 
-**Restore original model** returns to the pre-takeover selection and removes only custom models
-created by AT-Switch. Existing user models remain untouched. On macOS, both agents passed local-mock
-creation, selection, restart reread, original-selection restore, and managed-row cleanup. Windows
-shares the business flow but has no device validation yet. Default-session routing, real-provider
-streaming, and tool-call validation on the new path also remain pending. See
-[TraeCode / TraeWork integration and validation](TRAE_INTEGRATION.md).
+Restore returns exact pre-takeover selections and removes only models created by AT-Switch.
+Windows 3.4.2 running/stopped local-mock roundtrips pass without affecting other agents.
+The user will validate new macOS behavior separately. Real-provider inference, streaming and
+tools remain outside local-mock acceptance. See [TRAE integration and validation](TRAE_INTEGRATION.md).
 
 ---
 

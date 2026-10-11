@@ -2,7 +2,7 @@
 
 # AT-Switch
 
-### WorkBuddy、CodeBuddy、QClaw、AutoClaw、Codex、DuMate、ima、TraeCode、TraeWork のオールインワン管理・モデル切り替えツール
+### WorkBuddy、CodeBuddy、QClaw、AutoClaw、Codex、DuMate、ima、TRAE のオールインワン管理・モデル切り替えツール
 
 [![Version](https://img.shields.io/github/v/release/atswitch/at-switch?color=blue&label=version)](https://github.com/atswitch/at-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/atswitch/at-switch/releases)
@@ -75,11 +75,11 @@ Agent ごとに散らばった設定ファイルを探す必要はありませ�
 
 現在の実装と検証範囲は [ima 接続・検証記録](IMA_INTEGRATION.md)を参照してください。macOS での切り替え・復元の一連の検証は未完了です。Windows は静的調査とコンパイル確認のみで、実機検証は行っていません。ここでの説明は公開済みリリースを示すものではありません。
 
-### TraeCode / TraeWork の利用
+### TRAE の利用
 
-上部の **TraeCode** または **TraeWork** を選び、既存モデルの「切り替え」をクリックします。初回は Trae の再起動が必要になる場合があることを確認します。AT-Switch は検証済みバージョンの Trae ネイティブモデルサービスを利用し、設定画面の操作やアクセシビリティ権限なしでモデルを追加・選択します。モデルリクエストは Trae から Provider に直接送信されます。現在は TraeCode 3.4.1 と TraeWork 0.1.69 のみ対応し、それ以外のバージョンでは画面操作に切り替えず処理を拒否します。
+上部の統一された **TRAE** を選び、モデルを切り替えます。統合後の TRAE CN 3.4.2 のみ対応し、旧製品の設定は移行しません。Windows と macOS は設定画面を操作せず同じネイティブサービスを使います。同一の有効な制御セッションでは、起動中の対象は初回のみ最大一度再起動し、その後の切り替え・復元や状態更新では再起動しません。
 
-「元のモデルに復元」は接管前の選択に戻し、AT-Switch が作成したモデルだけを削除します。既存のユーザーモデルは保持されます。macOS では両エージェントでローカル Mock モデルの追加、選択、再起動後の読み直し、復元、管理項目の削除を確認済みです。Windows 実機、および新しい経路での実 Provider の既定新規セッション・Streaming・Tool 呼び出しは未検証です。詳細は [TraeCode / TraeWork 接続・検証記録](TRAE_INTEGRATION.md)を参照してください。
+復元では元の選択を正確に戻し、AT-Switch が作成したモデルのみ削除します。Windows の起動・停止状態でのローカル Mock 往復検証は完了し、他のエージェントには影響しません。新 macOS の実機検証はユーザーが別途行います。実 Provider の推論・Streaming・Tool Calling はこの検証の対象外です。[TRAE 接続・検証記録](TRAE_INTEGRATION.md)を参照してください。
 
 ---
 

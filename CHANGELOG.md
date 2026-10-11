@@ -10,20 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- Write and verify TraeCode's Agent selectors and IDE's separate model/Manual-mode state in one controlled process, and restore each original selection independently. Keep TraeWork's selector unchanged.
-- Preserve TraeCode IDE's original application/workspace model keys and modes in the encrypted recovery checkpoint; ignore stale workspace keys, and retry delayed model-service initialization inside the same process.
-- Reuse the standard short Provider/model switch-success message for TraeCode and TraeWork instead of displaying native-service implementation details.
-- Ignore legacy unscoped Trae model-cache rows when validating account-scoped selection keys; retry transient native selector-list refreshes.
-- Replace visible Trae model-form automation with a version-gated bridge to TraeCode 3.4.1 and TraeWork 0.1.69 native model services. Unsupported versions fail closed.
-- Refresh Trae's authoritative model list before restoring a selection, and wait for the signed-in account before writing its current-session and recent selections.
-- Refresh the visible lite model catalogs for both TraeCode and TraeWork separately from their remote catalogs, preserve distinct task/default selections, and recheck the current task before committing.
-- Normalize lite custom-model names to Trae's stable restart-time model keys, and reject cached selections that cannot resolve to that key instead of reporting a false success before a later Auto fallback.
-- Keep the first restarted Trae instance running after a successful switch, instead of closing and relaunching it again; passive status checks remain read-only.
-- Preserve exact same-ID model and endpoint conflict checks, encrypted recovery checkpoints, and user-owned models; no changes to other Agent adapters.
+- Replace the retired TraeCode/TraeWork entries with one new-only TRAE adapter and public ID `trae`; support TRAE CN 3.4.2 only, without importing legacy bindings, paths or recovery journals.
+- Align Windows and macOS on the same version-gated native host, account checks, model services, three Agent selectors, independent IDE selection, and exact encrypted baseline restore. Remove platform-specific model DI and visible UI fallbacks.
+- Keep at most one initial target restart, retaining the native control session for subsequent switches/restores without another restart; passive scans never start the bridge. Delayed control-pipe initialization retries within the same process.
+- Scope Windows TRAE shutdown to the complete normalized installation path, including its pipe owner; never terminate another installation by image name. Other Agent adapters are unchanged.
+- Retire only old TRAE metadata inside AT-Switch; preserve providers, credentials, other agents, external application data and recovery backups.
 
 ### Validation
-- TraeCode 3.4.1 passed a macOS local-mock add/select/restore run covering Agent and IDE persistent defaults and exact IDE baseline recovery; no temporary model remained. The installed, signed 3.16.1 app then selected GLM-5.2 in both visible modes after one TraeCode process restart. A real Agent task returned a Trae-side connection timeout (HTTP 500), so real-provider requests and Windows device validation are not passed.
-- On macOS, both agents passed native-service local-mock add/select in their visible lite selectors, original-selection restore, and managed-row cleanup. Windows device and new-path real-provider default-session/Streaming/Tool validation remain pending.
+- Windows TRAE 3.4.2 running-state local-mock roundtrip and consecutive model changes pass with one initial exit/start, no warm-switch/restore restarts, and unchanged other-agent main processes. Final cold-state and build results are recorded in the release verification document.
+- New macOS logic is aligned, but live validation is delegated to the user. Previous macOS results for retired products do not validate the new integration.
+- Local-mock integration acceptance does not imply real-provider inference, Streaming or Tool Calling acceptance.
+
+### Fixed
+- Update the initialized Agent SDK and IDE current-session/global stores together; prevent stale renderer selection maps from restoring the previous model and wait for durable storage flush.
+- Display verified TRAE switch results immediately and ignore older refresh responses. Cache the shared selector catalogue within each operation and remove unconditional settling delays.
+- Suppress repeated restart prompts while the same-installation/account native session is reusable; passive refresh does not recreate the initial warning, and context changes invalidate reuse.
+- Run every selector rollback even if another restore fails, preserving exact field presence and user models. Reject unsupported multiple IDE workspaces rather than reporting partial success.
+- Use an exact-path native Windows TRAE process scan and deduplicated graceful-close/force fallback, without changing other agents' lifecycle behavior.
+- Protect all current-session selection labels from stale whole-map writeback, including existing Agent conversations; restore absent `solo_agent_lite` overrides by explicit label without losing unrelated selections.
+- Flush IDE defaults even when only the Agent window is open. Restore selectors before deleting temporary models, and retain the same TRAE process after a fully verified rollback.
+- Retain an acknowledged native control session after read-only planning failures, so transient catalogue failures do not force another initial restart. Record credential-free operation timings and expose a predefined failure-stage hint.
 
 ## [v3.16.1] - 2026-10-08
 

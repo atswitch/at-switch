@@ -109,8 +109,7 @@ const mockAgentDisplayNames = {
   codex: "Codex",
   dumate: "百度搭子",
   ima: "ima",
-  traecode: "TraeCode",
-  traework: "TraeWork",
+  trae: "TRAE",
 } as const;
 
 const mockSnapshotTemplate: AppSnapshot = {

@@ -160,6 +160,7 @@ function AppContent() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const lastAutomaticScanAt = useRef(0);
   const agentOperationInFlight = useRef(false);
+  const traeSnapshotRevision = useRef(0);
   const languageRef = useRef(language);
 
   useEffect(() => {
@@ -195,10 +196,22 @@ function AppContent() {
 
   const loadSnapshot = useCallback(
     async (refresh = false) => {
+      const traeRevision = traeSnapshotRevision.current;
       if (refresh) setRefreshing(true);
       try {
         const next = refresh ? await api.refresh() : await api.bootstrap();
-        setSnapshot(next);
+        setSnapshot((current) =>
+          traeRevision === traeSnapshotRevision.current || !current
+            ? next
+            : {
+                ...next,
+                agents: next.agents.map((agent) =>
+                  agent.id === "trae"
+                    ? current.agents.find((saved) => saved.id === "trae") ?? agent
+                    : agent,
+                ),
+              },
+        );
       } catch (error) {
         const currentLanguage = languageRef.current;
         notify(
@@ -316,11 +329,21 @@ function AppContent() {
   const executeRestoreAgentNative = async (agent: AgentSummary, confirmAccountConnection?: boolean) => {
     if (agentOperationInFlight.current) return;
     agentOperationInFlight.current = true;
+    if (agent.id === "trae") traeSnapshotRevision.current += 1;
     const key = `native:${agent.id}`;
     setSwitchingKey(key);
     try {
       const restored = await api.restoreAgentNative(agent.id, confirmAccountConnection);
-      await loadSnapshot(true);
+      if (restored.id === "trae") {
+        traeSnapshotRevision.current += 1;
+        setSnapshot((current) => current && {
+          ...current,
+          agents: current.agents.map((saved) => saved.id === "trae" ? restored : saved),
+        });
+        void loadSnapshot(true);
+      } else {
+        await loadSnapshot(true);
+      }
       notify(
         "good",
         text(
@@ -365,12 +388,22 @@ function AppContent() {
   ) => {
     if (agentOperationInFlight.current) return;
     agentOperationInFlight.current = true;
+    if (draft.agentId === "trae") traeSnapshotRevision.current += 1;
     setSavingBinding(true);
     setSwitchingKey(modelKey);
     try {
       const agent = await api.applyAgentBinding(draft, confirmAccountConnection);
       setBindingTarget(undefined);
-      await loadSnapshot(true);
+      if (agent.id === "trae") {
+        traeSnapshotRevision.current += 1;
+        setSnapshot((current) => current && {
+          ...current,
+          agents: current.agents.map((saved) => saved.id === "trae" ? agent : saved),
+        });
+        void loadSnapshot(true);
+      } else {
+        await loadSnapshot(true);
+      }
       notify(
         "good",
         agent.activationRequired

@@ -351,8 +351,7 @@ impl Default for AgentRegistry {
                 Box::new(CodexAdapter),
                 Box::new(DuMateAdapter),
                 Box::new(ImaAdapter::default()),
-                Box::new(TraeAdapter::code()),
-                Box::new(TraeAdapter::work()),
+                Box::new(TraeAdapter::unified()),
             ],
             context: DiscoveryContext::native(),
         }
@@ -2171,8 +2170,7 @@ mod tests {
                 "codex",
                 "dumate",
                 "ima",
-                "traecode",
-                "traework"
+                "trae"
             ]
         );
     }
@@ -2212,7 +2210,16 @@ mod tests {
         };
 
         let detections = registry.detections();
-        assert_eq!(detections.len(), 9);
+        assert_eq!(detections.len(), 8);
+        assert_eq!(
+            detections
+                .iter()
+                .filter(|agent| agent.display_name == "TRAE")
+                .count(),
+            1
+        );
+        assert!(registry.adapter("traecode").is_err());
+        assert!(registry.adapter("traework").is_err());
         for detection in detections {
             assert_ne!(
                 detection.install_status,
@@ -2250,8 +2257,7 @@ mod tests {
             ("codex", "Codex.exe"),
             ("dumate", "DuMate.exe"),
             ("ima", "ima.copilot.exe"),
-            ("traecode", "Trae CN.exe"),
-            ("traework", "TRAE SOLO CN.exe"),
+            ("trae", "Trae CN.exe"),
         ] {
             let custom_directory = temp.path().join(format!("custom-{agent_id}"));
             let executable = custom_directory.join(executable_name);
@@ -2299,8 +2305,7 @@ mod tests {
             ("codex", "Codex.app"),
             ("dumate", "DuMate.app"),
             ("ima", "ima.copilot.app"),
-            ("traecode", "Trae CN.app"),
-            ("traework", "TRAE SOLO CN.app"),
+            ("trae", "Trae CN.app"),
         ] {
             let custom_directory = temp.path().join(format!("custom-{agent_id}"));
             let app = custom_directory.join(app_name);

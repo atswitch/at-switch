@@ -73,8 +73,8 @@ describe("Agent protocol capabilities", () => {
     expect(supportsProxyBinding("dumate")).toBe(true);
   });
 
-  it("supports TraeCode and TraeWork direct mode for all official custom-model protocols", () => {
-    for (const agentId of ["traecode", "traework"]) {
+  it("supports unified TRAE direct mode for all official custom-model protocols", () => {
+    for (const agentId of ["trae"]) {
       expect(supportsDirectBinding(agentId, mongyun)).toBe(true);
       expect(supportsDirectBinding(agentId, {
         kind: "custom",

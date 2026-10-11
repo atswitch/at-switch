@@ -343,7 +343,7 @@ fn macos_main_process_ids(process_list: &str, executable: &str, display_name: &s
             let pid = parts.next()?.parse::<u32>().ok()?;
             let command = parts.next()?.trim_start();
             (command == executable
-                || (matches!(display_name, "TraeCode" | "TraeWork")
+                || (display_name == "TRAE"
                     && command == format!("{executable} --remote-debugging-pipe")))
             .then_some(pid)
         })
@@ -355,7 +355,7 @@ fn wait_for_macos_process_exit(pids: &[u32], display_name: &str) -> AppResult<()
     // Trae can keep its Electron main process alive while flushing its
     // account-backed model state after SIGTERM. Do not report a false stop
     // failure before that bounded, orderly shutdown finishes.
-    let timeout = if matches!(display_name, "TraeCode" | "TraeWork") {
+    let timeout = if display_name == "TRAE" {
         Duration::from_secs(25)
     } else {
         Duration::from_secs(12)
@@ -408,7 +408,12 @@ fn stop_desktop_app_if_running(installation: &Installation, display_name: &str) 
     // Electron 类应用的 helper 子进程会拒绝 WM_CLOSE 导致返回 false，
     // 但部分子进程可能已被杀掉——800ms 等待后由第二阶段兜底。
     for pid in &pids {
-        let _ = run_taskkill(pid, false, display_name);
+        if display_name != "TRAE" {
+            let _ = run_taskkill(pid, false, display_name);
+        }
+    }
+    if display_name == "TRAE" {
+        request_trae_windows_close(&pids);
     }
     thread::sleep(Duration::from_millis(800));
     // 第二阶段：强制终止仍在跑的进程。
@@ -431,7 +436,12 @@ fn stop_desktop_app_if_running(installation: &Installation, display_name: &str) 
             "{display_name} still running after graceful request (pids={:?}); forcing termination",
             still_running
         );
-        for pid in &still_running {
+        let termination_roots = if display_name == "TRAE" {
+            windows_trae_termination_roots(&still_running)
+        } else {
+            still_running.clone()
+        };
+        for pid in &termination_roots {
             let _ = run_taskkill(pid, true, display_name);
         }
         // 等 1000ms 让 Windows 文件系统、单实例锁、句柄表收敛。
@@ -441,6 +451,13 @@ fn stop_desktop_app_if_running(installation: &Installation, display_name: &str) 
             .filter(|pid| pids.contains(pid))
             .collect();
         if !final_check.is_empty() {
+            if display_name == "TRAE" {
+                return Err(process_error(
+                    "agent_stop_failed",
+                    display_name,
+                    "目标安装仍有进程未退出；已阻止按程序名结束其他安装",
+                ));
+            }
             // A normal AT-Switch process cannot terminate an elevated Agent.
             // AutoClaw currently requires administrator privileges, so retry
             // once through the trusted Windows UAC flow. Use the product image
@@ -522,7 +539,10 @@ fn run_taskkill(pid: &u32, force: bool, display_name: &str) -> AppResult<()> {
 }
 
 #[cfg(target_os = "windows")]
-fn windows_process_ids(executable: &std::path::Path, _display_name: &str) -> AppResult<Vec<u32>> {
+fn windows_process_ids(executable: &std::path::Path, display_name: &str) -> AppResult<Vec<u32>> {
+    if display_name == "TRAE" {
+        return windows_trae_process_ids(executable);
+    }
     // Process names are not unique on Windows. We previously compared the
     // process's on-disk path to the installed executable to avoid stopping a
     // similarly named app installed elsewhere. Several desktop apps (notably
@@ -624,6 +644,191 @@ fn windows_process_ids(executable: &std::path::Path, _display_name: &str) -> App
         }
         _ => Ok(Vec::new()),
     }
+}
+
+/// TRAE's released pipe helper and its child may spell the same installation
+/// with different slash separators. Match the complete normalized executable,
+/// never a directory substring or a product-wide image-name fallback.
+#[cfg(target_os = "windows")]
+fn windows_trae_process_ids(executable: &std::path::Path) -> AppResult<Vec<u32>> {
+    if let Some(pids) = windows_trae_native_process_ids(executable) {
+        return Ok(pids);
+    }
+    let target = executable
+        .to_string_lossy()
+        .replace('/', "\\")
+        .replace('\'', "''");
+    let script = format!(
+        "$target = '{target}'; \
+         Get-CimInstance Win32_Process -Filter \"Name = 'Trae CN.exe'\" | \
+         Where-Object {{ \
+           $image = $_.ExecutablePath; \
+           if (-not $image -and $_.CommandLine) {{ \
+             $line = $_.CommandLine.Replace('/', '\\'); \
+             if ($line -match '^\"([^\"]+)\"') {{ $image = $Matches[1] }} \
+             elseif ($line -match '^(\\S+)') {{ $image = $Matches[1] }} \
+           }}; \
+           $image -and $image.Replace('/', '\\') -eq $target \
+         }} | Select-Object -ExpandProperty ProcessId"
+    );
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()?;
+    if !output.status.success() {
+        return Err(process_error(
+            "agent_process_scan_failed",
+            "TRAE",
+            "无法核对目标安装的进程",
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse::<u32>().ok())
+        .collect())
+}
+
+// Avoid starting PowerShell/WMI several times during the one TRAE restart.
+// QueryFullProcessImageName retains the same exact-installation safety rule;
+// inaccessible processes fall back to the existing verified WMI path.
+#[cfg(target_os = "windows")]
+fn windows_trae_native_process_ids(executable: &Path) -> Option<Vec<u32>> {
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
+        System::{
+            Diagnostics::ToolHelp::{
+                CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+                TH32CS_SNAPPROCESS,
+            },
+            Threading::{
+                OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+            },
+        },
+    };
+    let target = normalized_windows_image(&executable.to_string_lossy());
+    let mut pids = Vec::new();
+    // Every successful handle acquisition is paired with CloseHandle, including
+    // errors. No process is terminated or matched by basename in this scan.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return None;
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut available = Process32FirstW(snapshot, &mut entry) != 0;
+        if !available {
+            CloseHandle(snapshot);
+            return None;
+        }
+        let mut uncertain = false;
+        while available {
+            let len = entry
+                .szExeFile
+                .iter()
+                .position(|ch| *ch == 0)
+                .unwrap_or(entry.szExeFile.len());
+            if String::from_utf16_lossy(&entry.szExeFile[..len]).eq_ignore_ascii_case("Trae CN.exe")
+            {
+                let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, entry.th32ProcessID);
+                if handle.is_null() {
+                    uncertain = true;
+                } else {
+                    let mut image = vec![0_u16; 32768];
+                    let mut length = image.len() as u32;
+                    let queried =
+                        QueryFullProcessImageNameW(handle, 0, image.as_mut_ptr(), &mut length) != 0;
+                    CloseHandle(handle);
+                    if queried {
+                        let image = String::from_utf16_lossy(&image[..length as usize]);
+                        if normalized_windows_image(&image) == target {
+                            pids.push(entry.th32ProcessID);
+                        }
+                    } else {
+                        uncertain = true;
+                    }
+                }
+            }
+            available = Process32NextW(snapshot, &mut entry) != 0;
+        }
+        CloseHandle(snapshot);
+        if uncertain {
+            return None;
+        }
+    }
+    pids.sort_unstable();
+    pids.dedup();
+    Some(pids)
+}
+
+#[cfg(target_os = "windows")]
+fn normalized_windows_image(image: &str) -> String {
+    image.replace('/', "\\").to_lowercase()
+}
+
+#[cfg(target_os = "windows")]
+fn request_trae_windows_close(pids: &[u32]) {
+    use windows_sys::Win32::{
+        Foundation::{BOOL, HWND, LPARAM},
+        UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId, PostMessageW, WM_CLOSE},
+    };
+    unsafe extern "system" fn close_matching(window: HWND, data: LPARAM) -> BOOL {
+        let pids = &*(data as *const &[u32]);
+        let mut pid = 0;
+        GetWindowThreadProcessId(window, &mut pid);
+        if pids.contains(&pid) {
+            // Queue the same normal close request without waiting for every
+            // Electron child to reject taskkill's synchronous WM_CLOSE path.
+            PostMessageW(window, WM_CLOSE, 0, 0);
+        }
+        1
+    }
+    unsafe {
+        EnumWindows(Some(close_matching), &pids as *const &[u32] as LPARAM);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_trae_termination_roots(pids: &[u32]) -> Vec<u32> {
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
+        System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+            TH32CS_SNAPPROCESS,
+        },
+    };
+    let mut parents = Vec::new();
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return pids.to_vec();
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut available = Process32FirstW(snapshot, &mut entry) != 0;
+        while available {
+            if pids.contains(&entry.th32ProcessID) {
+                parents.push((entry.th32ProcessID, entry.th32ParentProcessID));
+            }
+            available = Process32NextW(snapshot, &mut entry) != 0;
+        }
+        CloseHandle(snapshot);
+    }
+    trae_termination_roots(pids, &parents)
+}
+
+#[cfg(target_os = "windows")]
+fn trae_termination_roots(pids: &[u32], parents: &[(u32, u32)]) -> Vec<u32> {
+    // /T already includes descendants. Repeating taskkill for each Electron
+    // renderer/helper adds seconds; only omit children of a verified target PID.
+    pids.iter()
+        .copied()
+        .filter(|pid| {
+            !parents
+                .iter()
+                .any(|(child, parent)| child == pid && parent != child && pids.contains(parent))
+        })
+        .collect()
 }
 
 #[cfg(target_os = "windows")]
@@ -914,7 +1119,7 @@ mod tests {
                103 {executable} /tmp/bridge.cjs\n"
         );
         assert_eq!(
-            macos_main_process_ids(&process_list, executable, "TraeCode"),
+            macos_main_process_ids(&process_list, executable, "TRAE"),
             vec![101]
         );
         assert!(macos_main_process_ids(&process_list, executable, "Codex").is_empty());
@@ -972,6 +1177,29 @@ mod tests {
         assert!(
             result.unwrap().is_empty(),
             "不存在的 image name 应返回空 PID 列表"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn trae_process_scan_never_falls_back_to_another_installation_with_the_same_name() {
+        let executable = PathBuf::from("C:\\at-switch-imaginary-installation\\Trae CN.exe");
+        assert!(windows_process_ids(&executable, "TRAE")
+            .expect("exact installation scan")
+            .is_empty());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn trae_shutdown_deduplicates_only_verified_target_descendants() {
+        assert_eq!(
+            trae_termination_roots(&[10, 11, 12, 30], &[(10, 1), (11, 10), (12, 11), (30, 99)]),
+            vec![10, 30]
+        );
+        assert_eq!(trae_termination_roots(&[10, 11], &[]), vec![10, 11]);
+        assert_eq!(
+            normalized_windows_image("C:/TRAE/Trae CN.exe"),
+            normalized_windows_image("c:\\trae\\TRAE CN.EXE")
         );
     }
 

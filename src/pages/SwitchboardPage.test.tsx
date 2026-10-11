@@ -8,7 +8,7 @@ describe("SwitchboardPage", () => {
   it("labels Trae's headless connection as a native service", () => {
     render(<SwitchboardPage
       agent={{
-        id: "traework", displayName: "TraeWork", installStatus: "installed",
+        id: "trae", displayName: "TRAE", installStatus: "installed",
         runtimeStatus: "not_running", configHealth: "healthy", adapterVerified: true,
         needsRestart: true, automaticRestartSupported: true,
       }}

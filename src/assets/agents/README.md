@@ -12,8 +12,7 @@
 | `codex.png` | OpenAI 官方 ChatGPT/Codex 应用图标 |
 | `dumate.png` | 百度搭子（DuMate）macOS 官方应用 `icon.icns` |
 | `ima.png` | 腾讯 ima 官方网站公开 `favicon.svg`，转换为 128×128 PNG |
-| `traecode.svg` | TRAE 官方网站公开 favicon 的等比例 SVG 描摹 |
-| `traework.svg` | TraeWork 官方 Web App `icon-192.png` 的等比例 SVG 描摹 |
+| `trae.svg` | TRAE 官方网站公开 favicon 的等比例 SVG 描摹 |
 
 这些图标只用于识别对应产品。产品名、图标和商标归各自权利人所有，不属于本仓库
 MIT 许可证的授权范围。素材来源与分发依据以第三方声明为准；上游品牌规范或素材

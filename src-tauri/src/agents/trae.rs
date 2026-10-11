@@ -29,56 +29,36 @@ use super::{
 #[path = "trae_ui.rs"]
 mod ui;
 
-const CHECKPOINT_VERSION: u8 = 1;
-const LEGACY_MANAGED_PREFIX: &str = "AT-Switch · ";
+const CHECKPOINT_VERSION: u8 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TraeKind {
-    Code,
-    Work,
+    Unified,
 }
 
 impl TraeKind {
     fn id(self) -> &'static str {
-        match self {
-            Self::Code => "traecode",
-            Self::Work => "traework",
-        }
+        "trae"
     }
 
     fn display_name(self) -> &'static str {
-        match self {
-            Self::Code => "TraeCode",
-            Self::Work => "TraeWork",
-        }
+        "TRAE"
     }
 
     fn app_data_name(self) -> &'static str {
-        match self {
-            Self::Code => "Trae CN",
-            Self::Work => "TRAE SOLO CN",
-        }
+        "Trae CN"
     }
 
     fn selection_label(self) -> &'static str {
-        match self {
-            Self::Code => "solo_agent_lite",
-            Self::Work => "solo_work_lite",
-        }
+        "solo_agent_lite"
     }
 
     fn additional_selection_labels(self) -> &'static [&'static str] {
-        match self {
-            Self::Code => &["solo_agent", "solo_coder", "ide_legacy"],
-            Self::Work => &[],
-        }
+        &["solo_agent", "solo_coder", "ide_composer"]
     }
 
     fn supports_native_bridge(self, version: Option<&str>) -> bool {
-        matches!(
-            (self, version),
-            (Self::Code, Some("3.4.1" | "3.4.1.0")) | (Self::Work, Some("0.1.69" | "0.1.69.0"))
-        )
+        matches!(version, Some("3.4.2" | "3.4.2.0"))
     }
 }
 
@@ -96,12 +76,8 @@ impl Drop for TraeOperationGuard {
 }
 
 impl TraeAdapter {
-    pub(super) fn code() -> Self {
-        Self::new(TraeKind::Code)
-    }
-
-    pub(super) fn work() -> Self {
-        Self::new(TraeKind::Work)
+    pub(super) fn unified() -> Self {
+        Self::new(TraeKind::Unified)
     }
 
     fn new(kind: TraeKind) -> Self {
@@ -127,27 +103,23 @@ impl AgentAdapter for TraeAdapter {
     }
 
     fn detect(&self, context: &DiscoveryContext) -> AgentDetection {
-        let (mac_names, bundle_ids, windows_paths): (&[&str], &[&str], &[&str]) = match self.kind {
-            TraeKind::Code => (
-                &["Trae CN.app"],
-                &["cn.trae.app"],
-                &[
-                    "Programs/Trae CN/Trae CN.exe",
-                    "Programs/TraeCode CN/Trae CN.exe",
-                    "Trae CN/Trae CN.exe",
-                ],
-            ),
-            TraeKind::Work => (
-                &["TRAE SOLO CN.app"],
-                &["cn.trae.solo.app"],
-                &[
-                    "Programs/TRAE SOLO CN/TRAE SOLO CN.exe",
-                    "Programs/TraeWork CN/TRAE SOLO CN.exe",
-                    "TRAE SOLO CN/TRAE SOLO CN.exe",
-                ],
-            ),
-        };
-        let installation = locate_desktop_app(context, mac_names, bundle_ids, windows_paths);
+        let (mac_names, bundle_ids, windows_paths): (&[&str], &[&str], &[&str]) = (
+            &["Trae CN.app"],
+            &["cn.trae.app"],
+            &["Programs/Trae CN/Trae CN.exe", "Trae CN/Trae CN.exe"],
+        );
+        let mut installation = locate_desktop_app(context, mac_names, bundle_ids, windows_paths);
+        #[cfg(target_os = "windows")]
+        if let Some(found) = installation.as_mut() {
+            // Electron's Windows FileVersion identifies the shared runtime
+            // build (for example 2.3.x), while ProductVersion identifies the
+            // Trae release whose private model-service contract we verified.
+            // Version gating must use ProductVersion or every supported
+            // Windows installation is incorrectly forced into read-only mode.
+            if let Some(version) = super::locator::windows_product_version(&found.path) {
+                found.version = Some(version);
+            }
+        }
         let runtime_data_dir = context.application_data_dir.join(self.kind.app_data_name());
         let state_database = runtime_data_dir.join("User/globalStorage/state.vscdb");
         let mut detection = AgentDetection::manual(
@@ -180,7 +152,7 @@ impl AgentAdapter for TraeAdapter {
                 detection.install_status = AgentInstallStatus::Installed;
                 detection.config_health = AgentConfigHealth::Healthy;
                 detection.write_supported = true;
-                detection.needs_restart = true;
+                detection.needs_restart = self.ui.requires_initial_restart(self.kind, &detection);
                 detection.message = Some(format!(
                     "{} 已识别；AT-Switch 将通过版本限定的 Trae 原生服务无界面切换直连模型。",
                     self.display_name()
@@ -296,18 +268,17 @@ impl ServiceConfigAdapter for TraeAdapter {
                         version: CHECKPOINT_VERSION,
                         account_scope: resource.clone(),
                         baseline_selection: snapshot.recent_selection,
+                        selection_baseline: snapshot.selection_baseline,
                         session_baselines: snapshot
                             .active_session_id
                             .zip(snapshot.active_selection)
                             .into_iter()
                             .collect(),
                         additional_baselines: BTreeMap::new(),
+                        additional_selection_baselines: BTreeMap::new(),
                         additional_session_baselines: BTreeMap::new(),
                         ide_baseline: None,
-                        secondary_baseline_selection: None,
-                        secondary_session_baselines: BTreeMap::new(),
                         selection_label: Some(kind.selection_label().to_owned()),
-                        legacy_work_remote_baseline: None,
                         owned: Vec::new(),
                         borrowed: Vec::new(),
                         active: None,
@@ -327,34 +298,25 @@ impl ServiceConfigAdapter for TraeAdapter {
             let matching = checkpoint
                 .owned
                 .iter()
-                .find(|row| row.input.matches(&input) && !is_legacy_managed_row(row))
+                .find(|row| row.input.matches(&input))
                 .cloned()
                 .or_else(|| {
                     historical_owned
                         .iter()
-                        .find(|row| row.input.matches(&input) && !is_legacy_managed_row(row))
+                        .find(|row| row.input.matches(&input))
                         .cloned()
                 });
+            let expected_name = managed_display_name_base(&input);
             let replacement = checkpoint
                 .owned
                 .iter()
-                .find(|row| row.input.matches(&input) && is_legacy_managed_row(row))
-                .or_else(|| {
-                    let expected_name = managed_display_name_base(&input);
-                    checkpoint
-                        .owned
-                        .iter()
-                        .find(|row| row.display_name == expected_name)
-                })
+                .find(|row| row.display_name == expected_name)
                 .cloned()
                 .or_else(|| {
                     let expected_name = managed_display_name_base(&input);
                     historical_owned
                         .iter()
-                        .find(|row| {
-                            (row.input.matches(&input) && is_legacy_managed_row(row))
-                                || row.display_name == expected_name
-                        })
+                        .find(|row| row.display_name == expected_name)
                         .cloned()
                 });
             let mut plan = tokio::task::spawn_blocking(move || {
@@ -371,21 +333,6 @@ impl ServiceConfigAdapter for TraeAdapter {
             .await
             .map_err(|_| CommandError::internal("Trae 模型切换规划任务异常终止"))??;
 
-            if checkpoint.selection_label.as_deref() != Some(kind.selection_label()) {
-                // Baselines from an older selector label do not describe the
-                // visible lite composer and must not be replayed into it.
-                checkpoint.session_baselines.clear();
-                if kind == TraeKind::Work {
-                    // Older Work checkpoints recorded the remote selector,
-                    // while the visible task composer uses the lite selector.
-                    checkpoint.legacy_work_remote_baseline =
-                        Some(checkpoint.baseline_selection.clone());
-                    checkpoint.baseline_selection = plan.previous_selection.clone();
-                } else {
-                    checkpoint.baseline_selection = plan.previous_selection.clone();
-                }
-                checkpoint.selection_label = Some(kind.selection_label().to_owned());
-            }
             if let Some((session_id, selection)) = plan.previous_session.as_ref() {
                 checkpoint
                     .session_baselines
@@ -393,13 +340,19 @@ impl ServiceConfigAdapter for TraeAdapter {
                     .or_insert_with(|| selection.clone());
             }
             for (label, baseline) in &plan.additional_previous {
-                if label == "ide_legacy" && checkpoint.ide_baseline.is_none() {
+                if label == "ide_composer" && checkpoint.ide_baseline.is_none() {
                     checkpoint.ide_baseline = baseline.ide.clone();
                 }
                 checkpoint
                     .additional_baselines
                     .entry(label.clone())
                     .or_insert_with(|| baseline.selection.clone());
+                if let Some(storage) = baseline.storage.as_ref() {
+                    checkpoint
+                        .additional_selection_baselines
+                        .entry(label.clone())
+                        .or_insert_with(|| storage.clone());
+                }
                 if let Some((session_id, selection)) = baseline.session.as_ref() {
                     checkpoint
                         .additional_session_baselines
@@ -525,6 +478,11 @@ impl ServiceConfigAdapter for TraeAdapter {
                 .await
                 .map_err(|_| CommandError::internal("Trae 当前任务复核任务异常终止"))??;
                 if final_snapshot.selection != plan.row.display_name {
+                    #[cfg(test)]
+                    eprintln!(
+                        "TRAE_LIVE_MISMATCH primary expected={} actual={}",
+                        plan.row.display_name, final_snapshot.selection
+                    );
                     return Err(CommandError::new(
                         "trae_visible_selection_mismatch",
                         "Trae 当前任务没有选中目标模型，已回滚本次切换",
@@ -534,14 +492,14 @@ impl ServiceConfigAdapter for TraeAdapter {
                     let previous = plan
                         .additional_previous
                         .get_mut(*label)
-                        .ok_or_else(|| CommandError::internal("TraeCode 模型选择缺少恢复基线"))?;
+                        .ok_or_else(|| CommandError::internal("TRAE 模型选择缺少恢复基线"))?;
                     let ui = Arc::clone(&self.ui);
                     let detection_for_snapshot = detection.clone();
                     let current = tokio::task::spawn_blocking(move || {
                         ui.snapshot_label(kind, &detection_for_snapshot, label)
                     })
                     .await
-                    .map_err(|_| CommandError::internal("TraeCode 模型校验任务异常终止"))??;
+                    .map_err(|_| CommandError::internal("TRAE 模型校验任务异常终止"))??;
                     if let Some(session_id) = current.active_session_id.as_deref() {
                         if previous
                             .session
@@ -550,7 +508,7 @@ impl ServiceConfigAdapter for TraeAdapter {
                         {
                             return Err(CommandError::new(
                                 "trae_active_session_changed",
-                                "TraeCode 当前任务在切换期间发生变化，已回滚本次切换",
+                                "TRAE 当前任务在切换期间发生变化，已回滚本次切换",
                             ));
                         }
                         if current.active_selection.as_deref()
@@ -561,7 +519,7 @@ impl ServiceConfigAdapter for TraeAdapter {
                                     current.active_selection.clone().ok_or_else(|| {
                                         CommandError::new(
                                             "trae_native_selection_missing",
-                                            "TraeCode 当前模型尚未加载完成",
+                                            "TRAE 当前模型尚未加载完成",
                                         )
                                     })?;
                                 checkpoint
@@ -587,9 +545,7 @@ impl ServiceConfigAdapter for TraeAdapter {
                                 )
                             })
                             .await
-                            .map_err(|_| {
-                                CommandError::internal("TraeCode 当前任务切换异常终止")
-                            })??;
+                            .map_err(|_| CommandError::internal("TRAE 当前任务切换异常终止"))??;
                         }
                     }
                     let ui = Arc::clone(&self.ui);
@@ -598,11 +554,16 @@ impl ServiceConfigAdapter for TraeAdapter {
                         ui.snapshot_label(kind, &detection_for_snapshot, label)
                     })
                     .await
-                    .map_err(|_| CommandError::internal("TraeCode 模型复核异常终止"))??;
+                    .map_err(|_| CommandError::internal("TRAE 模型复核异常终止"))??;
                     if final_selection.selection != plan.row.display_name {
+                        #[cfg(test)]
+                        eprintln!(
+                            "TRAE_LIVE_MISMATCH {label} expected={} actual={}",
+                            plan.row.display_name, final_selection.selection
+                        );
                         return Err(CommandError::new(
                             "trae_visible_selection_mismatch",
-                            "TraeCode 有模式没有选中目标模型，已回滚本次切换",
+                            "TRAE 有模式没有选中目标模型，已回滚本次切换",
                         ));
                     }
                 }
@@ -725,25 +686,6 @@ impl ServiceConfigAdapter for TraeAdapter {
                 return Err(error);
             }
 
-            // Older builds exposed an implementation prefix in Trae's model
-            // menu. Once the new binding and its recovery checkpoint are both
-            // durable, remove only the exact legacy rows recorded as owned by
-            // this adapter. A cleanup failure does not invalidate the active
-            // model; the retained row remains available to a later restore.
-            cleanup_legacy_rows(
-                Arc::clone(&self.ui),
-                kind,
-                detection.clone(),
-                &mut checkpoint,
-            )
-            .await;
-            if let Err(error) = save_checkpoint(transaction, self.id(), &resource, &checkpoint) {
-                log::warn!(
-                    "unable to persist Trae legacy model cleanup for {}: {}",
-                    self.id(),
-                    error.message
-                );
-            }
             let ui = Arc::clone(&self.ui);
             tokio::task::spawn_blocking(move || ui.complete_operation(kind))
                 .await
@@ -781,17 +723,33 @@ impl ServiceConfigAdapter for TraeAdapter {
             let kind = self.kind;
             let detection_for_ui = detection.clone();
             let baseline = checkpoint.baseline_selection.clone();
+            let selection_baseline = checkpoint.selection_baseline.clone();
             let session_baselines = checkpoint.session_baselines.clone();
             let additional_baselines = checkpoint.additional_baselines.clone();
+            let additional_selection_baselines = checkpoint.additional_selection_baselines.clone();
             let additional_sessions = checkpoint.additional_session_baselines.clone();
             let ide_baseline = checkpoint.ide_baseline.clone();
             tokio::task::spawn_blocking(move || {
                 for (session_id, selection) in session_baselines {
                     ui.select_model_scoped(kind, &detection_for_ui, &selection, Some(&session_id))?;
                 }
-                select_model_with_transient_retry(ui.as_ref(), kind, &detection_for_ui, &baseline)?;
+                if let Some(storage) = selection_baseline.as_ref() {
+                    ui.restore_selection_baseline(
+                        kind,
+                        &detection_for_ui,
+                        kind.selection_label(),
+                        storage,
+                    )?;
+                } else {
+                    select_model_with_transient_retry(
+                        ui.as_ref(),
+                        kind,
+                        &detection_for_ui,
+                        &baseline,
+                    )?;
+                }
                 for label in kind.additional_selection_labels() {
-                    if *label == "ide_legacy" {
+                    if *label == "ide_composer" {
                         continue;
                     }
                     let Some(selection) = additional_baselines.get(*label) else {
@@ -810,15 +768,25 @@ impl ServiceConfigAdapter for TraeAdapter {
                             Some(session_id),
                         )?;
                     }
-                    ui.select_model_label_scoped(kind, &detection_for_ui, label, selection, None)?;
+                    if let Some(storage) = additional_selection_baselines.get(*label) {
+                        ui.restore_selection_baseline(kind, &detection_for_ui, label, storage)?;
+                    } else {
+                        ui.select_model_label_scoped(
+                            kind,
+                            &detection_for_ui,
+                            label,
+                            selection,
+                            None,
+                        )?;
+                    }
                 }
                 if let Some(ide_baseline) = ide_baseline.as_ref() {
                     ui.restore_ide_baseline(kind, &detection_for_ui, ide_baseline)?;
-                } else if let Some(selection) = additional_baselines.get("ide_legacy") {
+                } else if let Some(selection) = additional_baselines.get("ide_composer") {
                     ui.select_model_label_scoped(
                         kind,
                         &detection_for_ui,
-                        "ide_legacy",
+                        "ide_composer",
                         selection,
                         None,
                     )?;
@@ -827,10 +795,6 @@ impl ServiceConfigAdapter for TraeAdapter {
             })
             .await
             .map_err(|_| CommandError::internal("Trae 原模型恢复任务异常终止"))??;
-            if let Some(legacy_baseline) = checkpoint.legacy_work_remote_baseline.as_deref() {
-                self.ui
-                    .restore_legacy_work_remote(detection, legacy_baseline)?;
-            }
 
             if let Err(error) = commit() {
                 let selection_restored = if let Some(active) = checkpoint.active.as_deref() {
@@ -999,12 +963,11 @@ fn verify_persisted_default_in_running_session(
     protocol: ApiProtocol,
     selected_session: Option<&str>,
     additional_sessions: &BTreeMap<String, String>,
-    was_running: bool,
+    _was_running: bool,
 ) -> AppResult<()> {
-    if was_running {
-        std::thread::sleep(Duration::from_secs(3));
-    }
-    for _ in 0..12 {
+    // The native bridge now awaits the storage flush after updating both live
+    // selectors. Retry only actual durable lag; do not delay every success.
+    for _retry in 0..12 {
         let primary = verify_persisted_label(
             detection,
             kind.selection_label(),
@@ -1013,14 +976,28 @@ fn verify_persisted_default_in_running_session(
             selected_session,
         );
         let additional = kind.additional_selection_labels().iter().all(|label| {
-            verify_persisted_label(
+            let verified = verify_persisted_label(
                 detection,
                 label,
                 model_id,
                 protocol,
                 additional_sessions.get(*label).map(String::as_str),
-            )
-            .is_ok()
+            );
+            #[cfg(test)]
+            if _retry == 0 && verified.is_err() {
+                let cached = if *label == "ide_composer" {
+                    ui::cached_ide_selection(detection.config_path.as_deref())
+                } else {
+                    ui::cached_recent_selection(detection.config_path.as_deref(), label)
+                };
+                eprintln!("TRAE_LIVE_DURABLE_MISMATCH label={label} actual={cached:?}");
+                if let Some(id) = additional_sessions.get(*label) {
+                    let cached_session =
+                        ui::cached_session_selection(detection.config_path.as_deref(), id, label);
+                    eprintln!("TRAE_LIVE_DURABLE_SESSION label={label} actual={cached_session:?}");
+                }
+            }
+            verified.is_ok()
         });
         if primary.is_ok() && additional {
             return Ok(());
@@ -1040,7 +1017,7 @@ fn verify_persisted_label(
     protocol: ApiProtocol,
     session_id: Option<&str>,
 ) -> AppResult<()> {
-    if label == "ide_legacy" {
+    if label == "ide_composer" {
         let selection = ui::cached_ide_selection(detection.config_path.as_deref())?;
         let matches = selection.is_some_and(|(mode, key)| {
             mode == 0
@@ -1058,7 +1035,7 @@ fn verify_persisted_label(
         } else {
             Err(CommandError::new(
                 "trae_persisted_selection_mismatch",
-                "TraeCode IDE 模型选择未保持为目标模型",
+                "TRAE IDE 模型选择未保持为目标模型",
             ))
         };
     }
@@ -1094,6 +1071,7 @@ fn verify_persisted_label(
 struct UiApplyPlan {
     row: ManagedRow,
     previous_selection: String,
+    previous_storage: Option<ui::SelectionStorageBaseline>,
     previous_session: Option<(String, String)>,
     additional_previous: BTreeMap<String, LabelBaseline>,
     created: bool,
@@ -1104,6 +1082,7 @@ struct UiApplyPlan {
 #[derive(Clone)]
 struct LabelBaseline {
     selection: String,
+    storage: Option<ui::SelectionStorageBaseline>,
     session: Option<(String, String)>,
     ide: Option<ui::IdeSelectionBaseline>,
 }
@@ -1183,6 +1162,34 @@ fn plan_ui_change(
     replacement: Option<&ManagedRow>,
     known_names: &HashSet<String>,
 ) -> AppResult<UiApplyPlan> {
+    let result = plan_ui_change_inner(
+        ui,
+        kind,
+        detection,
+        input,
+        matching,
+        replacement,
+        known_names,
+    );
+    if result.is_err() {
+        // Planning has not changed any target selection or custom model. A
+        // transient catalogue/read failure must not discard a healthy pipe
+        // owner and force another restart on the next attempt. Retain is an
+        // acknowledged native RPC; a broken controller still fails closed.
+        let _ = ui.complete_operation(kind);
+    }
+    result
+}
+
+fn plan_ui_change_inner(
+    ui: &dyn ui::TraeUi,
+    kind: TraeKind,
+    detection: &AgentDetection,
+    input: &ManagedInput,
+    matching: Option<&ManagedRow>,
+    replacement: Option<&ManagedRow>,
+    known_names: &HashSet<String>,
+) -> AppResult<UiApplyPlan> {
     let snapshot = ui.snapshot_interactive(kind, detection)?;
     let mut additional_previous = BTreeMap::new();
     for label in kind.additional_selection_labels() {
@@ -1191,6 +1198,7 @@ fn plan_ui_change(
             (*label).to_owned(),
             LabelBaseline {
                 selection: selection.recent_selection,
+                storage: selection.selection_baseline,
                 session: selection.active_session_id.zip(selection.active_selection),
                 ide: selection.ide_baseline,
             },
@@ -1202,6 +1210,7 @@ fn plan_ui_change(
             return Ok(UiApplyPlan {
                 row: row.clone(),
                 previous_selection: snapshot.recent_selection.clone(),
+                previous_storage: snapshot.selection_baseline.clone(),
                 previous_session: snapshot
                     .active_session_id
                     .clone()
@@ -1214,26 +1223,9 @@ fn plan_ui_change(
         }
     }
 
-    let discovered_legacy_name =
-        if is_legacy_managed_display_name_for_input(&snapshot.selection, input) {
-            Some(snapshot.selection.clone())
-        } else {
-            snapshot
-                .custom_models
-                .iter()
-                .filter(|name| is_legacy_managed_display_name_for_input(name, input))
-                .min()
-                .cloned()
-        };
     let replaced_row = replacement
         .filter(|row| snapshot.custom_models.contains(&row.display_name))
-        .cloned()
-        .or_else(|| {
-            discovered_legacy_name.map(|display_name| ManagedRow {
-                display_name,
-                input: input.clone(),
-            })
-        });
+        .cloned();
     let expected_name = managed_display_name_base(input);
     if replaced_row.is_none() {
         let existing_name = snapshot
@@ -1259,6 +1251,7 @@ fn plan_ui_change(
                     input: input.clone(),
                 },
                 previous_selection: snapshot.recent_selection.clone(),
+                previous_storage: snapshot.selection_baseline.clone(),
                 previous_session: snapshot
                     .active_session_id
                     .clone()
@@ -1284,6 +1277,7 @@ fn plan_ui_change(
             input: input.clone(),
         },
         previous_selection: snapshot.recent_selection.clone(),
+        previous_storage: snapshot.selection_baseline.clone(),
         previous_session: snapshot
             .active_session_id
             .clone()
@@ -1505,37 +1499,6 @@ fn ui_model_input(row: &ManagedRow, credential: Option<&Zeroizing<String>>) -> u
     }
 }
 
-async fn cleanup_legacy_rows(
-    ui: Arc<dyn ui::TraeUi>,
-    kind: TraeKind,
-    detection: AgentDetection,
-    checkpoint: &mut Checkpoint,
-) -> bool {
-    let legacy_names = checkpoint
-        .owned
-        .iter()
-        .filter(|row| is_legacy_managed_row(row))
-        .map(|row| row.display_name.clone())
-        .collect::<Vec<_>>();
-    if legacy_names.is_empty() {
-        return true;
-    }
-
-    let attempted_names = legacy_names.clone();
-    let deleted = tokio::task::spawn_blocking(move || {
-        legacy_names
-            .into_iter()
-            .filter(|name| ui.delete_model(kind, &detection, name).is_ok())
-            .collect::<HashSet<_>>()
-    })
-    .await
-    .unwrap_or_default();
-    checkpoint
-        .owned
-        .retain(|row| !deleted.contains(&row.display_name));
-    deleted.len() == attempted_names.len()
-}
-
 async fn rollback_ui_change(
     ui: Arc<dyn ui::TraeUi>,
     kind: TraeKind,
@@ -1547,11 +1510,12 @@ async fn rollback_ui_change(
         let model_absent_after_failed_creation = !mutation.model_created
             && ui::cached_custom_models(detection.config_path.as_deref())
                 .is_ok_and(|models| !models.contains(&plan.row.display_name));
-        let model_removed = !mutation.model_creation_attempted
+        let model_removed_early = !mutation.model_creation_attempted
             || model_absent_after_failed_creation
-            || ui
-                .delete_model(kind, &detection, &plan.row.display_name)
-                .is_ok();
+            || (mutation.replacement_delete_attempted
+                && ui
+                    .delete_model(kind, &detection, &plan.row.display_name)
+                    .is_ok());
         let replaced_row_restored = !mutation.replacement_delete_attempted
             || plan.replaced_row.as_ref().is_none_or(|replaced| {
                 ui::cached_custom_models(detection.config_path.as_deref())
@@ -1578,38 +1542,65 @@ async fn rollback_ui_change(
                 ui.select_model_scoped(kind, &detection, selection, Some(id))
                     .is_ok()
             });
+        // all() short-circuits and would skip remaining rollback mutations.
+        #[allow(clippy::unnecessary_fold)]
         let additional_restored = plan
             .additional_previous
             .iter()
-            .filter(|(label, _)| label.as_str() != "ide_legacy")
-            .all(|(label, baseline)| {
-                baseline.session.as_ref().is_none_or(|(id, selection)| {
+            .filter(|(label, _)| label.as_str() != "ide_composer")
+            .map(|(label, baseline)| {
+                let session_restored = baseline.session.as_ref().is_none_or(|(id, selection)| {
                     ui.select_model_label_scoped(kind, &detection, label, selection, Some(id))
                         .is_ok()
-                }) && ui
-                    .select_model_label_scoped(kind, &detection, label, &baseline.selection, None)
+                });
+                let default_restored = baseline.storage.as_ref().map_or_else(
+                    || {
+                        ui.select_model_label_scoped(
+                            kind,
+                            &detection,
+                            label,
+                            &baseline.selection,
+                            None,
+                        )
+                        .is_ok()
+                    },
+                    |storage| {
+                        ui.restore_selection_baseline(kind, &detection, label, storage)
+                            .is_ok()
+                    },
+                );
+                session_restored && default_restored
+            })
+            .fold(true, |restored, next| restored && next);
+        // Always restore the primary selector, even when another entry failed.
+        // Boolean short-circuiting must not leave a deleted QA/managed model active.
+        let primary_restored = plan.previous_storage.as_ref().map_or_else(
+            || {
+                select_model_with_transient_retry(
+                    ui.as_ref(),
+                    kind,
+                    &detection,
+                    &plan.previous_selection,
+                )
+                .is_ok()
+            },
+            |storage| {
+                ui.restore_selection_baseline(kind, &detection, kind.selection_label(), storage)
                     .is_ok()
-            });
-        let native_restored = replaced_row_restored
-            && session_restored
-            && additional_restored
-            && select_model_with_transient_retry(
-                ui.as_ref(),
-                kind,
-                &detection,
-                &plan.previous_selection,
-            )
-            .is_ok();
+            },
+        );
+        let native_restored =
+            replaced_row_restored && session_restored && additional_restored && primary_restored;
         let ide_restored = plan
             .additional_previous
-            .get("ide_legacy")
+            .get("ide_composer")
             .is_none_or(|baseline| {
                 baseline.ide.as_ref().map_or_else(
                     || {
                         ui.select_model_label_scoped(
                             kind,
                             &detection,
-                            "ide_legacy",
+                            "ide_composer",
                             &baseline.selection,
                             None,
                         )
@@ -1619,6 +1610,21 @@ async fn rollback_ui_change(
                 )
             });
         let selection_restored = native_restored && ide_restored;
+        // Restore every selector before removing a newly created model. A
+        // catalog refresh cannot preserve a selection whose model was just
+        // deleted, and may otherwise persist a dangling current-session key.
+        // Replacements are the exception: free their shared name first so
+        // the original row can be registered again.
+        let model_removed = model_removed_early
+            || (!mutation.replacement_delete_attempted
+                && ui
+                    .delete_model(kind, &detection, &plan.row.display_name)
+                    .is_ok());
+        if selection_restored && model_removed && replaced_row_restored {
+            // A verified compensation is safe to retain in the same process.
+            // Dropping a cold bridge here would close/reopen TRAE yet again.
+            let _ = ui.complete_operation(kind);
+        }
         UiRollback {
             selection_restored,
             model_removed,
@@ -1648,25 +1654,6 @@ fn managed_display_name_base(input: &ManagedInput) -> String {
     let provider = compact_label(&input.provider_name, 18);
     let model = compact_label(&input.model_id, 24);
     compact_label(&format!("{provider} · {model}"), 58)
-}
-
-fn legacy_managed_display_name_base(input: &ManagedInput) -> String {
-    let provider = compact_label(&input.provider_name, 18);
-    let model = compact_label(&input.model_id, 24);
-    compact_label(&format!("{LEGACY_MANAGED_PREFIX}{provider} · {model}"), 58)
-}
-
-fn is_legacy_managed_display_name_for_input(name: &str, input: &ManagedInput) -> bool {
-    let base = legacy_managed_display_name_base(input);
-    name == base
-        || name
-            .strip_prefix(&format!("{base} · "))
-            .and_then(|suffix| suffix.parse::<u8>().ok())
-            .is_some_and(|suffix| (2..=99).contains(&suffix))
-}
-
-fn is_legacy_managed_row(row: &ManagedRow) -> bool {
-    is_legacy_managed_display_name_for_input(&row.display_name, &row.input)
 }
 
 fn compact_label(value: &str, max_chars: usize) -> String {
@@ -1723,21 +1710,19 @@ struct Checkpoint {
     account_scope: String,
     baseline_selection: String,
     #[serde(default)]
+    selection_baseline: Option<ui::SelectionStorageBaseline>,
+    #[serde(default)]
     session_baselines: BTreeMap<String, String>,
     #[serde(default)]
     additional_baselines: BTreeMap<String, String>,
+    #[serde(default)]
+    additional_selection_baselines: BTreeMap<String, ui::SelectionStorageBaseline>,
     #[serde(default)]
     additional_session_baselines: BTreeMap<String, BTreeMap<String, String>>,
     #[serde(default)]
     ide_baseline: Option<ui::IdeSelectionBaseline>,
     #[serde(default)]
-    secondary_baseline_selection: Option<String>,
-    #[serde(default)]
-    secondary_session_baselines: BTreeMap<String, String>,
-    #[serde(default)]
     selection_label: Option<String>,
-    #[serde(default)]
-    legacy_work_remote_baseline: Option<String>,
     owned: Vec<ManagedRow>,
     #[serde(default)]
     borrowed: Vec<ManagedRow>,
@@ -1752,26 +1737,7 @@ fn load_checkpoint(
 ) -> AppResult<Option<Checkpoint>> {
     transaction
         .read_service_checkpoint(agent_id, resource)?
-        .map(|bytes| {
-            let mut checkpoint: Checkpoint =
-                serde_json::from_slice(&bytes).map_err(|_| checkpoint_invalid())?;
-            if agent_id == TraeKind::Code.id() {
-                if let Some(selection) = checkpoint.secondary_baseline_selection.take() {
-                    checkpoint
-                        .additional_baselines
-                        .entry("solo_agent".to_owned())
-                        .or_insert(selection);
-                }
-                if !checkpoint.secondary_session_baselines.is_empty() {
-                    checkpoint
-                        .additional_session_baselines
-                        .entry("solo_agent".to_owned())
-                        .or_default()
-                        .append(&mut checkpoint.secondary_session_baselines);
-                }
-            }
-            Ok(checkpoint)
-        })
+        .map(|bytes| serde_json::from_slice(&bytes).map_err(|_| checkpoint_invalid()))
         .transpose()
 }
 
@@ -1803,7 +1769,10 @@ fn historical_owned_rows(
 }
 
 fn validate_checkpoint(checkpoint: &Checkpoint, resource: &str) -> AppResult<()> {
-    if checkpoint.version != CHECKPOINT_VERSION || checkpoint.account_scope != resource {
+    if checkpoint.version != CHECKPOINT_VERSION
+        || checkpoint.account_scope != resource
+        || checkpoint.selection_label.as_deref() != Some(TraeKind::Unified.selection_label())
+    {
         return Err(checkpoint_invalid());
     }
     Ok(())
@@ -1877,23 +1846,43 @@ mod tests {
     };
 
     use crate::infrastructure::MemorySecretStore;
+    use rusqlite::OptionalExtension;
     use uuid::Uuid;
 
     use super::*;
 
     #[test]
     fn native_service_rejects_unverified_trae_versions() {
-        assert!(TraeKind::Code.supports_native_bridge(Some("3.4.1")));
-        assert!(TraeKind::Work.supports_native_bridge(Some("0.1.69")));
-        assert!(!TraeKind::Code.supports_native_bridge(Some("3.4.2")));
-        assert!(!TraeKind::Work.supports_native_bridge(Some("0.1.70")));
-        assert!(!TraeKind::Code.supports_native_bridge(None));
-        assert_eq!(TraeKind::Code.selection_label(), "solo_agent_lite");
-        assert_eq!(TraeKind::Work.selection_label(), "solo_work_lite");
+        assert!(!TraeKind::Unified.supports_native_bridge(Some("3.4.1")));
+        assert!(!TraeKind::Unified.supports_native_bridge(Some("0.1.69")));
+        assert!(TraeKind::Unified.supports_native_bridge(Some("3.4.2")));
+        assert!(TraeKind::Unified.supports_native_bridge(Some("3.4.2.0")));
+        assert!(!TraeKind::Unified.supports_native_bridge(Some("3.4.3")));
+        assert!(!TraeKind::Unified.supports_native_bridge(Some("0.1.70")));
+        assert!(!TraeKind::Unified.supports_native_bridge(None));
+        assert_eq!(TraeKind::Unified.selection_label(), "solo_agent_lite");
+        assert_eq!(TraeKind::Unified.selection_label(), "solo_agent_lite");
     }
 
     #[test]
-    fn work_plan_keeps_distinct_default_and_current_task_baselines() {
+    fn unified_trae_does_not_import_retired_product_checkpoints() {
+        let temp = tempfile::tempdir().expect("temp");
+        let transaction = ConfigTransaction::new(
+            Arc::new(MemorySecretStore::default()),
+            temp.path().join("backups"),
+        );
+        for id in ["traecode", "traework"] {
+            transaction
+                .save_service_checkpoint(id, &format!("{id}:12345"), b"old-format-not-imported")
+                .expect("old journal");
+        }
+        assert!(load_checkpoint(&transaction, "trae", "trae:12345")
+            .expect("new journal namespace")
+            .is_none());
+    }
+
+    #[test]
+    fn trae_plan_keeps_distinct_default_and_current_task_baselines() {
         let temp = tempfile::tempdir().expect("temp");
         let detection = test_detection(&temp);
         let fake = FakeUi::new("Auto Mode");
@@ -1905,14 +1894,14 @@ mod tests {
         let input = ManagedInput::from_desired(&desired("fictional-secret"));
         let plan = plan_ui_change(
             &fake,
-            TraeKind::Work,
+            TraeKind::Unified,
             &detection,
             &input,
             None,
             None,
             &HashSet::new(),
         )
-        .expect("plan Work model change");
+        .expect("plan TRAE model change");
         assert_eq!(plan.previous_selection, "Auto Mode");
         assert_eq!(
             plan.previous_session,
@@ -1921,7 +1910,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delayed_code_task_route_is_selected_and_restored() {
+    async fn delayed_trae_task_route_is_selected_and_restored() {
         let temp = tempfile::tempdir().expect("temp");
         let detection = test_detection(&temp);
         let fake = Arc::new(FakeUi::new("Auto Mode"));
@@ -1929,7 +1918,7 @@ mod tests {
             .lock()
             .expect("fake UI state")
             .reveal_session_at_snapshot = Some((3, "late-task".to_owned(), "Auto Mode".to_owned()));
-        let adapter = TraeAdapter::with_ui(TraeKind::Code, fake.clone());
+        let adapter = TraeAdapter::with_ui(TraeKind::Unified, fake.clone());
         let transaction = ConfigTransaction::new(
             Arc::new(MemorySecretStore::default()),
             temp.path().join("backups"),
@@ -1963,6 +1952,45 @@ mod tests {
         );
     }
 
+    #[test]
+    fn failed_read_only_plan_retains_runtime_without_mutating_selections() {
+        let temp = tempfile::tempdir().expect("temp");
+        let detection = test_detection(&temp);
+        let fake = FakeUi::new("User model");
+        fake.state.lock().expect("fake UI state").fail_next_snapshot = true;
+        let input = ManagedInput::from_desired(&desired("fictional-secret"));
+        let result = plan_ui_change(
+            &fake,
+            TraeKind::Unified,
+            &detection,
+            &input,
+            None,
+            None,
+            &HashSet::new(),
+        );
+        assert!(result.is_err());
+        {
+            let state = fake.state.lock().expect("fake UI state");
+            assert_eq!(state.selection, "User model");
+            assert_eq!(state.completions, 1);
+            assert_eq!(
+                state.additions + state.deletions + state.selection_attempts,
+                0
+            );
+        }
+        plan_ui_change(
+            &fake,
+            TraeKind::Unified,
+            &detection,
+            &input,
+            None,
+            None,
+            &HashSet::new(),
+        )
+        .expect("read-only retry succeeds");
+        assert_eq!(fake.state.lock().expect("fake UI state").completions, 1);
+    }
+
     #[derive(Default)]
     struct FakeUiState {
         selection: String,
@@ -1978,12 +2006,15 @@ mod tests {
         model_ids: HashMap<String, String>,
         endpoints: HashMap<String, String>,
         cache_visible: bool,
+        fail_next_snapshot: bool,
         fail_after_persisting_next_add: bool,
         transient_selection_failures: usize,
         selection_attempts: usize,
         snapshots: usize,
         additions: usize,
         deletions: usize,
+        selections_at_delete: Vec<[String; 4]>,
+        completions: usize,
     }
 
     struct FakeUi {
@@ -2054,6 +2085,7 @@ mod tests {
                     Default::default()
                 },
                 ide_baseline: None,
+                selection_baseline: None,
             }
         }
     }
@@ -2066,6 +2098,13 @@ mod tests {
         ) -> AppResult<ui::TraeUiSnapshot> {
             let mut state = self.state.lock().expect("fake UI state");
             state.snapshots += 1;
+            if state.fail_next_snapshot {
+                state.fail_next_snapshot = false;
+                return Err(CommandError::new(
+                    "trae_native_model_list_failed",
+                    "test catalogue read failed",
+                ));
+            }
             if state
                 .reveal_session_at_snapshot
                 .as_ref()
@@ -2088,7 +2127,7 @@ mod tests {
             assert!(kind.additional_selection_labels().contains(&label));
             let mut snapshot = self.snapshot_value();
             let state = self.state.lock().expect("fake UI state");
-            let (selection, active) = if label == "ide_legacy" {
+            let (selection, active) = if label == "ide_composer" {
                 (&state.ide_selection, &None)
             } else if label == "solo_coder" {
                 (&state.coder_selection, &state.coder_active_session)
@@ -2250,11 +2289,23 @@ mod tests {
             display_name: &str,
         ) -> AppResult<()> {
             let mut state = self.state.lock().expect("fake UI state");
+            let selected = [
+                state.selection.clone(),
+                state.secondary_selection.clone(),
+                state.coder_selection.clone(),
+                state.ide_selection.clone(),
+            ];
+            state.selections_at_delete.push(selected);
             if state.models.remove(display_name) {
                 state.deletions += 1;
             }
             state.model_ids.remove(display_name);
             state.endpoints.remove(display_name);
+            Ok(())
+        }
+
+        fn complete_operation(&self, _: TraeKind) -> AppResult<()> {
+            self.state.lock().expect("fake UI state").completions += 1;
             Ok(())
         }
 
@@ -2335,7 +2386,7 @@ mod tests {
                 .cloned()
                 .unwrap_or_default();
             let mode = if display_name == "Auto Mode" { 1 } else { 0 };
-            if label == "ide_legacy" {
+            if label == "ide_composer" {
                 state.ide_selection = display_name.to_owned();
                 drop(state);
                 if let Some(path) = detection.config_path.as_deref() {
@@ -2471,10 +2522,20 @@ mod tests {
         ) -> AppResult<()> {
             let selected = baseline.workspace.mode.or(baseline.app.mode).unwrap_or(1);
             if selected == 1 {
-                self.select_model_label_scoped(kind, detection, "ide_legacy", "Auto Mode", None)
+                self.select_model_label_scoped(kind, detection, "ide_composer", "Auto Mode", None)
             } else {
                 Ok(())
             }
+        }
+
+        fn restore_selection_baseline(
+            &self,
+            _: TraeKind,
+            _: &AgentDetection,
+            _: &str,
+            _: &ui::SelectionStorageBaseline,
+        ) -> AppResult<()> {
+            Ok(())
         }
     }
 
@@ -2490,7 +2551,7 @@ mod tests {
                 ["12345:AI.agent.model.model_list_map", "{}"],
             )
             .expect("account row");
-        let mut detection = AgentDetection::manual("traecode", "TraeCode", None, "test detection");
+        let mut detection = AgentDetection::manual("trae", "TRAE", None, "test detection");
         detection.config_path = Some(database);
         detection
     }
@@ -2523,7 +2584,7 @@ mod tests {
 
         select_model_with_transient_retry(
             &fake,
-            TraeKind::Code,
+            TraeKind::Unified,
             &detection,
             "Fictional Provider · fictional-model",
         )
@@ -2541,9 +2602,13 @@ mod tests {
         let detection = test_detection(&temp);
         let fake = FakeUi::new("Auto Mode");
 
-        let error =
-            select_model_with_transient_retry(&fake, TraeKind::Code, &detection, "Missing model")
-                .expect_err("permanent error must surface");
+        let error = select_model_with_transient_retry(
+            &fake,
+            TraeKind::Unified,
+            &detection,
+            "Missing model",
+        )
+        .expect_err("permanent error must surface");
 
         assert_eq!(error.code, "test_model_missing");
         assert_eq!(
@@ -2563,7 +2628,7 @@ mod tests {
             credential: Zeroizing::new("secret".into()),
         };
         let first = available_display_name(&input, &HashSet::new(), &HashSet::new());
-        assert!(!first.starts_with(LEGACY_MANAGED_PREFIX));
+        assert!(!first.starts_with("AT-Switch · "));
         assert!(first.chars().count() <= 64);
         let next = available_display_name(&input, &HashSet::from([first.clone()]), &HashSet::new());
         assert_ne!(first, next);
@@ -2590,7 +2655,7 @@ mod tests {
 
         let plan = plan_ui_change(
             &fake,
-            TraeKind::Work,
+            TraeKind::Unified,
             &detection,
             &input,
             Some(&ManagedRow {
@@ -2624,7 +2689,7 @@ mod tests {
 
     #[test]
     fn rejects_proxy_and_cross_protocol_direct_bindings() {
-        let adapter = TraeAdapter::code();
+        let adapter = TraeAdapter::unified();
         let mut proxy = desired("fictional-secret");
         proxy.mode = AgentBindingMode::Proxy;
         assert_eq!(
@@ -2649,7 +2714,7 @@ mod tests {
             .expect("fake UI state")
             .models
             .insert("User custom model".to_owned());
-        let adapter = TraeAdapter::with_ui(TraeKind::Code, fake.clone());
+        let adapter = TraeAdapter::with_ui(TraeKind::Unified, fake.clone());
         let transaction = ConfigTransaction::new(
             Arc::new(MemorySecretStore::default()),
             temp.path().join("backups"),
@@ -2681,11 +2746,11 @@ mod tests {
         {
             let state = fake.state.lock().expect("fake UI state");
             assert_eq!(state.additions, 1);
-            assert!(!state.selection.starts_with(LEGACY_MANAGED_PREFIX));
+            assert!(!state.selection.starts_with("AT-Switch · "));
             assert_eq!(state.models.len(), 2);
         }
         let checkpoint = transaction
-            .read_service_checkpoint("traecode", "traecode:12345")
+            .read_service_checkpoint("trae", "trae:12345")
             .expect("checkpoint read")
             .expect("checkpoint");
         assert!(!checkpoint
@@ -2707,7 +2772,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn code_switch_selects_and_restores_agent_and_ide_with_one_checkpoint() {
+    async fn trae_switch_selects_and_restores_agent_and_ide_with_one_checkpoint() {
         let temp = tempfile::tempdir().expect("temp");
         let detection = test_detection(&temp);
         let fake = Arc::new(FakeUi::new("Auto Mode"));
@@ -2717,7 +2782,7 @@ mod tests {
             state.secondary_active_session = Some(("task-one".to_owned(), "Auto Mode".to_owned()));
             state.coder_active_session = Some(("task-one".to_owned(), "Auto Mode".to_owned()));
         }
-        let adapter = TraeAdapter::with_ui(TraeKind::Code, fake.clone());
+        let adapter = TraeAdapter::with_ui(TraeKind::Unified, fake.clone());
         let transaction = ConfigTransaction::new(
             Arc::new(MemorySecretStore::default()),
             temp.path().join("backups"),
@@ -2763,7 +2828,7 @@ mod tests {
         }
         ui::TraeUi::select_model_label_scoped(
             fake.as_ref(),
-            TraeKind::Code,
+            TraeKind::Unified,
             &detection,
             "solo_coder",
             "Auto Mode",
@@ -2830,7 +2895,7 @@ mod tests {
                     .to_string(),
             );
         }
-        let adapter = TraeAdapter::with_ui(TraeKind::Work, fake.clone());
+        let adapter = TraeAdapter::with_ui(TraeKind::Unified, fake.clone());
         let transaction = ConfigTransaction::new(
             Arc::new(MemorySecretStore::default()),
             temp.path().join("backups"),
@@ -2846,7 +2911,7 @@ mod tests {
             assert_eq!(state.additions, 0);
             assert_eq!(state.deletions, 0);
         }
-        let checkpoint = load_checkpoint(&transaction, "traework", "traework:12345")
+        let checkpoint = load_checkpoint(&transaction, "trae", "trae:12345")
             .expect("checkpoint read")
             .expect("checkpoint");
         assert!(checkpoint.owned.is_empty());
@@ -2863,7 +2928,7 @@ mod tests {
         assert_eq!(state.additions, 0);
         assert_eq!(state.deletions, 0);
         drop(state);
-        let checkpoint = load_checkpoint(&transaction, "traework", "traework:12345")
+        let checkpoint = load_checkpoint(&transaction, "trae", "trae:12345")
             .expect("checkpoint read")
             .expect("checkpoint");
         assert!(checkpoint.borrowed.is_empty());
@@ -2889,7 +2954,8 @@ mod tests {
                 "https://another-provider.example.test/v1/responses".to_owned(),
             );
         }
-        for kind in [TraeKind::Code, TraeKind::Work] {
+        {
+            let kind = TraeKind::Unified;
             let error =
                 plan_ui_change(&fake, kind, &detection, &input, None, None, &HashSet::new())
                     .err()
@@ -2897,7 +2963,8 @@ mod tests {
             assert_eq!(error.code, "trae_existing_model_conflict");
         }
         fake.state.lock().expect("fake UI state").endpoints.clear();
-        for kind in [TraeKind::Code, TraeKind::Work] {
+        {
+            let kind = TraeKind::Unified;
             let error =
                 plan_ui_change(&fake, kind, &detection, &input, None, None, &HashSet::new())
                     .err()
@@ -2917,7 +2984,7 @@ mod tests {
         let detection = test_detection(&temp);
         let fake = Arc::new(FakeUi::new("Auto Mode"));
         fake.state.lock().expect("fake UI state").cache_visible = false;
-        let adapter = TraeAdapter::with_ui(TraeKind::Code, fake.clone());
+        let adapter = TraeAdapter::with_ui(TraeKind::Unified, fake.clone());
         let transaction = ConfigTransaction::new(
             Arc::new(MemorySecretStore::default()),
             temp.path().join("backups"),
@@ -2949,7 +3016,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("temp");
         let detection = test_detection(&temp);
         let fake = Arc::new(FakeUi::new("Auto Mode"));
-        let adapter = TraeAdapter::with_ui(TraeKind::Code, fake.clone());
+        let adapter = TraeAdapter::with_ui(TraeKind::Unified, fake.clone());
         let transaction = ConfigTransaction::new(
             Arc::new(MemorySecretStore::default()),
             temp.path().join("backups"),
@@ -3019,7 +3086,7 @@ mod tests {
             .lock()
             .expect("fake UI state")
             .fail_after_persisting_next_add = true;
-        let adapter = TraeAdapter::with_ui(TraeKind::Work, fake.clone());
+        let adapter = TraeAdapter::with_ui(TraeKind::Unified, fake.clone());
         let transaction = ConfigTransaction::new(
             Arc::new(MemorySecretStore::default()),
             temp.path().join("backups"),
@@ -3054,7 +3121,7 @@ mod tests {
         let detection = test_detection(&temp);
         let input = ManagedInput::from_desired(&desired("fictional-secret"));
         let legacy = ManagedRow {
-            display_name: legacy_managed_display_name_base(&input),
+            display_name: "Previous managed model".to_owned(),
             input: input.clone(),
         };
         let fake = Arc::new(FakeUi::new("Auto Mode"));
@@ -3066,7 +3133,7 @@ mod tests {
 
         let rollback = rollback_ui_change(
             fake.clone(),
-            TraeKind::Work,
+            TraeKind::Unified,
             detection,
             UiApplyPlan {
                 row: ManagedRow {
@@ -3074,6 +3141,7 @@ mod tests {
                     input,
                 },
                 previous_selection: "Auto Mode".to_owned(),
+                previous_storage: None,
                 previous_session: None,
                 additional_previous: BTreeMap::new(),
                 created: true,
@@ -3089,189 +3157,114 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn successful_switch_migrates_only_checkpoint_owned_legacy_rows() {
+    async fn rollback_restores_every_selector_even_when_one_baseline_fails() {
         let temp = tempfile::tempdir().expect("temp");
         let detection = test_detection(&temp);
-        let desired = desired("fictional-secret");
-        let input = ManagedInput::from_desired(&desired);
-        let legacy_name = legacy_managed_display_name_base(&input);
-        let user_model = "AT-Switch · user-created model".to_owned();
-        let fake = Arc::new(FakeUi::new(&legacy_name));
+        let input = ManagedInput::from_desired(&desired("fictional-secret"));
+        let fake = Arc::new(FakeUi::new("Temporary"));
         {
-            let mut state = fake.state.lock().expect("fake UI state");
-            state.models.insert(legacy_name.clone());
-            state
-                .model_ids
-                .insert(legacy_name.clone(), input.model_id.clone());
-            state.models.insert(user_model.clone());
+            let mut state = fake.state.lock().expect("fake state");
+            state.secondary_selection = "Temporary".to_owned();
+            state.coder_selection = "Temporary".to_owned();
+            state.ide_selection = "Temporary".to_owned();
         }
-        let adapter = TraeAdapter::with_ui(TraeKind::Code, fake.clone());
-        let transaction = ConfigTransaction::new(
-            Arc::new(MemorySecretStore::default()),
-            temp.path().join("backups"),
-        );
-        save_checkpoint(
-            &transaction,
-            "traecode",
-            "traecode:12345",
-            &Checkpoint {
-                version: CHECKPOINT_VERSION,
-                account_scope: "traecode:12345".to_owned(),
-                baseline_selection: "Auto Mode".to_owned(),
-                session_baselines: BTreeMap::new(),
-                additional_baselines: BTreeMap::new(),
-                additional_session_baselines: BTreeMap::new(),
-                ide_baseline: None,
-                secondary_baseline_selection: None,
-                secondary_session_baselines: BTreeMap::new(),
-                selection_label: None,
-                legacy_work_remote_baseline: None,
-                owned: vec![ManagedRow {
-                    display_name: legacy_name.clone(),
-                    input: input.clone(),
-                }],
-                borrowed: Vec::new(),
-                active: Some(legacy_name.clone()),
-                pending: false,
-            },
-        )
-        .expect("legacy checkpoint");
-
-        adapter
-            .apply(&detection, &desired, &transaction, &|| Ok(()))
-            .await
-            .expect("legacy migration");
-
-        let state = fake.state.lock().expect("fake UI state");
-        assert_eq!(state.selection, "Fictional Provider · fictional-model");
-        assert!(!state.models.contains(&legacy_name));
-        assert!(state.models.contains(&user_model));
-        assert_eq!(state.additions, 1);
-        assert_eq!(state.deletions, 1);
-        drop(state);
-
-        let checkpoint = load_checkpoint(&transaction, "traecode", "traecode:12345")
-            .expect("checkpoint read")
-            .expect("checkpoint");
-        assert!(!checkpoint.pending);
-        assert_eq!(
-            checkpoint.active.as_deref(),
-            Some("Fictional Provider · fictional-model")
-        );
-        assert_eq!(checkpoint.owned.len(), 1);
-        assert!(!is_legacy_managed_row(&checkpoint.owned[0]));
-    }
-
-    #[tokio::test]
-    async fn legacy_prefix_recovers_ownership_when_an_old_checkpoint_missed_the_row() {
-        let temp = tempfile::tempdir().expect("temp");
-        let detection = test_detection(&temp);
-        let desired = desired("fictional-secret");
-        let input = ManagedInput::from_desired(&desired);
-        let legacy_name = legacy_managed_display_name_base(&input);
-        let fake = Arc::new(FakeUi::new("Auto Mode"));
-        {
-            let mut state = fake.state.lock().expect("fake UI state");
-            state.models.insert(legacy_name.clone());
-            state
-                .model_ids
-                .insert(legacy_name.clone(), input.model_id.clone());
-        }
-        let adapter = TraeAdapter::with_ui(TraeKind::Code, fake.clone());
-        let transaction = ConfigTransaction::new(
-            Arc::new(MemorySecretStore::default()),
-            temp.path().join("backups"),
-        );
-
-        adapter
-            .apply(&detection, &desired, &transaction, &|| Ok(()))
-            .await
-            .expect("legacy discovery migration");
-
-        let state = fake.state.lock().expect("fake UI state");
-        assert_eq!(state.selection, "Fictional Provider · fictional-model");
-        assert!(!state.models.contains(&legacy_name));
-        assert_eq!(state.deletions, 1);
-        drop(state);
-        let checkpoint = load_checkpoint(&transaction, "traecode", "traecode:12345")
-            .expect("checkpoint read")
-            .expect("checkpoint");
-        assert_eq!(checkpoint.owned.len(), 1);
-        assert!(!is_legacy_managed_row(&checkpoint.owned[0]));
-    }
-
-    #[tokio::test]
-    async fn failed_legacy_migration_recreates_the_old_row_and_selection() {
-        let temp = tempfile::tempdir().expect("temp");
-        let detection = test_detection(&temp);
-        let desired = desired("fictional-secret");
-        let input = ManagedInput::from_desired(&desired);
-        let legacy_name = legacy_managed_display_name_base(&input);
-        let fake = Arc::new(FakeUi::new(&legacy_name));
-        {
-            let mut state = fake.state.lock().expect("fake UI state");
-            state.models.insert(legacy_name.clone());
-            state
-                .model_ids
-                .insert(legacy_name.clone(), input.model_id.clone());
-        }
-        let adapter = TraeAdapter::with_ui(TraeKind::Code, fake.clone());
-        let transaction = ConfigTransaction::new(
-            Arc::new(MemorySecretStore::default()),
-            temp.path().join("backups"),
-        );
-        save_checkpoint(
-            &transaction,
-            "traecode",
-            "traecode:12345",
-            &Checkpoint {
-                version: CHECKPOINT_VERSION,
-                account_scope: "traecode:12345".to_owned(),
-                baseline_selection: "Auto Mode".to_owned(),
-                session_baselines: BTreeMap::new(),
-                additional_baselines: BTreeMap::new(),
-                additional_session_baselines: BTreeMap::new(),
-                ide_baseline: None,
-                secondary_baseline_selection: None,
-                secondary_session_baselines: BTreeMap::new(),
-                selection_label: None,
-                legacy_work_remote_baseline: None,
-                owned: vec![ManagedRow {
-                    display_name: legacy_name.clone(),
-                    input,
-                }],
-                borrowed: Vec::new(),
-                active: Some(legacy_name.clone()),
-                pending: false,
-            },
-        )
-        .expect("legacy checkpoint");
-
-        let error = match adapter
-            .apply(&detection, &desired, &transaction, &|| {
-                Err(CommandError::new("test_commit_failed", "commit failed"))
-            })
-            .await
-        {
-            Ok(_) => panic!("migration commit must fail"),
-            Err(error) => error,
+        let baseline = |selection: &str| LabelBaseline {
+            selection: selection.to_owned(),
+            storage: None,
+            session: None,
+            ide: None,
         };
+        let rollback = rollback_ui_change(
+            fake.clone(),
+            TraeKind::Unified,
+            detection,
+            UiApplyPlan {
+                row: ManagedRow {
+                    display_name: "Temporary".to_owned(),
+                    input,
+                },
+                previous_selection: "Auto Mode".to_owned(),
+                previous_storage: None,
+                previous_session: None,
+                additional_previous: BTreeMap::from([
+                    ("solo_agent".to_owned(), baseline("Missing baseline")),
+                    ("solo_coder".to_owned(), baseline("Auto Mode")),
+                    ("ide_composer".to_owned(), baseline("Auto Mode")),
+                ]),
+                created: false,
+                borrowed: false,
+                replaced_row: None,
+            },
+            UiMutationState::default(),
+        )
+        .await;
+        assert!(!rollback.complete());
+        let state = fake.state.lock().expect("fake state");
+        assert_eq!(state.selection, "Auto Mode");
+        assert_eq!(state.coder_selection, "Auto Mode");
+        assert_eq!(state.ide_selection, "Auto Mode");
+        assert_eq!(state.secondary_selection, "Temporary");
+    }
 
-        assert_eq!(error.code, "test_commit_failed");
-        let state = fake.state.lock().expect("fake UI state");
-        assert_eq!(state.selection, legacy_name);
-        assert_eq!(state.models, HashSet::from([legacy_name.clone()]));
+    #[tokio::test]
+    async fn rollback_restores_selections_before_deleting_and_retains_verified_runtime() {
+        let temp = tempfile::tempdir().expect("temp");
+        let detection = test_detection(&temp);
+        let input = ManagedInput::from_desired(&desired("fictional-secret"));
+        let fake = Arc::new(FakeUi::new("Temporary"));
+        {
+            let mut state = fake.state.lock().expect("fake state");
+            state.models.insert("Temporary".to_owned());
+            state.secondary_selection = "Temporary".to_owned();
+            state.coder_selection = "Temporary".to_owned();
+            state.ide_selection = "Temporary".to_owned();
+        }
+        let baseline = || LabelBaseline {
+            selection: "Auto Mode".to_owned(),
+            storage: None,
+            session: None,
+            ide: None,
+        };
+        let rollback = rollback_ui_change(
+            fake.clone(),
+            TraeKind::Unified,
+            detection,
+            UiApplyPlan {
+                row: ManagedRow {
+                    display_name: "Temporary".to_owned(),
+                    input,
+                },
+                previous_selection: "Auto Mode".to_owned(),
+                previous_storage: None,
+                previous_session: None,
+                additional_previous: BTreeMap::from([
+                    ("solo_agent".to_owned(), baseline()),
+                    ("solo_coder".to_owned(), baseline()),
+                    ("ide_composer".to_owned(), baseline()),
+                ]),
+                created: true,
+                borrowed: false,
+                replaced_row: None,
+            },
+            UiMutationState {
+                model_creation_attempted: true,
+                model_created: true,
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(rollback.complete());
+        let state = fake.state.lock().expect("fake state");
         assert_eq!(
-            state.model_ids.get(&legacy_name).map(String::as_str),
-            Some(desired.model_id)
+            state.selections_at_delete,
+            vec![[
+                "Auto Mode".to_owned(),
+                "Auto Mode".to_owned(),
+                "Auto Mode".to_owned(),
+                "Auto Mode".to_owned()
+            ]]
         );
-        drop(state);
-        assert_eq!(
-            adapter
-                .checkpoint_status(&detection, &transaction)
-                .expect("checkpoint status"),
-            Some((true, false))
-        );
+        assert_eq!(state.completions, 1);
     }
 
     #[tokio::test]
@@ -3291,27 +3284,26 @@ mod tests {
                 .model_ids
                 .insert(display_name.clone(), next_input.model_id.clone());
         }
-        let adapter = TraeAdapter::with_ui(TraeKind::Code, fake.clone());
+        let adapter = TraeAdapter::with_ui(TraeKind::Unified, fake.clone());
         let transaction = ConfigTransaction::new(
             Arc::new(MemorySecretStore::default()),
             temp.path().join("backups"),
         );
         save_checkpoint(
             &transaction,
-            "traecode",
-            "traecode:12345",
+            "trae",
+            "trae:12345",
             &Checkpoint {
                 version: CHECKPOINT_VERSION,
-                account_scope: "traecode:12345".to_owned(),
+                account_scope: "trae:12345".to_owned(),
                 baseline_selection: "Auto Mode".to_owned(),
+                selection_baseline: None,
                 session_baselines: BTreeMap::new(),
                 additional_baselines: BTreeMap::new(),
+                additional_selection_baselines: BTreeMap::new(),
                 additional_session_baselines: BTreeMap::new(),
                 ide_baseline: None,
-                secondary_baseline_selection: None,
-                secondary_session_baselines: BTreeMap::new(),
-                selection_label: None,
-                legacy_work_remote_baseline: None,
+                selection_label: Some(TraeKind::Unified.selection_label().to_owned()),
                 owned: vec![ManagedRow {
                     display_name: display_name.clone(),
                     input: previous_input,
@@ -3334,7 +3326,7 @@ mod tests {
         assert_eq!(state.additions, 1);
         assert_eq!(state.deletions, 1);
         drop(state);
-        let checkpoint = load_checkpoint(&transaction, "traecode", "traecode:12345")
+        let checkpoint = load_checkpoint(&transaction, "trae", "trae:12345")
             .expect("checkpoint read")
             .expect("checkpoint");
         assert_eq!(checkpoint.owned.len(), 1);
@@ -3358,27 +3350,26 @@ mod tests {
                 .model_ids
                 .insert(display_name.clone(), next_input.model_id.clone());
         }
-        let adapter = TraeAdapter::with_ui(TraeKind::Code, fake.clone());
+        let adapter = TraeAdapter::with_ui(TraeKind::Unified, fake.clone());
         let transaction = ConfigTransaction::new(
             Arc::new(MemorySecretStore::default()),
             temp.path().join("backups"),
         );
         save_checkpoint(
             &transaction,
-            "traecode",
-            "traecode:12345",
+            "trae",
+            "trae:12345",
             &Checkpoint {
                 version: CHECKPOINT_VERSION,
-                account_scope: "traecode:12345".to_owned(),
+                account_scope: "trae:12345".to_owned(),
                 baseline_selection: "Auto Mode".to_owned(),
+                selection_baseline: None,
                 session_baselines: BTreeMap::new(),
                 additional_baselines: BTreeMap::new(),
+                additional_selection_baselines: BTreeMap::new(),
                 additional_session_baselines: BTreeMap::new(),
                 ide_baseline: None,
-                secondary_baseline_selection: None,
-                secondary_session_baselines: BTreeMap::new(),
-                selection_label: None,
-                legacy_work_remote_baseline: None,
+                selection_label: Some(TraeKind::Unified.selection_label().to_owned()),
                 owned: vec![ManagedRow {
                     display_name: display_name.clone(),
                     input: previous_input,
@@ -3391,20 +3382,19 @@ mod tests {
         .expect("historical owned row");
         save_checkpoint(
             &transaction,
-            "traecode",
-            "traecode:12345",
+            "trae",
+            "trae:12345",
             &Checkpoint {
                 version: CHECKPOINT_VERSION,
-                account_scope: "traecode:12345".to_owned(),
+                account_scope: "trae:12345".to_owned(),
                 baseline_selection: "Auto Mode".to_owned(),
+                selection_baseline: None,
                 session_baselines: BTreeMap::new(),
                 additional_baselines: BTreeMap::new(),
+                additional_selection_baselines: BTreeMap::new(),
                 additional_session_baselines: BTreeMap::new(),
                 ide_baseline: None,
-                secondary_baseline_selection: None,
-                secondary_session_baselines: BTreeMap::new(),
-                selection_label: None,
-                legacy_work_remote_baseline: None,
+                selection_label: Some(TraeKind::Unified.selection_label().to_owned()),
                 owned: Vec::new(),
                 borrowed: Vec::new(),
                 active: None,
@@ -3424,7 +3414,7 @@ mod tests {
         assert_eq!(state.additions, 1);
         assert_eq!(state.deletions, 1);
         drop(state);
-        let checkpoint = load_checkpoint(&transaction, "traecode", "traecode:12345")
+        let checkpoint = load_checkpoint(&transaction, "trae", "trae:12345")
             .expect("checkpoint read")
             .expect("checkpoint");
         assert_eq!(checkpoint.owned.len(), 1);
@@ -3436,7 +3426,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("temp");
         let detection = test_detection(&temp);
         let fake = Arc::new(FakeUi::new("Auto Mode"));
-        let adapter = TraeAdapter::with_ui(TraeKind::Code, fake.clone());
+        let adapter = TraeAdapter::with_ui(TraeKind::Unified, fake.clone());
         let transaction = ConfigTransaction::new(
             Arc::new(MemorySecretStore::default()),
             temp.path().join("backups"),
@@ -3478,7 +3468,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("temp");
         let detection = test_detection(&temp);
         let fake = Arc::new(FakeUi::new("Auto Mode"));
-        let adapter = TraeAdapter::with_ui(TraeKind::Code, fake.clone());
+        let adapter = TraeAdapter::with_ui(TraeKind::Unified, fake.clone());
         let transaction = ConfigTransaction::new(
             Arc::new(MemorySecretStore::default()),
             temp.path().join("backups"),
@@ -3527,13 +3517,15 @@ mod tests {
         let temp = tempfile::tempdir().expect("temp");
         let missing = temp.path().join("missing.vscdb");
         assert_eq!(
-            active_account(&missing, TraeKind::Work).unwrap_err().code,
+            active_account(&missing, TraeKind::Unified)
+                .unwrap_err()
+                .code,
             "trae_profile_uninitialized"
         );
         let empty = temp.path().join("empty.vscdb");
         Connection::open(&empty).expect("empty database");
         assert_eq!(
-            active_account(&empty, TraeKind::Work).unwrap_err().code,
+            active_account(&empty, TraeKind::Unified).unwrap_err().code,
             "trae_profile_unreadable"
         );
     }
@@ -3546,7 +3538,7 @@ mod tests {
         }
         let context = DiscoveryContext::native();
         let selected_kind = std::env::var("AT_SWITCH_TRAE_KIND").unwrap_or_default();
-        for adapter in [TraeAdapter::code(), TraeAdapter::work()] {
+        for adapter in [TraeAdapter::unified()] {
             if !selected_kind.is_empty() && selected_kind != adapter.id() {
                 continue;
             }
@@ -3566,10 +3558,10 @@ mod tests {
                 "{} selection",
                 adapter.display_name()
             );
-            if adapter.kind == TraeKind::Code {
+            if adapter.kind == TraeKind::Unified {
                 let ide = adapter
                     .ui
-                    .snapshot_label(adapter.kind, &detection, "ide_legacy")
+                    .snapshot_label(adapter.kind, &detection, "ide_composer")
                     .expect("IDE selector snapshot");
                 assert!(!ide.selection.is_empty());
             }
@@ -3624,7 +3616,7 @@ mod tests {
             }
         });
         let context = DiscoveryContext::native();
-        for adapter in [TraeAdapter::code(), TraeAdapter::work()] {
+        for adapter in [TraeAdapter::unified()] {
             if !selected_kind.is_empty() && selected_kind != adapter.id() {
                 continue;
             }
@@ -3635,9 +3627,11 @@ mod tests {
                 adapter.id()
             );
             let installation = detection.installation.as_ref().expect("Trae installation");
+            let cold_pause = (std::env::var("AT_SWITCH_TRAE_LIVE_COLD").as_deref() == Ok("1"))
+                .then(|| lifecycle::pause_for_config_update(&detection).expect("cold test pause"));
             let original_selection_state =
                 live_selection_state(detection.config_path.as_deref().expect("Trae profile"));
-            let original_ide_selection = if adapter.kind == TraeKind::Code {
+            let original_ide_selection = if adapter.kind == TraeKind::Unified {
                 ui::cached_ide_selection(detection.config_path.as_deref())
                     .expect("pre-test IDE selection")
             } else {
@@ -3662,12 +3656,24 @@ mod tests {
                 base_url: &base_url,
                 credential: "sk-atswitch-qa-fake",
             };
+            eprintln!("TRAE_LIVE_PHASE apply");
+            let apply_started = std::time::Instant::now();
             let apply_result = adapter
                 .apply(&detection, &desired, &transaction, &|| Ok(()))
                 .await;
             if let Err(error) = apply_result {
                 panic!("{} apply failed: {}", adapter.id(), error.code);
             }
+            eprintln!("TRAE_LIVE_PHASE applied");
+            eprintln!(
+                "TRAE_LIVE_TIME apply_ms={}",
+                apply_started.elapsed().as_millis()
+            );
+            assert_eq!(
+                lifecycle::runtime_status(installation, adapter.display_name()),
+                initial_runtime,
+                "apply must preserve the initial runtime state",
+            );
             let verification = adapter.verify_cached(&detection, &desired, &transaction);
             let selected = ui::cached_recent_selection(
                 detection.config_path.as_deref(),
@@ -3685,7 +3691,7 @@ mod tests {
             )
             .expect("stable persisted model key"));
             for label in adapter.kind.additional_selection_labels() {
-                if *label == "ide_legacy" {
+                if *label == "ide_composer" {
                     let selected = ui::cached_ide_selection(detection.config_path.as_deref())
                         .expect("IDE persisted model selection")
                         .expect("IDE selected model");
@@ -3714,6 +3720,54 @@ mod tests {
                 )
                 .expect("IDE stable persisted model key"));
             }
+            if std::env::var("AT_SWITCH_TRAE_LIVE_SEQUENCE").as_deref() == Ok("1") {
+                let catalog = ui::cached_custom_model_catalog(detection.config_path.as_deref())
+                    .expect("existing native model catalogue");
+                let existing_id = std::env::var("AT_SWITCH_TRAE_LIVE_EXISTING_MODEL")
+                    .expect("existing-model sequence fixture");
+                let names = catalog
+                    .names_by_id
+                    .get(&existing_id)
+                    .expect("existing user model");
+                assert_eq!(names.len(), 1, "sequence fixture must be unambiguous");
+                let name = names.first().expect("existing name");
+                let endpoints = catalog
+                    .endpoints_by_name
+                    .get(name)
+                    .expect("existing endpoints");
+                assert_eq!(endpoints.len(), 1);
+                let endpoint = endpoints.first().expect("existing endpoint");
+                let existing = DesiredAgentBinding {
+                    provider_name: "ATSwitch QA borrowed",
+                    model_id: &existing_id,
+                    base_url: endpoint.trim_end_matches("/chat/completions"),
+                    ..desired
+                };
+                for (phase, target) in [("warm_existing", &existing), ("warm_return", &desired)] {
+                    assert!(!adapter.detect(&context).needs_restart,
+                        "passive refresh must not restore the initial restart warning for a warm session");
+                    eprintln!("TRAE_LIVE_PHASE {phase}");
+                    let started = std::time::Instant::now();
+                    adapter
+                        .apply(&detection, target, &transaction, &|| Ok(()))
+                        .await
+                        .expect("warm sequence switch");
+                    adapter
+                        .verify_cached(&detection, target, &transaction)
+                        .expect("all selectors must immediately match this switch");
+                    assert!(
+                        !adapter.detect(&context).needs_restart,
+                        "confirmed warm switch must stay restart-free after refresh"
+                    );
+                    eprintln!(
+                        "TRAE_LIVE_TIME {phase}_ms={}",
+                        started.elapsed().as_millis()
+                    );
+                }
+                let after = ui::cached_custom_model_catalog(detection.config_path.as_deref())
+                    .expect("user model preserved during sequence");
+                assert_eq!(after.names_by_id.get(&existing_id), Some(names));
+            }
             if let Ok(seconds) = std::env::var("AT_SWITCH_TRAE_INSPECT_AFTER_APPLY_SECONDS") {
                 let seconds = seconds.parse::<u64>().expect("inspection interval");
                 eprintln!(
@@ -3722,6 +3776,8 @@ mod tests {
                 );
                 std::thread::sleep(Duration::from_secs(seconds));
             }
+            eprintln!("TRAE_LIVE_PHASE restore");
+            let restore_started = std::time::Instant::now();
             let restore_result = adapter.restore(&detection, &transaction, &|| Ok(())).await;
             verification.expect("managed model verified");
             let restored_outcome = restore_result.expect("restore original selection");
@@ -3748,12 +3804,12 @@ mod tests {
                 "{} must preserve pre-test recent and session selections",
                 adapter.id()
             );
-            if adapter.kind == TraeKind::Code {
+            if adapter.kind == TraeKind::Unified {
                 assert_eq!(
                     ui::cached_ide_selection(detection.config_path.as_deref())
                         .expect("restored IDE selection"),
                     original_ide_selection,
-                    "TraeCode must preserve pre-test IDE model and mode"
+                    "TRAE must preserve pre-test IDE model and mode"
                 );
             }
             assert_eq!(
@@ -3762,6 +3818,16 @@ mod tests {
                 "{} runtime must be restored",
                 adapter.id()
             );
+            eprintln!("TRAE_LIVE_PHASE restored");
+            eprintln!(
+                "TRAE_LIVE_TIME restore_ms={}",
+                restore_started.elapsed().as_millis()
+            );
+            if let Some(pause) = cold_pause {
+                pause
+                    .resume_and_wait()
+                    .expect("restore runtime before cold test");
+            }
         }
         running.store(false, std::sync::atomic::Ordering::Relaxed);
         server.join().expect("local mock shutdown");
@@ -3774,7 +3840,7 @@ mod tests {
             return;
         }
         let context = DiscoveryContext::native();
-        for adapter in [TraeAdapter::code(), TraeAdapter::work()] {
+        for adapter in [TraeAdapter::unified()] {
             let detection = adapter.detect(&context);
             let snapshot = adapter
                 .ui
@@ -3798,7 +3864,16 @@ mod tests {
                             })
                 })
                 .cloned()
-                .collect::<Vec<_>>();
+                .chain(
+                    ui::cached_custom_model_catalog(detection.config_path.as_deref())
+                        .expect("cached QA model inventory")
+                        .names_by_id
+                        .into_iter()
+                        .filter(|(id, _)| id.starts_with("atswitch-qa-"))
+                        .flat_map(|(_, names)| names)
+                        .filter(|name| name.starts_with("ATSwitch QA")),
+                )
+                .collect::<std::collections::BTreeSet<_>>();
             for name in &names {
                 adapter
                     .ui
@@ -3818,13 +3893,17 @@ mod tests {
             "AI.agent.model.recent_user_selection_by_agent_label",
             "AI.agent.model.session_selected_model",
         ] {
-            let raw: String = connection
+            let raw: Option<String> = connection
                 .query_row(
                     "SELECT value FROM ItemTable WHERE key LIKE ?1 LIMIT 1",
                     [format!("%{suffix}")],
                     |row| row.get(0),
                 )
+                .optional()
                 .expect("stored Trae selection");
+            let Some(raw) = raw else {
+                continue;
+            };
             let value: serde_json::Value = serde_json::from_str(&raw).expect("selection JSON");
             if suffix.contains("recent_user_selection") {
                 for (label, selection) in value.as_object().expect("recent selections") {
