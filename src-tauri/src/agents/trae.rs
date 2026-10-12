@@ -108,7 +108,9 @@ impl AgentAdapter for TraeAdapter {
             &["cn.trae.app"],
             &["Programs/Trae CN/Trae CN.exe", "Trae CN/Trae CN.exe"],
         );
-        let mut installation = locate_desktop_app(context, mac_names, bundle_ids, windows_paths);
+        let installation = locate_desktop_app(context, mac_names, bundle_ids, windows_paths);
+        #[cfg(target_os = "windows")]
+        let mut installation = installation;
         #[cfg(target_os = "windows")]
         if let Some(found) = installation.as_mut() {
             // Electron's Windows FileVersion identifies the shared runtime

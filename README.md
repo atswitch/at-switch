@@ -99,8 +99,9 @@ ima 当前仅提供**公网 OpenAI Chat 直连**，不支持 AT-Switch 本地代
 模型请求直达 Provider，不经过 AT-Switch 本地代理。
 
 「恢复原始模型」精确恢复接管前选择，只删除 AT-Switch 创建的模型，保留用户模型。
-Windows 3.4.2 的运行态和停止态本地 Mock 往返已通过，其他智能体不受影响；
-新版 macOS 由用户单独验收。真实 Provider 的推理、Streaming、Tool Calling 不由
+Windows 3.4.2 的运行态和停止态本地 Mock 往返已通过；macOS 3.4.2 的
+Agent 与 IDE 模式热切换及恢复已在签名本地构建上实测，其他智能体配置未变化。
+真实 Provider 的推理、Streaming、Tool Calling 不由
 本地 Mock 验收替代。详见 [TRAE 接入与验收](TRAE_INTEGRATION.md)。
 
 ---

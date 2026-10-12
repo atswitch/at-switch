@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Validation
 - Windows TRAE 3.4.2 running-state local-mock roundtrip and consecutive model changes pass with one initial exit/start, no warm-switch/restore restarts, and unchanged other-agent main processes. Final cold-state and build results are recorded in the release verification document.
-- New macOS logic is aligned, but live validation is delegated to the user. Previous macOS results for retired products do not validate the new integration.
+- macOS TRAE CN 3.4.2 signed-build acceptance covers one initial restart, Agent and IDE visible selection, IDE/Agent warm model changes without another restart, and original-selection restoration. Windows validation remains the separate recorded run.
 - Local-mock integration acceptance does not imply real-provider inference, Streaming or Tool Calling acceptance.
 
 ### Fixed
@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Protect all current-session selection labels from stale whole-map writeback, including existing Agent conversations; restore absent `solo_agent_lite` overrides by explicit label without losing unrelated selections.
 - Flush IDE defaults even when only the Agent window is open. Restore selectors before deleting temporary models, and retain the same TRAE process after a fully verified rollback.
 - Retain an acknowledged native control session after read-only planning failures, so transient catalogue failures do not force another initial restart. Record credential-free operation timings and expose a predefined failure-stage hint.
+- On macOS, notify the mounted IDE workbench model service after a native selection change, so its visible picker updates without opening settings or restarting; reject a missing versioned service or a stale visible label.
+- On macOS, wait for Trae's persisted model-list cache to drop a deleted managed model before reporting restoration complete.
+- On macOS, load Trae's native model catalogue before restoring saved selector keys, and reattach a replaced renderer inside the same running process; leave the verified Windows bridge order unchanged.
+- On macOS, notify and verify the mounted Agent model picker after a native model switch, so a stale visible selection cannot be reported as success; Windows and other Agent adapters are unchanged.
 
 ## [v3.16.1] - 2026-10-08
 
