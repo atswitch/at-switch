@@ -36,4 +36,24 @@ describe("AgentAccountConnectionConfirmation", () => {
     expect(onCancel).toHaveBeenCalledOnce();
     expect(onConfirm).not.toHaveBeenCalled();
   });
+
+  it("explains native Trae switching and restart without UI or ima account wording", async () => {
+    const user = userEvent.setup();
+    const onConfirm = vi.fn();
+    render(<AgentAccountConnectionConfirmation
+      agent={{ ...ima, id: "trae", displayName: "TRAE", needsRestart: true }}
+      operation="apply"
+      onCancel={vi.fn()}
+      onConfirm={onConfirm}
+    />);
+    expect(screen.getByRole("dialog", { name: "允许 TRAE 直连配置" })).toBeInTheDocument();
+    expect(screen.getByText(/TRAE 原生模型服务/)).toBeInTheDocument();
+    expect(screen.getByText(/不需要辅助功能权限/)).toBeInTheDocument();
+    expect(screen.getByText(/重新打开 TRAE/)).toBeInTheDocument();
+    expect(screen.queryByText(/重新打开 ima/)).not.toBeInTheDocument();
+    expect(screen.getByText(/不经过 AT-Switch/)).toBeInTheDocument();
+    expect(screen.queryByText(/读取 ima 的登录凭据/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "确认并切换" }));
+    expect(onConfirm).toHaveBeenCalledOnce();
+  });
 });

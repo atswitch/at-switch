@@ -2,7 +2,7 @@
 
 # AT-Switch
 
-### أداة شاملة لإدارة وتبديل النماذج لـ WorkBuddy و CodeBuddy و QClaw و AutoClaw و Codex و DuMate و ima
+### أداة شاملة لإدارة وتبديل النماذج لـ WorkBuddy و CodeBuddy و QClaw و AutoClaw و Codex و DuMate و ima و TRAE
 
 [![Version](https://img.shields.io/github/v/release/atswitch/at-switch?color=blue&label=version)](https://github.com/atswitch/at-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/atswitch/at-switch/releases)
@@ -81,6 +81,7 @@
 | **Codex** | macOS / Windows | ✅ مدعوم | OpenAI Responses | تحديث `$CODEX_HOME/config.toml` أو `~/.codex/config.toml` بدقة |
 | **Baidu DuMate** | macOS / Windows | ✅ مدعوم | OpenAI Chat Completions | تحديث تجاوز XDG الدائم للحساب النشط ليشمل جميع جلسات العمل وأسماء النماذج المدمجة |
 | **Tencent ima** | macOS / Windows | منفّذ؛ نطاق التحقق موضح أدناه | OpenAI Chat Completions عبر الإنترنت العام | ربط الحساب المسجل محلياً ومزامنة إعدادات ima واختيار النموذج في الواجهتين |
+| **TRAE** | macOS / Windows | منفّذ؛ نطاق التحقق موضح أدناه | OpenAI Chat / Responses / Anthropic Messages | خدمة نماذج Trae الأصلية لإصدارات محددة، دون التعامل مع نموذج الإعداد؛ اتصال مباشر بالمزوّد |
 
 ### استخدام ima
 
@@ -89,6 +90,12 @@
 يدعم ima حالياً **الاتصال المباشر بنقاط OpenAI Chat المتاحة عبر الإنترنت العام** فقط. لا يدعم الوكيل المحلي لـ AT-Switch أو نقاط النهاية المتاحة على هذا الجهاز وحده. يُغلق ima قيد التشغيل بأمان ثم يُفتح مجدداً عند التبديل، لذا انتظر انتهاء أي توليد جارٍ. تعيد **استعادة النماذج الأصلية** اختيار كل واجهة إلى حالته قبل الإدارة الأولى، مع الاحتفاظ بالنماذج المخصصة الموجودة.
 
 راجع [توثيق تكامل ima والتحقق منه](IMA_INTEGRATION.md) لمعرفة التنفيذ الحالي ونطاق التحقق. لم يكتمل التحقق الكامل من التبديل والاستعادة على macOS. اقتصر التحقق في Windows على الفحص الثابت وفحوص الترجمة البرمجية، دون اختبار على جهاز فعلي. لا يعني هذا الوصف أن الميزة نُشرت في إصدار رسمي.
+
+### استخدام TRAE
+
+اختر مدخل **TRAE** الموحّد وبدّل النموذج. يدعم التكامل TRAE CN 3.4.2 المدمج فقط، ولا يستورد إعدادات المنتجات القديمة. يستخدم Windows وmacOS المسار الأصلي نفسه دون تشغيل واجهة الإعداد. ضمن جلسة التحكم الصالحة نفسها، يُعاد تشغيل التطبيق الجاري مرة واحدة على الأكثر في البداية؛ ولا تعيد عمليات التبديل والاستعادة اللاحقة أو تحديث الحالة تشغيله.
+
+تعيد الاستعادة الاختيارات الأصلية بدقة وتحذف فقط النماذج التي أنشأها AT-Switch. اجتاز Windows اختبار Mock محلياً في حالتي التشغيل والتوقف دون التأثير على الوكلاء الآخرين. سيختبر المستخدم macOS الجديد بشكل منفصل. لا يشمل اختبار Mock الاستدلال الحقيقي أو Streaming أو Tool Calling. راجع [تكامل TRAE والتحقق منه](TRAE_INTEGRATION.md).
 
 ---
 

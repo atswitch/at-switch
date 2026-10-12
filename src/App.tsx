@@ -13,6 +13,7 @@ import {
   supportsDirectBinding,
   supportsProxyBinding,
   usesCloudModelSettings,
+  usesServiceModelSettings,
 } from "./lib/agentCapabilities";
 import { api, getActiveMockSnapshot } from "./lib/api";
 import { AgentsPage } from "./pages/AgentsPage";
@@ -159,6 +160,7 @@ function AppContent() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const lastAutomaticScanAt = useRef(0);
   const agentOperationInFlight = useRef(false);
+  const traeSnapshotRevision = useRef(0);
   const languageRef = useRef(language);
 
   useEffect(() => {
@@ -194,10 +196,22 @@ function AppContent() {
 
   const loadSnapshot = useCallback(
     async (refresh = false) => {
+      const traeRevision = traeSnapshotRevision.current;
       if (refresh) setRefreshing(true);
       try {
         const next = refresh ? await api.refresh() : await api.bootstrap();
-        setSnapshot(next);
+        setSnapshot((current) =>
+          traeRevision === traeSnapshotRevision.current || !current
+            ? next
+            : {
+                ...next,
+                agents: next.agents.map((agent) =>
+                  agent.id === "trae"
+                    ? current.agents.find((saved) => saved.id === "trae") ?? agent
+                    : agent,
+                ),
+              },
+        );
       } catch (error) {
         const currentLanguage = languageRef.current;
         notify(
@@ -315,16 +329,26 @@ function AppContent() {
   const executeRestoreAgentNative = async (agent: AgentSummary, confirmAccountConnection?: boolean) => {
     if (agentOperationInFlight.current) return;
     agentOperationInFlight.current = true;
+    if (agent.id === "trae") traeSnapshotRevision.current += 1;
     const key = `native:${agent.id}`;
     setSwitchingKey(key);
     try {
       const restored = await api.restoreAgentNative(agent.id, confirmAccountConnection);
-      await loadSnapshot(true);
+      if (restored.id === "trae") {
+        traeSnapshotRevision.current += 1;
+        setSnapshot((current) => current && {
+          ...current,
+          agents: current.agents.map((saved) => saved.id === "trae" ? restored : saved),
+        });
+        void loadSnapshot(true);
+      } else {
+        await loadSnapshot(true);
+      }
       notify(
         "good",
         text(
-          usesCloudModelSettings(restored.id) ? `${restored.displayName} 已恢复原始模型` : `${restored.displayName} 已恢复默认配置`,
-          usesCloudModelSettings(restored.id) ? `${restored.displayName} original models restored` : `${restored.displayName} default configuration restored`,
+          usesServiceModelSettings(restored.id) ? `${restored.displayName} 已恢复原始模型` : `${restored.displayName} 已恢复默认配置`,
+          usesServiceModelSettings(restored.id) ? `${restored.displayName} original models restored` : `${restored.displayName} default configuration restored`,
         ),
         restored.needsRestart
           ? text(
@@ -333,21 +357,21 @@ function AppContent() {
             )
           : ((language === "zh-CN" ? restored.message : undefined) ??
             text(
-              usesCloudModelSettings(restored.id)
+              usesServiceModelSettings(restored.id)
                 ? "两个入口已恢复接管前的模型选择，你原有的自定义模型保持不变。"
                 : "AT-Switch 管理的路由已移除，智能体自带模型可继续使用。",
-              usesCloudModelSettings(restored.id)
+              usesServiceModelSettings(restored.id)
                 ? "Both entries use their pre-takeover model selections. Your original custom models are preserved."
                 : "The AT-Switch-managed route was removed. Built-in agent models remain available.",
             )),
       );
     } catch (error) {
-      if (usesCloudModelSettings(agent.id)) await loadSnapshot(true);
+      if (usesServiceModelSettings(agent.id)) await loadSnapshot(true);
       notify(
         "bad",
         text(
-          usesCloudModelSettings(agent.id) ? "恢复原始模型失败" : "恢复默认配置失败",
-          usesCloudModelSettings(agent.id) ? "Failed to restore original models" : "Failed to restore default agent configuration",
+          usesServiceModelSettings(agent.id) ? "恢复原始模型失败" : "恢复默认配置失败",
+          usesServiceModelSettings(agent.id) ? "Failed to restore original models" : "Failed to restore default agent configuration",
         ),
         describeCommandError(error, language),
       );
@@ -364,12 +388,22 @@ function AppContent() {
   ) => {
     if (agentOperationInFlight.current) return;
     agentOperationInFlight.current = true;
+    if (draft.agentId === "trae") traeSnapshotRevision.current += 1;
     setSavingBinding(true);
     setSwitchingKey(modelKey);
     try {
       const agent = await api.applyAgentBinding(draft, confirmAccountConnection);
       setBindingTarget(undefined);
-      await loadSnapshot(true);
+      if (agent.id === "trae") {
+        traeSnapshotRevision.current += 1;
+        setSnapshot((current) => current && {
+          ...current,
+          agents: current.agents.map((saved) => saved.id === "trae" ? agent : saved),
+        });
+        void loadSnapshot(true);
+      } else {
+        await loadSnapshot(true);
+      }
       notify(
         "good",
         agent.activationRequired
@@ -391,7 +425,7 @@ function AppContent() {
             `${agent.providerName ?? "Provider"} · ${agent.modelId ?? text("模型", "Model")}`),
       );
     } catch (error) {
-      if (usesCloudModelSettings(draft.agentId)) await loadSnapshot(true);
+      if (usesServiceModelSettings(draft.agentId)) await loadSnapshot(true);
       notify(
         "bad",
         text("智能体配置失败", "Agent configuration failed"),
@@ -920,10 +954,10 @@ function AppContent() {
                 ))}
               </ul>
               <p className="affected-agents-alert__note">
-                {deletingProviderAlertState.inUseAgents.some((agent) => usesCloudModelSettings(agent.id))
+                {deletingProviderAlertState.inUseAgents.some((agent) => usesServiceModelSettings(agent.id))
                   ? text(
-                      "ima 会先恢复接管前的模型配置；恢复失败时保留供应商和模型。如果 ima 正在运行，会安全退出并重新打开。",
-                      "ima's pre-takeover models are restored first. If restoration fails, the provider and models are kept. If ima is running, it will safely quit and reopen.",
+                      "使用账号或原生模型服务的智能体会先恢复接管前的模型配置；恢复失败时保留供应商和模型。",
+                      "Agents using account-backed or native model settings restore their pre-takeover models first. If restoration fails, the provider and models are kept.",
                     )
                   : deletingProviderAlertState.mode === "unbind_only"
                   ? text(
@@ -1010,10 +1044,10 @@ function AppContent() {
                 ))}
               </ul>
               <p className="affected-agents-alert__note">
-                {(deletingModelTarget?.provider.models.length ?? 0) <= 1 && deletingModelAlertState.inUseAgents.some((agent) => usesCloudModelSettings(agent.id))
+                {(deletingModelTarget?.provider.models.length ?? 0) <= 1 && deletingModelAlertState.inUseAgents.some((agent) => usesServiceModelSettings(agent.id))
                   ? text(
-                      "ima 会先恢复接管前的模型配置；恢复失败时保留供应商和模型。如果 ima 正在运行，会安全退出并重新打开。",
-                      "ima's pre-takeover models are restored first. If restoration fails, the provider and models are kept. If ima is running, it will safely quit and reopen.",
+                      "使用账号或原生模型服务的智能体会先恢复接管前的模型配置；恢复失败时保留供应商和模型。",
+                      "Agents using account-backed or native model settings restore their pre-takeover models first. If restoration fails, the provider and models are kept.",
                     )
                   : deletingModelAlertState.mode === "unbind_only"
                   ? text(

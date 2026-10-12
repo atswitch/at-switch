@@ -2,7 +2,7 @@
 
 # AT-Switch
 
-### WorkBuddy、CodeBuddy、QClaw、AutoClaw、Codex、DuMate、ima のオールインワン管理・モデル切り替えツール
+### WorkBuddy、CodeBuddy、QClaw、AutoClaw、Codex、DuMate、ima、TRAE のオールインワン管理・モデル切り替えツール
 
 [![Version](https://img.shields.io/github/v/release/atswitch/at-switch?color=blue&label=version)](https://github.com/atswitch/at-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/atswitch/at-switch/releases)
@@ -74,6 +74,12 @@ Agent ごとに散らばった設定ファイルを探す必要はありませ�
 現在は**公開 OpenAI Chat エンドポイントへのダイレクト接続**のみ対応し、AT-Switch のローカルプロキシや端末内限定のエンドポイントは利用できません。起動中の ima は安全に終了して再起動するため、生成が終わってから切り替えてください。「元のモデルに復元」は AT-Switch による最初の設定変更前の各入口の選択を復元し、既存のカスタムモデルを保持します。
 
 現在の実装と検証範囲は [ima 接続・検証記録](IMA_INTEGRATION.md)を参照してください。macOS での切り替え・復元の一連の検証は未完了です。Windows は静的調査とコンパイル確認のみで、実機検証は行っていません。ここでの説明は公開済みリリースを示すものではありません。
+
+### TRAE の利用
+
+上部の統一された **TRAE** を選び、モデルを切り替えます。統合後の TRAE CN 3.4.2 のみ対応し、旧製品の設定は移行しません。Windows と macOS は設定画面を操作せず同じネイティブサービスを使います。同一の有効な制御セッションでは、起動中の対象は初回のみ最大一度再起動し、その後の切り替え・復元や状態更新では再起動しません。
+
+復元では元の選択を正確に戻し、AT-Switch が作成したモデルのみ削除します。Windows の起動・停止状態でのローカル Mock 往復検証は完了し、他のエージェントには影響しません。新 macOS の実機検証はユーザーが別途行います。実 Provider の推論・Streaming・Tool Calling はこの検証の対象外です。[TRAE 接続・検証記録](TRAE_INTEGRATION.md)を参照してください。
 
 ---
 

@@ -13,6 +13,7 @@ export const SWITCHABLE_AGENT_IDS = [
   "codex",
   "dumate",
   "ima",
+  "trae",
 ] as const;
 
 export function isSwitchableAgent(agent: AgentSummary): boolean {
@@ -32,6 +33,15 @@ export function supportsDirectBinding(
       hasPublicEndpoint(provider.baseUrl)
     );
   }
+  if (usesNativeTraeModelService(agentId)) {
+    return providerSupportedProtocols(provider).some((protocol) =>
+      [
+        "openai_chat_completions",
+        "openai_responses",
+        "anthropic_messages",
+      ].includes(protocol),
+    );
+  }
   if (agentId === "dumate") {
     return providerSupportedProtocols(provider).includes("openai_chat_completions");
   }
@@ -42,8 +52,16 @@ export function usesCloudModelSettings(agentId: string): boolean {
   return agentId === "ima";
 }
 
+export function usesNativeTraeModelService(agentId: string): boolean {
+  return agentId === "trae";
+}
+
+export function usesServiceModelSettings(agentId: string): boolean {
+  return usesCloudModelSettings(agentId) || usesNativeTraeModelService(agentId);
+}
+
 export function supportsProxyBinding(agentId: string): boolean {
-  return !usesCloudModelSettings(agentId);
+  return !usesServiceModelSettings(agentId);
 }
 
 // This is a UI capability check; the native service performs authoritative URL
@@ -107,6 +125,11 @@ export function directBindingUnavailableReason(
       ? "ima 需要公网可访问的 OpenAI Chat 接口，无法使用本机或局域网地址。"
       : "ima requires a public OpenAI Chat endpoint. Local and private-network addresses are unavailable.";
   }
+  if (usesNativeTraeModelService(agentId)) {
+    return language === "zh-CN"
+      ? "Trae 直连支持 OpenAI Chat、OpenAI Responses 和 Anthropic Messages 协议。"
+      : "Trae Direct mode supports OpenAI Chat, OpenAI Responses, and Anthropic Messages.";
+  }
   return language === "zh-CN"
     ? `该模型供应商未提供 ${directBindingRequirement(agentId, language)}；如需协议转换，请前往高级设置使用本地代理`
     : `This provider does not offer ${directBindingRequirement(agentId, language)}. Use the local proxy in Advanced settings for protocol conversion.`;
@@ -127,6 +150,11 @@ export function directBindingRequirement(
 ): string {
   if (usesCloudModelSettings(agentId)) {
     return language === "zh-CN" ? "公网 OpenAI Chat 接口" : "a public OpenAI Chat endpoint";
+  }
+  if (usesNativeTraeModelService(agentId)) {
+    return language === "zh-CN"
+      ? "OpenAI Chat、OpenAI Responses 或 Anthropic Messages"
+      : "OpenAI Chat, OpenAI Responses, or Anthropic Messages";
   }
   if (
     agentId === "workbuddy" ||

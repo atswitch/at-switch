@@ -98,6 +98,52 @@ impl ConfigTransaction {
         Ok(Some(payload.original_content))
     }
 
+    /// Returns authenticated historical snapshots for one service resource.
+    ///
+    /// Service adapters use this only to recover ownership metadata that was
+    /// present in an earlier AT-Switch checkpoint. Unreadable, foreign, or
+    /// tampered records are ignored and never become recovery evidence.
+    pub fn read_service_checkpoint_history(
+        &self,
+        agent_id: &str,
+        resource: &str,
+    ) -> AppResult<Vec<Vec<u8>>> {
+        let current = self.service_checkpoint_path(agent_id, resource)?;
+        let Some(directory) = current.parent() else {
+            return Ok(Vec::new());
+        };
+        let Ok(entries) = fs::read_dir(directory) else {
+            return Ok(Vec::new());
+        };
+        let mut candidates = entries
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path();
+                (path.extension().and_then(|value| value.to_str()) == Some("atsb")).then(|| {
+                    let modified = entry
+                        .metadata()
+                        .and_then(|metadata| metadata.modified())
+                        .ok();
+                    (modified, path)
+                })
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|(modified, path)| (*modified, path.clone()));
+        candidates.reverse();
+
+        let expected_path = format!("service:{resource}");
+        Ok(candidates
+            .into_iter()
+            .take(512)
+            .filter_map(|(_, path)| self.read_encrypted_backup(&path).ok())
+            .filter(|payload| {
+                payload.path == expected_path
+                    && payload.original_sha256 == sha256(&payload.original_content)
+            })
+            .map(|payload| payload.original_content)
+            .collect())
+    }
+
     pub fn save_service_checkpoint(
         &self,
         agent_id: &str,
@@ -654,6 +700,29 @@ mod tests {
                 assert!(!bytes.windows(sensitive.len()).any(|part| part == sensitive));
             }
         }
+    }
+
+    #[test]
+    fn service_history_returns_only_authenticated_snapshots_for_the_account() {
+        let temp = tempfile::tempdir().expect("temp");
+        let store: Arc<dyn SecretStore> = Arc::new(MemorySecretStore::default());
+        let transaction = ConfigTransaction::new(store, temp.path().join("backups"));
+        transaction
+            .save_service_checkpoint("traecode", "account-one", b"first-owned-row")
+            .unwrap();
+        transaction
+            .save_service_checkpoint("traecode", "account-one", b"current-row")
+            .unwrap();
+        transaction
+            .save_service_checkpoint("traecode", "account-two", b"foreign-row")
+            .unwrap();
+
+        let history = transaction
+            .read_service_checkpoint_history("traecode", "account-one")
+            .unwrap();
+        assert!(history.iter().any(|value| value == b"first-owned-row"));
+        assert!(history.iter().any(|value| value == b"current-row"));
+        assert!(!history.iter().any(|value| value == b"foreign-row"));
     }
 
     #[test]

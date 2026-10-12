@@ -657,7 +657,7 @@ fn mac_bundle_identifier(app_path: &Path) -> Option<String> {
 }
 
 #[cfg(target_os = "windows")]
-pub(super) fn windows_file_version(path: &Path) -> Option<String> {
+fn windows_fixed_version_info(path: &Path) -> Option<(u32, u32, u32, u32)> {
     use std::{ffi::c_void, iter, os::windows::ffi::OsStrExt, ptr};
     use windows_sys::Win32::Storage::FileSystem::{
         GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW, VS_FIXEDFILEINFO,
@@ -699,13 +699,29 @@ pub(super) fn windows_file_version(path: &Path) -> Option<String> {
     if info.dwSignature != 0xFEEF04BD {
         return None;
     }
-    Some(format!(
-        "{}.{}.{}.{}",
-        info.dwFileVersionMS >> 16,
-        info.dwFileVersionMS & 0xffff,
-        info.dwFileVersionLS >> 16,
-        info.dwFileVersionLS & 0xffff
+    Some((
+        info.dwFileVersionMS,
+        info.dwFileVersionLS,
+        info.dwProductVersionMS,
+        info.dwProductVersionLS,
     ))
+}
+
+#[cfg(target_os = "windows")]
+fn format_windows_fixed_version(ms: u32, ls: u32) -> String {
+    format!("{}.{}.{}.{}", ms >> 16, ms & 0xffff, ls >> 16, ls & 0xffff)
+}
+
+#[cfg(target_os = "windows")]
+pub(super) fn windows_file_version(path: &Path) -> Option<String> {
+    let (file_ms, file_ls, _, _) = windows_fixed_version_info(path)?;
+    Some(format_windows_fixed_version(file_ms, file_ls))
+}
+
+#[cfg(target_os = "windows")]
+pub(super) fn windows_product_version(path: &Path) -> Option<String> {
+    let (_, _, product_ms, product_ls) = windows_fixed_version_info(path)?;
+    Some(format_windows_fixed_version(product_ms, product_ls))
 }
 
 pub fn normalized_path_string(path: &Path) -> String {
@@ -715,6 +731,19 @@ pub fn normalized_path_string(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_fixed_version_fields_are_formatted_as_four_components() {
+        assert_eq!(
+            format_windows_fixed_version((3 << 16) | 4, 1 << 16),
+            "3.4.1.0"
+        );
+        assert_eq!(
+            format_windows_fixed_version((2 << 16) | 3, 24_916 << 16),
+            "2.3.24916.0"
+        );
+    }
 
     #[test]
     fn command_lookup_uses_injected_path_without_spawning_processes() {

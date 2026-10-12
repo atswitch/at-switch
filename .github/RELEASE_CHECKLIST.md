@@ -12,8 +12,10 @@ the release job instead of silently creating an ad-hoc-signed build.
   file; `APPLE_SIGNING_IDENTITY` is that certificate's full identity name;
   `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password), and `APPLE_TEAM_ID` are
   used for notarization.
-- Windows: `WINDOWS_CERTIFICATE` is a base64-encoded, currently valid code-signing
-  `.pfx`; `WINDOWS_CERTIFICATE_PASSWORD` unlocks it.
+
+Windows Authenticode signing is optional. A Windows signing certificate is not a
+release prerequisite; release notes must disclose when the installer is unsigned
+because Windows may show a download or SmartScreen warning.
 
 Do not put certificates or passwords in the repository. Store them as GitHub
 Actions Secrets.
@@ -36,8 +38,9 @@ Actions Secrets.
    Universal macOS artifacts are built under
    `src-tauri/target/universal-apple-darwin/release/bundle/`; Windows artifacts use
    `src-tauri/target/release/bundle/`.
-6. Download every installer together with its `.sha256` file and verify it. Also
-   verify platform signatures:
+6. Download every installer together with its `.sha256` file and verify it. Verify
+   the macOS Developer ID signature and notarization. Windows signature is optional;
+   record its status and disclose unsigned-package warnings in the release notes:
 
    ```bash
    shasum -a 256 -c "AT-Switch.dmg.sha256"
@@ -51,9 +54,10 @@ Actions Secrets.
    $expected = (Get-Content "$installer.sha256").Split()[0].ToLowerInvariant()
    $actual = (Get-FileHash -Algorithm SHA256 $installer).Hash.ToLowerInvariant()
    if ($actual -ne $expected) { throw "Checksum mismatch" }
-   if ((Get-AuthenticodeSignature $installer).Status -ne "Valid") {
-     throw "Invalid Authenticode signature"
-   }
+   $signature = Get-AuthenticodeSignature $installer
+   Write-Host "Windows Authenticode status: $($signature.Status)"
+   # Valid or NotSigned is acceptable; an invalid signature is not.
+   if ($signature.Status -notin @("Valid", "NotSigned")) { throw "Invalid Authenticode signature" }
    ```
 
 7. Complete clean-machine smoke tests and the checklist below. Only then use
@@ -70,8 +74,9 @@ Actions Secrets.
       configuration restoration are verified.
 - [ ] macOS artifacts have a valid Developer ID signature and successful
       notarization; ad-hoc-signed drafts must not be published.
-- [ ] Windows installers have a valid code signature; unsigned drafts must not be
-      published.
+- [ ] Windows signature status is recorded. Authenticode signing is optional;
+      unsigned installers are allowed when the release notes disclose the warning
+      and the package checksum and clean-machine checks pass.
 - [ ] Every installer has an accompanying `.sha256` file and its checksum verifies.
 - [ ] Release notes describe features, fixes, compatibility, known limitations,
       and upgrade impact.
@@ -82,4 +87,5 @@ Actions Secrets.
 - [ ] A clean machine can download, install, launch, and remove each public package.
 
 Every workflow artifact remains in a Draft Release until the checks above are
-complete. Do not manually publish an unsigned or ad-hoc-signed draft.
+complete. Do not publish a macOS artifact without valid Developer ID signing and
+notarization. Windows installers may be unsigned as described above.
