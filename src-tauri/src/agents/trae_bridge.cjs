@@ -285,6 +285,63 @@ async function start() {
   }
 }
 
+// macOS can replace the renderer target when Trae changes between Agent and
+// IDE. The browser process and its pipe are still healthy, but the old flat
+// CDP session is not. Reattach to the live target before considering a reload.
+async function recoverMacRenderer() {
+  const targets = (await request('Target.getTargets', {}, undefined)).targetInfos ?? [];
+  const target = targets.find(item => item.type === 'page' && item.url?.includes('solo-lite.html')) ??
+    targets.find(item => item.type === 'page' && item.url?.endsWith('/workbench/workbench.html'));
+  if (!target) throw new Error('trae_renderer_target_missing');
+  const attached = await request('Target.attachToTarget', {
+    targetId: target.targetId, flatten: true,
+  }, undefined);
+  if (!attached.sessionId) throw new Error('trae_debugger_attach_failed');
+  sessionId = attached.sessionId;
+  targetSessions.set(target.targetId, sessionId);
+  await request('Runtime.enable');
+  const health = await evaluate('({request:typeof window.__atSwitchTraeRequest?.request,' +
+    'runtime:typeof window.__atSwitchTraeRequire})');
+  if (health?.request === 'function' && health?.runtime === 'function') return;
+
+  // The document itself changed. Reinstall the version-checked captures in
+  // that document, without restarting the Trae process.
+  sessionId = undefined;
+  ideSession = undefined;
+  targetSessions.clear();
+  scripts.clear();
+  breakpoints.clear();
+  captured.clear();
+  await start();
+}
+
+async function beginOperation(command) {
+  const bind = async () => {
+    await evaluate('delete window.__atSwitchNativeModels;delete window.__atSwitchModelCatalog;true');
+    const result = await handle({ ...command, operation: 'bind_storage' });
+    if (result.ready) await handle({ operation: 'restore_selection' });
+    return result;
+  };
+  for (const label of Object.keys(desiredRecent)) delete desiredRecent[label];
+  for (const id of Object.keys(desiredSessions)) delete desiredSessions[id];
+  try {
+    return await bind();
+  } catch (error) {
+    if (process.platform !== 'darwin') throw error;
+    // A failed native request or account check is not a renderer failure and
+    // must never be replayed. Only repair a missing CDP session/document.
+    let healthy = false;
+    try {
+      const state = await evaluate('({request:typeof window.__atSwitchTraeRequest?.request,' +
+        'runtime:typeof window.__atSwitchTraeRequire})', false, 3000);
+      healthy = state?.request === 'function' && state?.runtime === 'function';
+    } catch { /* The old target/session has gone away. */ }
+    if (healthy) throw error;
+    await recoverMacRenderer();
+    return bind();
+  }
+}
+
 function nativeStoragePrelude() {
   return `const storage=window.__atSwitchTraeStorage;
     const account=window.__atSwitchTraeAccount;
@@ -421,7 +478,30 @@ async function syncCore(label,baseline) {
     const live=domain.getRecentUserSelectionMap()[label];
     if(live?.mode!==recent[label]?.mode||live?.modelId!==recent[label]?.modelId)
       throw new Error('trae_live_selection_mismatch');
+    if(${process.platform==='darwin'}&&Object.hasOwn(desired,label)){
+      const picker=document.querySelector('.icd-model-select-trigger-value-name');
+      if(picker?.getClientRects().length&&
+        typeof app.notifyHostModelSelectionChange!=='function')
+        throw new Error('trae_agent_model_notification_unavailable');
+      app.notifyHostModelSelectionChange?.({sessionId:baseline?.activeSessionId??null,
+        agentType:type,modelId:live?.modelId??'',mode:live?.mode??1,
+        modelChanged:true,modeChanged:true});
+    }
     return true;
+  })()`,true);
+}
+async function verifyMacAgentPicker(expected) {
+  if(process.platform!=='darwin')return;
+  await evaluate(`(async()=>{
+    const picker=document.querySelector('.icd-model-select-trigger-value-name');
+    if(!picker?.getClientRects().length)return true;
+    const expected=${JSON.stringify(expected)};
+    if(!expected)throw new Error('trae_agent_visible_model_missing');
+    for(let attempt=0;attempt<40;attempt++){
+      if(picker.textContent?.includes(expected))return true;
+      await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    throw new Error('trae_agent_visible_label_mismatch');
   })()`,true);
 }
 async function syncIde(baseline, selecting=false, catalogOnly=false) {
@@ -440,7 +520,10 @@ async function syncIde(baseline, selecting=false, catalogOnly=false) {
     if(!relation)throw new Error('trae_ide_live_service_unavailable');
     const catalog=${JSON.stringify(catalog??{})};
     relation._modelStore.getState().setOriginModelListMap(catalog);
-    if(${catalogOnly})return true;
+    if(${catalogOnly}){
+      if(${process.platform==='darwin'})await storage.flush();
+      return true;
+    }
     const modelStorageKey=account+'_ai-chat:sessionRelation:globalModelMap';
     const modeStorageKey=account+'_ai-chat:sessionRelation:globalModeMap';
     const models=readJson(modelStorageKey,storage.get(modelStorageKey,1,'')?1:-1);
@@ -489,6 +572,43 @@ async function syncIde(baseline, selecting=false, catalogOnly=false) {
     for(const label of ${JSON.stringify(selectionLabels)})domain.setRecentUserSelection(label,recent[label]);
     if(Object.keys(recent).length)await app.modelPersistenceService.saveRecentUserSelection(recent);
     await storage.flush();
+    if(${process.platform==='darwin'}){
+    const selected=recent.solo_coder;
+    const model=selected?.mode===0?domain.getModelByKey(selected.modelId):null;
+    if(selected?.mode===0&&!model)throw new Error('trae_ide_display_model_missing');
+    // The mounted IDE picker lives in the workbench service collection, not
+    // the separately imported chat SDK. Broadcast through Trae's own model
+    // management service; it refreshes the visible selector without a menu
+    // click, window reload, or second process restart.
+    const picker=[...document.querySelectorAll('.ai-model-select [role="combobox"]')]
+      .find(element=>element.getClientRects().length)??
+      document.querySelector('.ai-model-select [role="combobox"]');
+    if(picker){
+      const fiberKey=Object.keys(picker).find(key=>key.startsWith('__reactFiber$'));
+      if(!fiberKey)throw new Error('trae_ide_model_management_unavailable');
+      let service;
+      for(let fiber=picker[fiberKey];fiber&&!service;fiber=fiber.return){
+        const value=fiber.memoizedProps?.value;
+        const collection=value?.serviceCollection??value?.desktopExports?.serviceCollection;
+        if(typeof collection?.getEntries==='function')
+          service=[...collection.getEntries()]
+            .find(([id])=>String(id)==='iICubeModelManagementService')?.[1];
+      }
+      if(typeof service?.notifyModelChanges!=='function')
+        throw new Error('trae_ide_model_management_unavailable');
+      service.notifyModelChanges({type:'update',model:{
+        name:model?.name??'',provider:model?.provider??''},openSource:'at-switch'});
+      if(picker.getClientRects().length&&model){
+        const expected=model.display_name??model.name;
+        let visible=false;
+        for(let attempt=0;attempt<40;attempt++){
+          if(picker.textContent?.includes(expected)){visible=true;break}
+          await new Promise(resolve=>setTimeout(resolve,100));
+        }
+        if(!visible)throw new Error('trae_ide_visible_label_mismatch');
+      }
+    }
+    }
     return true;
   })()`,true));
 }
@@ -497,13 +617,7 @@ async function handle(command) {
   const op=command.operation;
   if(op==='retain'){keepOnEof=true;return {retained:true};}
   if(op==='begin_operation'){
-    for(const label of Object.keys(desiredRecent))delete desiredRecent[label];
-    for(const id of Object.keys(desiredSessions))delete desiredSessions[id];
-    await evaluate('delete window.__atSwitchNativeModels;delete window.__atSwitchModelCatalog;true');
-    command={...command,operation:'bind_storage'};
-    const result=await handle(command);
-    if(result.ready)await handle({operation:'restore_selection'});
-    return result;
+    return beginOperation(command);
   }
   if(op==='bind_storage'){
     const result=await handleStorage(command);
@@ -553,7 +667,32 @@ async function handle(command) {
     await syncCore(label,command.baseline);
   }
   if(op==='restore_selection'){
-    for(const label of selectionLabels)await syncCore(label);
+    // Trae's selector getter falls back to Auto when its in-memory catalogue
+    // has not loaded the persisted model key yet. Hydrate the canonical
+    // catalogue on macOS before comparing or restoring existing selections.
+    // Windows already completes that initialization in its verified startup
+    // sequence and must retain its current operation order.
+    if(process.platform!=='darwin'){
+      for(const label of selectionLabels)await syncCore(label);
+    }else{
+      let transient;
+      for(let attempt=0;attempt<20;attempt++){
+        try{
+          if(attempt)await evaluate('delete window.__atSwitchModelCatalog;window.__atSwitchCatalogDirty=true;true');
+          await evaluate(`(async()=>{${canonicalModelSource}
+            await loadModels('solo_agent_lite');return true})()`,true);
+          for(const label of selectionLabels)await syncCore(label);
+          transient=undefined;
+          break;
+        }catch(error){
+          if(!/trae_selection_model_list_failed|trae_live_selection_mismatch|trae_selection_model_missing/.test(
+            String(error.message)))throw error;
+          transient=error;
+          await sleep(250);
+        }
+      }
+      if(transient)throw transient;
+    }
   }
   if(op==='snapshot'){
     const live=await evaluate(`(()=>{${corePrelude}
@@ -566,6 +705,12 @@ async function handle(command) {
       return {selection:resolve(recent),activeSelection:resolve(selected)};
     })()`);
     result.selection=live.selection;result.activeSelection=live.activeSelection;
+    if(process.platform==='darwin'&&
+      (command.label??modelLabel)===modelLabel&&
+      Object.hasOwn(desiredRecent,modelLabel)){
+      const expected=result.activeSession?result.activeSelection:result.selection;
+      await verifyMacAgentPicker(expected.mode===1?'Auto':expected.displayName);
+    }
   }
   if(op==='add_model'||op==='delete_model'){
     await evaluate('delete window.__atSwitchModelCatalog;delete window.__atSwitchNativeModels;window.__atSwitchCatalogDirty=true;true');

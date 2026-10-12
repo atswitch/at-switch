@@ -420,7 +420,32 @@ impl NativeTraeControl {
                 ));
             }
             Ok(())
-        })
+        })?;
+        #[cfg(target_os = "macos")]
+        {
+            // Trae persists its model-list cache asynchronously after the native
+            // service confirms deletion. Do not report a fully restored state
+            // while a subsequent read can still find the removed managed model.
+            let mut consecutive_absent = 0;
+            for _ in 0..40 {
+                let catalog = super::cached_custom_model_catalog(detection.config_path.as_deref())?;
+                if catalog.names.contains(display_name) {
+                    consecutive_absent = 0;
+                } else {
+                    consecutive_absent += 1;
+                    if consecutive_absent == 2 {
+                        return Ok(());
+                    }
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(CommandError::new(
+                "trae_native_cache_not_settled",
+                "Trae 原生模型已删除，但本地模型缓存尚未完成更新，请稍后重试恢复",
+            ))
+        }
+        #[cfg(not(target_os = "macos"))]
+        Ok(())
     }
 }
 
@@ -779,6 +804,19 @@ impl BridgeSession {
                 .unwrap_or_else(|| "unknown".to_owned());
             if let Some(diagnostic) = response.error.as_deref() {
                 log::warn!("Trae native bridge operation {operation} failed: {diagnostic}");
+                // The raw native message can contain installation details.
+                // Persist only a fixed failure class alongside operation timings.
+                if let Ok(mut file) = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(self._script.0.with_extension("timing.log"))
+                {
+                    let _ = writeln!(
+                        file,
+                        "failure {operation} {}",
+                        bridge_failure_class(diagnostic)
+                    );
+                }
                 #[cfg(test)]
                 eprintln!("Trae native bridge operation diagnostic ({operation}): {diagnostic}");
             }
@@ -793,6 +831,22 @@ impl BridgeSession {
         response.result.ok_or_else(|| {
             CommandError::new("trae_bridge_invalid_response", "Trae 原生模型服务缺少结果")
         })
+    }
+}
+
+fn bridge_failure_class(diagnostic: &str) -> &'static str {
+    if diagnostic.contains("trae_selection_model_list_failed") {
+        "model_catalogue_unavailable"
+    } else if diagnostic.contains("trae_live_selection_mismatch") {
+        "live_selection_mismatch"
+    } else if diagnostic.contains("trae_selection_model_missing") {
+        "selected_model_missing"
+    } else if diagnostic.starts_with("cdp_error:") {
+        "debugger_session_error"
+    } else if diagnostic.starts_with("cdp_timeout:") {
+        "debugger_timeout"
+    } else {
+        "native_operation_failed"
     }
 }
 
@@ -877,7 +931,7 @@ fn trae_executable(installation: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::bridge_failure_tag;
+    use super::{bridge_failure_class, bridge_failure_tag};
 
     #[test]
     fn diagnostic_tags_do_not_expose_runtime_messages_or_credentials() {
@@ -896,6 +950,22 @@ mod tests {
                 "error secret=fake-private-key https://private.invalid"
             )),
             "原生服务未完成操作"
+        );
+    }
+
+    #[test]
+    fn timing_failure_classes_are_fixed_and_never_include_native_details() {
+        assert_eq!(
+            bridge_failure_class("trae_internal_evaluation_failed:trae_live_selection_mismatch"),
+            "live_selection_mismatch"
+        );
+        assert_eq!(
+            bridge_failure_class("cdp_error:Runtime.evaluate:secret=fake-private-key"),
+            "debugger_session_error"
+        );
+        assert_eq!(
+            bridge_failure_class("private account or endpoint changed"),
+            "native_operation_failed"
         );
     }
 }
