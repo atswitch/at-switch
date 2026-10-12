@@ -9,56 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-- Replace the retired TraeCode/TraeWork entries with one new-only TRAE adapter and public ID `trae`; support TRAE CN 3.4.2 only, without importing legacy bindings, paths or recovery journals.
-- Align Windows and macOS on the same version-gated native host, account checks, model services, three Agent selectors, independent IDE selection, and exact encrypted baseline restore. Remove platform-specific model DI and visible UI fallbacks.
-- Keep at most one initial target restart, retaining the native control session for subsequent switches/restores without another restart; passive scans never start the bridge. Delayed control-pipe initialization retries within the same process.
-- Scope Windows TRAE shutdown to the complete normalized installation path, including its pipe owner; never terminate another installation by image name. Other Agent adapters are unchanged.
-- Retire only old TRAE metadata inside AT-Switch; preserve providers, credentials, other agents, external application data and recovery backups.
-
-### Validation
-- Windows TRAE 3.4.2 running-state local-mock roundtrip and consecutive model changes pass with one initial exit/start, no warm-switch/restore restarts, and unchanged other-agent main processes. Final cold-state and build results are recorded in the release verification document.
-- macOS TRAE CN 3.4.2 signed-build acceptance covers one initial restart, Agent and IDE visible selection, IDE/Agent warm model changes without another restart, and original-selection restoration. Windows validation remains the separate recorded run.
-- Local-mock integration acceptance does not imply real-provider inference, Streaming or Tool Calling acceptance.
-
-### Fixed
-- Update the initialized Agent SDK and IDE current-session/global stores together; prevent stale renderer selection maps from restoring the previous model and wait for durable storage flush.
-- Display verified TRAE switch results immediately and ignore older refresh responses. Cache the shared selector catalogue within each operation and remove unconditional settling delays.
-- Suppress repeated restart prompts while the same-installation/account native session is reusable; passive refresh does not recreate the initial warning, and context changes invalidate reuse.
-- Run every selector rollback even if another restore fails, preserving exact field presence and user models. Reject unsupported multiple IDE workspaces rather than reporting partial success.
-- Use an exact-path native Windows TRAE process scan and deduplicated graceful-close/force fallback, without changing other agents' lifecycle behavior.
-- Protect all current-session selection labels from stale whole-map writeback, including existing Agent conversations; restore absent `solo_agent_lite` overrides by explicit label without losing unrelated selections.
-- Flush IDE defaults even when only the Agent window is open. Restore selectors before deleting temporary models, and retain the same TRAE process after a fully verified rollback.
-- Retain an acknowledged native control session after read-only planning failures, so transient catalogue failures do not force another initial restart. Record credential-free operation timings and expose a predefined failure-stage hint.
-- On macOS, notify the mounted IDE workbench model service after a native selection change, so its visible picker updates without opening settings or restarting; reject a missing versioned service or a stale visible label.
-- On macOS, wait for Trae's persisted model-list cache to drop a deleted managed model before reporting restoration complete.
-- On macOS, load Trae's native model catalogue before restoring saved selector keys, and reattach a replaced renderer inside the same running process; leave the verified Windows bridge order unchanged.
-- On macOS, notify and verify the mounted Agent model picker after a native model switch, so a stale visible selection cannot be reported as success; Windows and other Agent adapters are unchanged.
-
-## [v3.16.1] - 2026-10-08
+## [v3.16.1] - 2026-10-12
 
 ### Added
-- TraeCode and TraeWork Direct-mode integration through their official custom-model UI for OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages, with independent discovery and bindings.
-- Encrypted, account-scoped Trae recovery journals, idempotent managed-model reuse, original-selection restoration, and separate macOS Accessibility / Windows UI Automation implementations.
-- Collapse Agent navigation beyond six visible entries into an accessible status-aware selector while keeping the active Agent visible.
+- A unified TRAE integration for TRAE CN 3.4.2, with Direct-mode support for OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages.
+- Encrypted, account-scoped recovery of the original selection and managed-model reuse.
+- An accessible Agent selector that keeps the active Agent reachable when the list exceeds six entries.
+
+### Changed
+- Retire the old TraeCode / TraeWork adapters and support TRAE CN 3.4.2 through the new-only public Agent ID `trae`; legacy bindings, paths, and recovery journals are not imported.
+- Synchronize the Windows and macOS native host, account checks, model services, Agent selectors, IDE selection, and exact baseline restoration.
+- Keep at most one initial TRAE restart; subsequent switches and restoration reuse the control session. Passive status refresh does not start a bridge.
+- Scope Windows TRAE shutdown to the complete normalized installation path and preserve providers, credentials, other agents, external app data, and recovery backups.
 
 ### Fixed
-- Treat an empty ima account metadata record as a signed-out state instead of an unsupported login format, preserving installation detection and showing an actionable login prompt without changing ima switching behavior.
-- Restore the exact pre-operation Trae model and clean up newly created managed rows when a later binding commit fails.
-- Wait for Trae's accessibility model selector to finish loading, and allow release builds to use a stable macOS signing identity so Accessibility permission survives application updates.
-- Treat Trae's `Auto` and `Auto Mode` labels as the same original selection, dismiss transient promotion overlays, and navigate the collapsed TraeCode settings drawer without fixed screen coordinates.
-- Remove the `AT-Switch ·` implementation prefix from new Trae model names, migrate exact legacy managed rows after a successful switch, recover missing ownership only from authenticated account-scoped history, and avoid treating Trae's lagging model cache as a failed selector update.
-- Reuse an existing Trae custom model with the same real model ID by selecting it directly, while preserving it as user-owned during later restore and cleanup.
-- Return automatically from TraeCode model management or the TraeWork add-model page before reading the active selector, so an already configured model can be switched without manual page cleanup.
-- Recognize the main Trae model selector even when its current official model is absent from Trae's cached catalog, while keeping add-model form comboboxes excluded.
-- Recover within the same switch when Trae has already persisted a newly added model but its official UI briefly loses the completion confirmation, avoiding a false failure followed by a required second click.
-- Retry an exact Trae model-menu item with a verified center click when Electron reports a successful accessibility action without changing the active selector.
+- Synchronize Agent SDK and IDE global/current-session stores and wait for durable persistence, preventing stale renderer selections from overwriting the active model.
+- Update the visible TRAE selection immediately after verification and ignore stale refresh responses.
+- Restore every selector independently even when another restoration step fails; preserve exact field presence and user-owned models.
+- Retain a valid control session after read-only planning failures, avoiding unnecessary first-switch restart prompts after transient catalogue errors.
+- On macOS, notify and verify the mounted IDE and Agent model pickers after switching or restoring without opening settings or restarting.
+- Restrict support to one IDE workspace and fail clearly when multiple independent workspaces are detected.
 
 ### Usage
-- Keep TraeCode or TraeWork open, grant AT-Switch Accessibility permission on macOS when prompted, and choose a Direct-compatible provider. Trae requests go directly to the provider; Proxy mode is intentionally unavailable.
+- Install and sign in to TRAE CN 3.4.2, refresh Agent status, and use a Direct-compatible provider. The first switch may restart TRAE once; save work first. Proxy mode and multiple independent IDE workspaces are unsupported.
+- Agent original configuration restores the selection captured before AT-Switch first took over. Old TraeCode / TraeWork clients and their saved state are outside this release's support range.
 
 ### Validation
-- TraeCode and TraeWork passed macOS local-mock add/select, third-party-to-third-party switching, full app restart persistence, original-selection restore, exact managed-row cleanup, and interrupted-operation recovery. Windows device validation and real-provider default-session/tool-call validation remain pending; see `TRAE_INTEGRATION.md`.
+- Windows 11 x64 / TRAE CN 3.4.2 real-UI selection, persistence, repeated switching, restoration, and unrelated-agent isolation are recorded in `.github/releases/v3.16.1-verification.md`.
+- The user verified the official macOS TRAE build. The exact notarized Mac package is checked by the macOS release workflow before GitHub publication.
+- Local mock acceptance does not establish real-provider inference, Streaming, or Tool Calling support. Actual API access depends on provider permissions and model capability.
 
 ## [v3.15.2] - 2026-10-07
 
