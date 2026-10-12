@@ -2,7 +2,7 @@
 
 # AT-Switch
 
-### The All-in-One Manager & Model Switcher for WorkBuddy, CodeBuddy, QClaw, AutoClaw, Codex, DuMate & ima
+### The All-in-One Manager & Model Switcher for WorkBuddy, CodeBuddy, QClaw, AutoClaw, Codex, DuMate, ima, TRAE
 
 [![Version](https://img.shields.io/github/v/release/atswitch/at-switch?color=blue&label=version)](https://github.com/atswitch/at-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](https://github.com/atswitch/at-switch/releases)
@@ -82,6 +82,7 @@ All official release binaries are hosted on [GitHub Releases](https://github.com
 | **Codex** | macOS / Windows | ✅ Supported | OpenAI Responses | Updates `$CODEX_HOME/config.toml` or `~/.codex/config.toml` cleanly |
 | **Baidu DuMate** | macOS / Windows | ✅ Supported | OpenAI Chat Completions | Updates the active account's persistent XDG override for every session directory and built-in model alias |
 | **Tencent ima** | macOS / Windows | Implemented; validation scope below | Public OpenAI Chat Completions | Connects the locally signed-in account and synchronizes ima account settings with both local entry selections |
+| **TRAE** | macOS / Windows | Implemented; validation scope below | OpenAI Chat / Responses / Anthropic Messages | Version-gated native Trae model service; no model-form interaction; Direct provider requests |
 
 ### Using ima
 
@@ -90,6 +91,19 @@ Select **ima** in the top bar, then click **Switch** beside a model in the exist
 ima currently accepts **public OpenAI Chat endpoints in Direct mode**. AT-Switch's local proxy and endpoints reachable only on this computer are unavailable for ima. Switching safely quits and reopens a running ima, so wait for any active generation to finish. **Restore original models** restores each entry's selection from before the first takeover and preserves existing custom models.
 
 See [ima integration and validation](IMA_INTEGRATION.md) for the current implementation and evidence. Full macOS switching and restoration validation remains incomplete. Windows has only undergone static investigation and compilation checks, with no device validation. This describes the working tree, not a published release.
+
+### Using TRAE
+
+Select the single **TRAE** entry and switch a model. Only merged TRAE CN 3.4.2 is supported;
+retired product bindings and configurations are not imported. Windows and macOS share the
+native-service flow without settings-form interaction. Within the same valid control session,
+a running target restarts at most once initially; subsequent switches, restores and passive
+refreshes do not restart it. Requests go directly to the provider.
+
+Restore returns exact pre-takeover selections and removes only models created by AT-Switch.
+Windows 3.4.2 running/stopped local-mock roundtrips pass without affecting other agents.
+The user will validate new macOS behavior separately. Real-provider inference, streaming and
+tools remain outside local-mock acceptance. See [TRAE integration and validation](TRAE_INTEGRATION.md).
 
 ---
 

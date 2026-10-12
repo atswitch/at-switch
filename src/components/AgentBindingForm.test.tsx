@@ -61,6 +61,13 @@ describe("AgentBindingForm", () => {
     expect(screen.queryByRole("button", { name: "应用到 ima" })).not.toBeInTheDocument();
   });
 
+  it("explains native Trae Direct mode without ima wording", () => {
+    render(<AgentBindingForm agent={{ ...agent, id: "trae", displayName: "TRAE" }} providers={[provider]} mode="proxy" busy={false} onSubmit={vi.fn()} />);
+    expect(screen.getByText("请在首页切换 TRAE 模型")).toBeInTheDocument();
+    expect(screen.getByText(/仅支持通过原生模型服务配置直连/)).toBeInTheDocument();
+    expect(screen.queryByText(/ima 通过云端/)).not.toBeInTheDocument();
+  });
+
   it("keeps direct mode read-only and exposes the macOS installation action inline", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();

@@ -9,7 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [v3.15.2] - 2026-10-05
+## [v3.16.1] - 2026-10-12
+
+### Added
+- A unified TRAE integration for TRAE CN 3.4.2, with Direct-mode support for OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages.
+- Encrypted, account-scoped recovery of the original selection and managed-model reuse.
+- An accessible Agent selector that keeps the active Agent reachable when the list exceeds six entries.
+
+### Changed
+- Retire the old TraeCode / TraeWork adapters and support TRAE CN 3.4.2 through the new-only public Agent ID `trae`; legacy bindings, paths, and recovery journals are not imported.
+- Synchronize the Windows and macOS native host, account checks, model services, Agent selectors, IDE selection, and exact baseline restoration.
+- Keep at most one initial TRAE restart; subsequent switches and restoration reuse the control session. Passive status refresh does not start a bridge.
+- Scope Windows TRAE shutdown to the complete normalized installation path and preserve providers, credentials, other agents, external app data, and recovery backups.
+
+### Fixed
+- Synchronize Agent SDK and IDE global/current-session stores and wait for durable persistence, preventing stale renderer selections from overwriting the active model.
+- Update the visible TRAE selection immediately after verification and ignore stale refresh responses.
+- Restore every selector independently even when another restoration step fails; preserve exact field presence and user-owned models.
+- Retain a valid control session after read-only planning failures, avoiding unnecessary first-switch restart prompts after transient catalogue errors.
+- On macOS, notify and verify the mounted IDE and Agent model pickers after switching or restoring without opening settings or restarting.
+- Restrict support to one IDE workspace and fail clearly when multiple independent workspaces are detected.
+
+### Usage
+- Install and sign in to TRAE CN 3.4.2, refresh Agent status, and use a Direct-compatible provider. The first switch may restart TRAE once; save work first. Proxy mode and multiple independent IDE workspaces are unsupported.
+- Agent original configuration restores the selection captured before AT-Switch first took over. Old TraeCode / TraeWork clients and their saved state are outside this release's support range.
+
+### Validation
+- Windows 11 x64 / TRAE CN 3.4.2 real-UI selection, persistence, repeated switching, restoration, and unrelated-agent isolation are recorded in `.github/releases/v3.16.1-verification.md`.
+- The user verified the official macOS TRAE build. The exact notarized Mac package is checked by the macOS release workflow before GitHub publication.
+- Local mock acceptance does not establish real-provider inference, Streaming, or Tool Calling support. Actual API access depends on provider permissions and model capability.
+
+## [v3.15.2] - 2026-10-07
 
 ### Added
 - Tencent ima model switching on macOS and Windows through its signed-in account model settings, limited to public OpenAI Chat Completions endpoints.

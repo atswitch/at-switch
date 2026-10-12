@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
@@ -61,12 +61,42 @@ describe("AT-Switch desktop shell", () => {
     await seedTestProviders();
   });
 
+  it("shows confirmed TRAE switches immediately and rejects late refreshes from previous switches", async () => {
+    await api.applyAgentBinding({ agentId: "trae", providerId: "preset-mongyun", modelId: "glm-5.2", mode: "direct" }, true);
+    const first = await api.bootstrap();
+    first.agents.find((agent) => agent.id === "trae")!.needsRestart = false;
+    vi.spyOn(api, "bootstrap").mockResolvedValueOnce(first);
+    window.localStorage.setItem("at-switch-active-agent", "trae");
+    const pending: ((value: typeof first) => void)[] = [];
+    vi.spyOn(api, "refresh").mockImplementation(() => new Promise((resolve) => pending.push(resolve)));
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: "TRAE" });
+    act(() => window.dispatchEvent(new Event("focus")));
+    await waitFor(() => expect(pending).toHaveLength(1));
+    const a = screen.getByText("GLM-5.2").closest("article")!;
+    const b = screen.getByText("GLM-5.1").closest("article")!;
+    await user.click(within(b).getByRole("button", { name: "切换" }));
+    await waitFor(() => expect(within(b).getByText("使用中")).toBeInTheDocument());
+    const second = await api.bootstrap();
+    await act(async () => pending[0]!(first));
+    expect(within(b).getByText("使用中")).toBeInTheDocument();
+    await user.click(within(a).getByRole("button", { name: "切换" }));
+    await waitFor(() => expect(within(a).getByText("使用中")).toBeInTheDocument());
+    await waitFor(() => expect(pending).toHaveLength(3));
+    await act(async () => pending[1]!(second));
+    expect(within(a).getByText("使用中")).toBeInTheDocument();
+    await act(async () => pending[2]!(await api.bootstrap()));
+    expect(within(a).getByText("使用中")).toBeInTheDocument();
+  });
+
   it("connects ima once, cancels without access, switches again and restores original selections", async () => {
     const user = userEvent.setup();
     const apply = vi.spyOn(api, "applyAgentBinding");
     const restore = vi.spyOn(api, "restoreAgentNative");
     render(<App />);
-    await user.click(await screen.findByRole("tab", { name: "ima" }));
+    await user.click(await screen.findByRole("button", { name: /更多智能体/ }));
+    await user.click(screen.getByRole("menuitemradio", { name: /^ima/ }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(apply).not.toHaveBeenCalled();
 
@@ -105,7 +135,8 @@ describe("AT-Switch desktop shell", () => {
     const apply = vi.spyOn(api, "applyAgentBinding").mockRejectedValueOnce({ code: "ima_switch_failed", message: "切换失败，已恢复先前配置" });
     const user = userEvent.setup();
     render(<App />);
-    await user.click(await screen.findByRole("tab", { name: "ima" }));
+    await user.click(await screen.findByRole("button", { name: /更多智能体/ }));
+    await user.click(screen.getByRole("menuitemradio", { name: /^ima/ }));
     const currentRow = screen.getByText("GLM-5.2").closest("article")!;
     const nextRow = screen.getByText("GLM-5.1").closest("article")!;
     await user.click(within(nextRow).getByRole("button", { name: "切换" }));
@@ -284,7 +315,7 @@ describe("AT-Switch desktop shell", () => {
     const detailButtons = await screen.findAllByRole("button", {
       name: "详情",
     });
-    expect(detailButtons).toHaveLength(7);
+    expect(detailButtons).toHaveLength(8);
     expect(
       detailButtons.every((button) => !button.hasAttribute("disabled")),
     ).toBe(true);
