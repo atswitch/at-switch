@@ -12,6 +12,7 @@ mod service_adapter;
 mod service_adapter_tests;
 mod trae;
 mod workbuddy;
+mod zcode;
 
 use std::{
     collections::HashMap,
@@ -47,6 +48,7 @@ use self::{
     openclaw::{AutoClawAdapter, QClawAdapter},
     trae::TraeAdapter,
     workbuddy::WorkBuddyAdapter,
+    zcode::ZCodeAdapter,
 };
 
 type ConfigProbe = fn(&PathBuf) -> AppResult<()>;
@@ -71,6 +73,14 @@ struct WorkBuddyRestorePlan {
     changes: Vec<workbuddy::SessionModelChange>,
     previous_new_task: Option<workbuddy::NewTaskSelection>,
     restored_new_task_value: Option<Vec<u8>>,
+}
+
+/// Records ZCode's task index and Chromium local storage values that AT-Switch
+/// rewrote while the app was paused, so a failed apply can put both back.
+#[derive(Default)]
+struct ZCodeSelectionMutation {
+    tasks: Vec<zcode::TaskModelChange>,
+    selections: Vec<zcode::ModelSelectionChange>,
 }
 
 #[derive(Default)]
@@ -352,6 +362,7 @@ impl Default for AgentRegistry {
                 Box::new(DuMateAdapter),
                 Box::new(ImaAdapter::default()),
                 Box::new(TraeAdapter::unified()),
+                Box::new(ZCodeAdapter),
             ],
             context: DiscoveryContext::native(),
         }
@@ -1043,6 +1054,23 @@ impl AgentService {
             };
         }
 
+        // ZCode keeps the *selected* model in its task index and mirrors it into
+        // Chromium local storage; the provider config only decides the model of
+        // newly created tasks. Both layers must be repointed while the app is
+        // paused, otherwise a restart still selects the previous model even
+        // though the configuration file is correct.
+        let zcode_selection_mutation = if draft.agent_id == "zcode" {
+            match self.apply_zcode_selection_while_paused(&detection, &draft.model_id) {
+                Ok(mutation) => Some(mutation),
+                Err(error) => {
+                    let _ = self.transaction.restore_backup(&result.backup_path);
+                    self.cleanup_new_local_token(&local_token_metadata);
+                    return Err(error);
+                }
+            }
+        } else {
+            None
+        };
         let workbuddy_session_mutation = if draft.agent_id == "workbuddy" {
             match self.activate_workbuddy_session_while_paused(&detection) {
                 Ok(mutation) => Some(mutation),
@@ -1087,6 +1115,7 @@ impl AgentService {
             let _ = self.transaction.restore_backup(&result.backup_path);
             self.rollback_workbuddy_session(&detection, workbuddy_session_mutation.as_ref());
             self.rollback_codebuddy_workspaces(codebuddy_workspace_mutation.as_ref());
+            self.rollback_zcode_selection(&detection, zcode_selection_mutation.as_ref());
             self.cleanup_new_local_token(&local_token_metadata);
             return Err(error);
         }
@@ -1574,6 +1603,39 @@ impl AgentService {
                 summary.config_health = AgentConfigHealth::TakeoverInterrupted;
                 summary.message = Some("Agent 绑定模式无法识别，请重新应用配置".to_owned());
             }
+        }
+    }
+
+    fn apply_zcode_selection_while_paused(
+        &self,
+        detection: &AgentDetection,
+        model_id: &str,
+    ) -> AppResult<ZCodeSelectionMutation> {
+        let tasks = zcode::apply_task_model(detection, model_id)?;
+        let selections = zcode::apply_model_selection(detection, model_id)?;
+        Ok(ZCodeSelectionMutation { tasks, selections })
+    }
+
+    /// Puts ZCode's task index and local storage back exactly as they were.
+    ///
+    /// The configuration file is restored by `ConfigTransaction`; this only
+    /// undoes the two selection layers the pipeline wrote alongside it.
+    fn rollback_zcode_selection(
+        &self,
+        detection: &AgentDetection,
+        mutation: Option<&ZCodeSelectionMutation>,
+    ) {
+        let Some(mutation) = mutation else {
+            return;
+        };
+        if let Err(error) = zcode::restore_task_model(detection, &mutation.tasks) {
+            log::warn!("ZCode task models could not be restored: {}", error.message);
+        }
+        if let Err(error) = zcode::restore_model_selection(detection, &mutation.selections) {
+            log::warn!(
+                "ZCode model selection could not be restored: {}",
+                error.message
+            );
         }
     }
 
@@ -2170,7 +2232,8 @@ mod tests {
                 "codex",
                 "dumate",
                 "ima",
-                "trae"
+                "trae",
+                "zcode"
             ]
         );
     }

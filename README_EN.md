@@ -83,6 +83,20 @@ All official release binaries are hosted on [GitHub Releases](https://github.com
 | **Baidu DuMate** | macOS / Windows | ✅ Supported | OpenAI Chat Completions | Updates the active account's persistent XDG override for every session directory and built-in model alias |
 | **Tencent ima** | macOS / Windows | Implemented; validation scope below | Public OpenAI Chat Completions | Connects the locally signed-in account and synchronizes ima account settings with both local entry selections |
 | **TRAE** | macOS / Windows | Implemented; validation scope below | OpenAI Chat / Responses / Anthropic Messages | Version-gated native Trae model service; no model-form interaction; Direct provider requests |
+| **ZCode** | macOS / Windows | Implemented; validation scope below | OpenAI Chat / Responses / Anthropic Messages | Writes the ZCode personal provider config and syncs the selected model in its task index and local storage; takes effect after a restart |
+
+### Using ZCode
+
+Select **ZCode** in the top bar and switch a model. AT-Switch declares a managed provider in
+ZCode's personal provider configuration, keeps user-created providers and unknown fields intact,
+and only rewrites the content it manages. The *currently selected* model lives in ZCode's task
+index and Chromium local storage, so AT-Switch updates both while ZCode is paused and reopens it
+after the write succeeds.
+
+**Restore original models** removes only AT-Switch-managed content and preserves other providers
+and anything added after takeover. macOS switching has passed device validation; the Windows
+config path is derived from the application data directory and is **not yet validated on a
+device**. See [ZCode integration and validation](ZCODE_INTEGRATION.md).
 
 ### Using ima
 

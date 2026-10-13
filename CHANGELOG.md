@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- A ZCode integration that declares the managed provider in ZCode's personal provider configuration and syncs the selected model in its task index and Chromium local storage, with Direct and Proxy support for OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages.
+
+### Fixed
+- macOS main-process detection now also matches processes that report only the executable name, so ZCode is paused and relaunched for a configuration change instead of being reported as not running.
+
 ## [v3.16.1] - 2026-10-12
 
 ### Added

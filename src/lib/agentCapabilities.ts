@@ -14,6 +14,7 @@ export const SWITCHABLE_AGENT_IDS = [
   "dumate",
   "ima",
   "trae",
+  "zcode",
 ] as const;
 
 export function isSwitchableAgent(agent: AgentSummary): boolean {
