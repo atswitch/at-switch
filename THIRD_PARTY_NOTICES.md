@@ -28,6 +28,7 @@ the asset's source category and distribution basis.
 | Baidu DuMate | `src/assets/agents/dumate.png` | Official macOS application icon | Compatibility identification; upstream trademark terms apply |
 | Tencent ima | `src/assets/agents/ima.png` | Official website favicon | Compatibility identification; upstream trademark terms apply |
 | TRAE | `src/assets/agents/trae.svg` | Vector trace of the official website favicon at `https://lf-static.traecdn.us/obj/trae-ai-tx/trae_website/favicon.png` | Compatibility identification; upstream trademark terms apply |
+| ZCode | `src/assets/agents/zcode.png` | Official macOS application icon | Maintainer-confirmed permission |
 | DeepSeek | `src/assets/providers/deepseek.png`, `src/assets/providers/deepseek.ico` | Maintainer-provided product asset | Maintainer-confirmed permission |
 | Doubao | `src/assets/providers/doubao.png` | Maintainer-provided product asset | Maintainer-confirmed permission |
 | Kimi / Moonshot AI | `src/assets/providers/kimi.png`, `src/assets/providers/kimi.ico` | Maintainer-provided product asset | Maintainer-confirmed permission |

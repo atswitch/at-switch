@@ -82,6 +82,18 @@
 | **百度搭子（DuMate）** | macOS / Windows | ✅ 支持 | OpenAI Chat Completions | 更新当前账号的 XDG 持久覆盖配置，兼容所有会话目录和内置模型别名 |
 | **腾讯 ima** | macOS / Windows | 当前实现，验收范围见下文 | 公网 OpenAI Chat Completions | 连接本机已登录账号，同步 ima 账号模型设置与两个入口的本地选择 |
 | **TRAE** | macOS / Windows | 当前实现，验收范围见下文 | OpenAI Chat / Responses / Anthropic Messages | 版本限定的 Trae 原生模型服务，无表单操作；模型请求直连 Provider |
+| **ZCode** | macOS / Windows | 当前实现，验收范围见下文 | OpenAI Chat / Responses / Anthropic Messages | 写入 ZCode 个人 Provider 配置 `~/.zcode/v2/provider_config.json`，并同步任务表与本地存储中的选中模型；需重启生效 |
+
+### ZCode 使用说明
+
+顶部选择 **ZCode** 并点击模型「切换」。AT-Switch 在 ZCode 个人配置中声明受管 Provider
+（固定 `providerId` 为 `at-switch`），保留用户自建 Provider 与未知字段，只改写 AT-Switch
+受管内容。ZCode 的「当前选中模型」存在任务表与 Chromium 本地存储中，AT-Switch 会在 ZCode
+暂停期间同步这两层，写入完成后自动重新打开 ZCode。
+
+「恢复原始模型」只移除 AT-Switch 受管内容，保留用户其他 Provider 与接管后新增的配置。
+当前 macOS 已完成真机切换验收；Windows 配置路径按应用数据目录推导，**尚未真机验证**。
+详见 [ZCode 接入与验收](ZCODE_INTEGRATION.md)。
 
 ### ima 使用说明
 
