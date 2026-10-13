@@ -2253,6 +2253,7 @@ mod tests {
             "ima.copilot/Application/ima.copilot.exe",
             "Programs/Trae CN/Trae CN.exe",
             "Programs/TRAE SOLO CN/TRAE SOLO CN.exe",
+            "Programs/ZCode/ZCode.exe",
         ] {
             let executable = local_app_data.join(relative);
             fs::create_dir_all(executable.parent().expect("parent")).expect("app directory");
@@ -2273,7 +2274,7 @@ mod tests {
         };
 
         let detections = registry.detections();
-        assert_eq!(detections.len(), 8);
+        assert_eq!(detections.len(), 9);
         assert_eq!(
             detections
                 .iter()
@@ -2321,6 +2322,7 @@ mod tests {
             ("dumate", "DuMate.exe"),
             ("ima", "ima.copilot.exe"),
             ("trae", "Trae CN.exe"),
+            ("zcode", "ZCode.exe"),
         ] {
             let custom_directory = temp.path().join(format!("custom-{agent_id}"));
             let executable = custom_directory.join(executable_name);
@@ -2369,6 +2371,7 @@ mod tests {
             ("dumate", "DuMate.app"),
             ("ima", "ima.copilot.app"),
             ("trae", "Trae CN.app"),
+            ("zcode", "ZCode.app"),
         ] {
             let custom_directory = temp.path().join(format!("custom-{agent_id}"));
             let app = custom_directory.join(app_name);
