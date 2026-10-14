@@ -12,6 +12,7 @@ export const SWITCHABLE_AGENT_IDS = [
   "autoclaw",
   "codex",
   "dumate",
+  "opencode",
   "ima",
   "trae",
 ] as const;
@@ -42,7 +43,7 @@ export function supportsDirectBinding(
       ].includes(protocol),
     );
   }
-  if (agentId === "dumate") {
+  if (agentId === "dumate" || agentId === "opencode") {
     return providerSupportedProtocols(provider).includes("openai_chat_completions");
   }
   return true;
@@ -159,7 +160,8 @@ export function directBindingRequirement(
   if (
     agentId === "workbuddy" ||
     agentId === "codebuddy" ||
-    agentId === "dumate"
+    agentId === "dumate" ||
+    agentId === "opencode"
   )
     return "OpenAI Chat";
   if (agentId === "codex") return "OpenAI Responses";
