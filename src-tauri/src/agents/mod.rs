@@ -352,9 +352,11 @@ impl Default for AgentRegistry {
                 Box::new(AutoClawAdapter),
                 Box::new(CodexAdapter),
                 Box::new(DuMateAdapter),
-                Box::new(OpenCodeAdapter),
                 Box::new(ImaAdapter::default()),
                 Box::new(TraeAdapter::unified()),
+                // Newest integration renders last so the switcher's fixed
+                // first six and the overflow menu stay stable for existing users.
+                Box::new(OpenCodeAdapter),
             ],
             context: DiscoveryContext::native(),
         }
@@ -2172,9 +2174,9 @@ mod tests {
                 "autoclaw",
                 "codex",
                 "dumate",
-                "opencode",
                 "ima",
-                "trae"
+                "trae",
+                "opencode"
             ]
         );
     }

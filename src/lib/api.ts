@@ -108,9 +108,9 @@ const mockAgentDisplayNames = {
   autoclaw: "AutoClaw",
   codex: "Codex",
   dumate: "百度搭子",
-  opencode: "OpenCode",
   ima: "ima",
   trae: "TRAE",
+  opencode: "OpenCode",
 } as const;
 
 const mockSnapshotTemplate: AppSnapshot = {
