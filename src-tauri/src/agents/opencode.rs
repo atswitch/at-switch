@@ -204,9 +204,9 @@ fn config_directory(context: &DiscoveryContext) -> PathBuf {
             return directory;
         }
     }
-    if cfg!(target_os = "windows") {
-        return context.application_data_dir.join("opencode");
-    }
+    // OpenCode resolves its global config under `~/.config/opencode` on every
+    // platform, including Windows (`%USERPROFILE%\.config\opencode`). It never
+    // reads `%APPDATA%\opencode`, so both platforms share one resolution.
     context.home.join(".config").join("opencode")
 }
 

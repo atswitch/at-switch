@@ -10,7 +10,9 @@ hermes 专属字段未移植）。机制调研与设计：`doc/opencode-integrat
 
 - 应用：`OpenCode.app`，Bundle ID `ai.opencode.desktop`；Windows 相对路径
   `Programs/OpenCode/OpenCode.exe`、`OpenCode/OpenCode.exe`、`OpenCode.exe`。
-- 配置目录：`OPENCODE_HOME` > `~/.config/opencode`（Windows `%APPDATA%/opencode`）；
+- 配置目录：`OPENCODE_HOME` > `~/.config/opencode`（**Windows 同样是
+  `%USERPROFILE%\.config\opencode`**，不是 `%APPDATA%`；2026-10-15 修复：原移植
+  实现在 Windows 误写 `%APPDATA%\opencode`，导致切换不被 OpenCode 加载）；
   `opencode.json` 优先于 `opencode.jsonc`，JSONC（注释/尾逗号）完整支持。
 - 写入（受控点仅两处，其余全部保留）：
   - `provider.at-switch`：`@ai-sdk/openai-compatible` + `options.baseURL` +

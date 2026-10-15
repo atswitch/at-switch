@@ -227,3 +227,26 @@ fn preserves_jsonc_comments_and_trailing_commas_across_native_restore() {
     assert!(restored_value["provider"]["at-switch"].is_null());
     assert!(restored_value["model"].is_null());
 }
+
+#[cfg(target_os = "windows")]
+#[test]
+fn resolves_the_global_config_under_userprofile_config_on_windows() {
+    let temp = tempfile::tempdir().expect("temp");
+    let home = temp.path().join("home");
+    let config = home.join(".config/opencode/opencode.json");
+    fs::create_dir_all(config.parent().expect("config parent")).expect("config directory");
+    fs::write(&config, b"{}").expect("config");
+
+    let context = DiscoveryContext {
+        home,
+        application_data_dir: temp.path().join("Roaming"),
+        application_dirs: Vec::new(),
+        path_entries: Vec::new(),
+        system_application_search: false,
+        custom_installation_path: None,
+        local_app_data: None,
+        program_files: Vec::new(),
+    };
+
+    assert_eq!(resolve_config_path(&context), config);
+}
