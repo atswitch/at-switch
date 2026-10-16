@@ -110,6 +110,7 @@ const mockAgentDisplayNames = {
   dumate: "百度搭子",
   ima: "ima",
   trae: "TRAE",
+  opencode: "OpenCode",
 } as const;
 
 const mockSnapshotTemplate: AppSnapshot = {

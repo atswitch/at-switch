@@ -11,6 +11,7 @@
 | `autoclaw.png` | AutoClaw macOS 官方应用 `icon.icns` |
 | `codex.png` | OpenAI 官方 ChatGPT/Codex 应用图标 |
 | `dumate.png` | 百度搭子（DuMate）macOS 官方应用 `icon.icns` |
+| `opencode.png` | OpenCode 桌面应用 `ai.opencode.desktop` 官方图标 |
 | `ima.png` | 腾讯 ima 官方网站公开 `favicon.svg`，转换为 128×128 PNG |
 | `trae.svg` | TRAE 官方网站公开 favicon 的等比例 SVG 描摹 |
 

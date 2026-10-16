@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- OpenCode desktop (ai.opencode.desktop) integration with Direct (OpenAI Chat Completions) and Proxy switching through `~/.config/opencode/opencode.json` / `opencode.jsonc`. JSONC comments, trailing commas, unknown fields, and user-owned providers are preserved; restoration follows the first-takeover baseline.
+
 ## [v3.16.1] - 2026-10-12
 
 ### Added

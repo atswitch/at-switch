@@ -7,6 +7,7 @@ mod ima_local;
 mod lifecycle;
 mod locator;
 mod openclaw;
+mod opencode;
 mod service_adapter;
 #[cfg(test)]
 mod service_adapter_tests;
@@ -45,6 +46,7 @@ use self::{
     lifecycle::RestartOutcome,
     locator::{normalized_path_string, DiscoveryContext, Installation, InstallationKind},
     openclaw::{AutoClawAdapter, QClawAdapter},
+    opencode::OpenCodeAdapter,
     trae::TraeAdapter,
     workbuddy::WorkBuddyAdapter,
 };
@@ -352,6 +354,9 @@ impl Default for AgentRegistry {
                 Box::new(DuMateAdapter),
                 Box::new(ImaAdapter::default()),
                 Box::new(TraeAdapter::unified()),
+                // Newest integration renders last so the switcher's fixed
+                // first six and the overflow menu stay stable for existing users.
+                Box::new(OpenCodeAdapter),
             ],
             context: DiscoveryContext::native(),
         }
@@ -2170,7 +2175,8 @@ mod tests {
                 "codex",
                 "dumate",
                 "ima",
-                "trae"
+                "trae",
+                "opencode"
             ]
         );
     }
@@ -2187,6 +2193,7 @@ mod tests {
             "Programs/AutoClaw/AutoClaw.exe",
             "Programs/Codex/Codex.exe",
             "Programs/DuMate/DuMate.exe",
+            "Programs/OpenCode/OpenCode.exe",
             "ima.copilot/Application/ima.copilot.exe",
             "Programs/Trae CN/Trae CN.exe",
             "Programs/TRAE SOLO CN/TRAE SOLO CN.exe",
@@ -2210,7 +2217,7 @@ mod tests {
         };
 
         let detections = registry.detections();
-        assert_eq!(detections.len(), 8);
+        assert_eq!(detections.len(), 9);
         assert_eq!(
             detections
                 .iter()
@@ -2256,6 +2263,7 @@ mod tests {
             ("autoclaw", "AutoClaw.exe"),
             ("codex", "Codex.exe"),
             ("dumate", "DuMate.exe"),
+            ("opencode", "OpenCode.exe"),
             ("ima", "ima.copilot.exe"),
             ("trae", "Trae CN.exe"),
         ] {
@@ -2304,6 +2312,7 @@ mod tests {
             ("autoclaw", "AutoClaw.app"),
             ("codex", "Codex.app"),
             ("dumate", "DuMate.app"),
+            ("opencode", "OpenCode.app"),
             ("ima", "ima.copilot.app"),
             ("trae", "Trae CN.app"),
         ] {
