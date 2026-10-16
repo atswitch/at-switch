@@ -149,6 +149,77 @@ impl AgentAdapter for AutoClawAdapter {
     }
 }
 
+/// EasyClaw（猎豹移动，`ai.easyclawcn.desktop`）同样是 OpenClaw 发行版：应用内
+/// `Resources/cfmind/gateway.asar/openclaw.mjs` 就是 OpenClaw 运行时，配置落在
+/// `~/.easyclaw/easyclaw.json`，其中 `models.providers` 与
+/// `agents.defaults.model.primary` 的结构与 QClaw / AionClaw 逐字一致，因此直接复用
+/// 同一套读写实现。
+///
+/// 与 AutoClaw 不同，这里不需要再写第二处：`~/.easyclaw/easyclawcli` 里明确设置了
+/// `EASYCLAW_CONFIG_DIR=/…/.easyclaw`，`easyclaw.json` 本身就是权威配置。它只在安装/
+/// 升级时按 `.config-merge-signal.json` 合并一次默认值（并留一份
+/// `.easyclaw-snapshots/*.bak`），不会在每次启动时重建。
+pub struct EasyClawAdapter;
+
+impl AgentAdapter for EasyClawAdapter {
+    fn id(&self) -> &'static str {
+        "easyclaw"
+    }
+
+    fn display_name(&self) -> &'static str {
+        "EasyClaw"
+    }
+
+    fn detect(&self, context: &DiscoveryContext) -> AgentDetection {
+        let installation = locate_desktop_app(
+            context,
+            &["easyclaw.app"],
+            &["ai.easyclawcn.desktop"],
+            &["Programs/EasyClaw/EasyClaw.exe", "EasyClaw/EasyClaw.exe"],
+        );
+        AgentDetection::from_file_probe(
+            self.id(),
+            self.display_name(),
+            installation,
+            context.home.join(".easyclaw").join("easyclaw.json"),
+            probe_openclaw,
+            true,
+        )
+    }
+
+    fn source_protocol(
+        &self,
+        mode: AgentBindingMode,
+        upstream_protocol: ApiProtocol,
+    ) -> ApiProtocol {
+        openclaw_source_protocol(mode, upstream_protocol)
+    }
+
+    fn build_config(
+        &self,
+        detection: &AgentDetection,
+        desired: &DesiredAgentBinding<'_>,
+    ) -> AppResult<Vec<u8>> {
+        build_openclaw_config(detection, desired)
+    }
+
+    fn build_native_config(
+        &self,
+        detection: &AgentDetection,
+        baseline: &BaselineSnapshot,
+    ) -> AppResult<Vec<u8>> {
+        build_native_openclaw_config(detection, baseline)
+    }
+
+    fn verify_config(
+        &self,
+        detection: &AgentDetection,
+        desired: &DesiredAgentBinding<'_>,
+    ) -> AppResult<()> {
+        verify_openclaw_config(detection, desired)
+    }
+}
+
 fn openclaw_source_protocol(mode: AgentBindingMode, upstream: ApiProtocol) -> ApiProtocol {
     match mode {
         AgentBindingMode::Direct => upstream,

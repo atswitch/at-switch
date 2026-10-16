@@ -14,6 +14,10 @@ export const SWITCHABLE_AGENT_IDS = [
   "dumate",
   "ima",
   "trae",
+  // EasyClaw ships the OpenClaw runtime (gateway.asar/openclaw.mjs) and keeps its
+  // authoritative config at `~/.easyclaw/easyclaw.json`, so it reuses the same
+  // `models.providers` / `agents.defaults.model.primary` write kernel as QClaw.
+  "easyclaw",
 ] as const;
 
 export function isSwitchableAgent(agent: AgentSummary): boolean {
