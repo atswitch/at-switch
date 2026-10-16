@@ -1,3 +1,4 @@
+mod aionclaw;
 mod codebuddy;
 mod codex;
 mod dumate;
@@ -44,7 +45,7 @@ use self::{
     ima_adapter::ImaAdapter,
     lifecycle::RestartOutcome,
     locator::{normalized_path_string, DiscoveryContext, Installation, InstallationKind},
-    openclaw::{AutoClawAdapter, QClawAdapter},
+    openclaw::{AionClawAdapter, AutoClawAdapter, QClawAdapter},
     trae::TraeAdapter,
     workbuddy::WorkBuddyAdapter,
 };
@@ -352,6 +353,8 @@ impl Default for AgentRegistry {
                 Box::new(DuMateAdapter),
                 Box::new(ImaAdapter::default()),
                 Box::new(TraeAdapter::unified()),
+                // AionClaw 最新接入，渲染在切换器列表末尾。
+                Box::new(AionClawAdapter),
             ],
             context: DiscoveryContext::native(),
         }
@@ -1070,6 +1073,28 @@ impl AgentService {
             None
         };
 
+        // AionClaw 启动时从 sqlite 的 kv.app_config 重建
+        // openclaw/state/openclaw.json，所以外部对该 JSON 的写入会被覆盖；
+        // 真正生效的写入必须落在数据库上，并在写后立即校验。
+        if draft.agent_id == "aionclaw" {
+            match aionclaw::apply_config(&detection, &desired) {
+                Ok(change) => {
+                    if let Err(error) = aionclaw::verify_config(&detection, &desired) {
+                        let _ = aionclaw::restore_config(&detection, &change);
+                        let _ = self.transaction.restore_backup(&result.backup_path);
+                        return Err(error);
+                    }
+                    log::info!(
+                        "AionClaw model synced into its database: model={}",
+                        desired.model_id
+                    );
+                }
+                Err(error) => {
+                    let _ = self.transaction.restore_backup(&result.backup_path);
+                    return Err(error);
+                }
+            }
+        }
         let (local_ref, local_revision) = local_token_metadata
             .as_ref()
             .map(|(reference, revision, _)| (Some(reference.as_str()), *revision))
@@ -2170,7 +2195,8 @@ mod tests {
                 "codex",
                 "dumate",
                 "ima",
-                "trae"
+                "trae",
+                "aionclaw"
             ]
         );
     }
@@ -2187,6 +2213,7 @@ mod tests {
             "Programs/AutoClaw/AutoClaw.exe",
             "Programs/Codex/Codex.exe",
             "Programs/DuMate/DuMate.exe",
+            "Programs/AionClaw/AionClaw.exe",
             "ima.copilot/Application/ima.copilot.exe",
             "Programs/Trae CN/Trae CN.exe",
             "Programs/TRAE SOLO CN/TRAE SOLO CN.exe",
@@ -2210,7 +2237,7 @@ mod tests {
         };
 
         let detections = registry.detections();
-        assert_eq!(detections.len(), 8);
+        assert_eq!(detections.len(), 9);
         assert_eq!(
             detections
                 .iter()
@@ -2256,6 +2283,7 @@ mod tests {
             ("autoclaw", "AutoClaw.exe"),
             ("codex", "Codex.exe"),
             ("dumate", "DuMate.exe"),
+            ("aionclaw", "AionClaw.exe"),
             ("ima", "ima.copilot.exe"),
             ("trae", "Trae CN.exe"),
         ] {
@@ -2304,6 +2332,7 @@ mod tests {
             ("autoclaw", "AutoClaw.app"),
             ("codex", "Codex.app"),
             ("dumate", "DuMate.app"),
+            ("aionclaw", "AionClaw.app"),
             ("ima", "ima.copilot.app"),
             ("trae", "Trae CN.app"),
         ] {

@@ -315,7 +315,7 @@ describe("AT-Switch desktop shell", () => {
     const detailButtons = await screen.findAllByRole("button", {
       name: "详情",
     });
-    expect(detailButtons).toHaveLength(8);
+    expect(detailButtons).toHaveLength(9);
     expect(
       detailButtons.every((button) => !button.hasAttribute("disabled")),
     ).toBe(true);

@@ -14,6 +14,10 @@ export const SWITCHABLE_AGENT_IDS = [
   "dumate",
   "ima",
   "trae",
+  // AionClaw embeds the OpenClaw runtime inside a macOS sandbox container, so it
+  // uses the same `models.providers` / `agents.defaults.model.primary` shape as
+  // QClaw, with the authoritative state in its sqlite database.
+  "aionclaw",
 ] as const;
 
 export function isSwitchableAgent(agent: AgentSummary): boolean {

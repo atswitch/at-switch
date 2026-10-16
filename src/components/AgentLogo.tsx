@@ -1,6 +1,7 @@
 import { Bot } from "lucide-react";
 import clsx from "clsx";
 import autoclawIcon from "../assets/agents/autoclaw.png";
+import aionclawIcon from "../assets/agents/aionclaw.png";
 import codebuddyIcon from "../assets/agents/codebuddy.png";
 import codexIcon from "../assets/agents/codex.png";
 import dumateIcon from "../assets/agents/dumate.png";
@@ -16,6 +17,7 @@ const agentLogos: Partial<Record<string, string>> = {
   autoclaw: autoclawIcon,
   codex: codexIcon,
   dumate: dumateIcon,
+  aionclaw: aionclawIcon,
   ima: imaIcon,
   trae: traeIcon,
 };
