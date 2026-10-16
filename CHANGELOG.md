@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Hermes Agent integration ported from the Hermes delivery line: managed Provider and default model in `$HERMES_HOME/config.yaml` or `~/.hermes/config.yaml` (YAML, serde_yaml), Direct limited to OpenAI Chat Completions with Proxy conversion for other protocols, and ConfigTransaction baseline, encrypted backup and rollback. No restart required; the API key is referenced via the `HERMES_AT_SWITCH_API_KEY` environment variable instead of plain text.
+
 ## [v3.16.1] - 2026-10-12
 
 ### Added
