@@ -23,6 +23,8 @@ export default defineConfig({
   },
   envPrefix: ["VITE_", "TAURI_"],
   build: {
+    // Z: 是网络盘，回收站不可用，清空目录会失败；改为不清理，由构建产物直接覆盖。
+    emptyOutDir: false,
     target: process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome105" : "safari13",
     minify: process.env.TAURI_DEBUG ? false : "esbuild",
     sourcemap: Boolean(process.env.TAURI_DEBUG),

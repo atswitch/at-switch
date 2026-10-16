@@ -44,7 +44,7 @@ use self::{
     ima_adapter::ImaAdapter,
     lifecycle::RestartOutcome,
     locator::{normalized_path_string, DiscoveryContext, Installation, InstallationKind},
-    openclaw::{AutoClawAdapter, QClawAdapter},
+    openclaw::{AutoClawAdapter, EasyClawAdapter, QClawAdapter},
     trae::TraeAdapter,
     workbuddy::WorkBuddyAdapter,
 };
@@ -352,6 +352,8 @@ impl Default for AgentRegistry {
                 Box::new(DuMateAdapter),
                 Box::new(ImaAdapter::default()),
                 Box::new(TraeAdapter::unified()),
+                // EasyClaw 最新接入，渲染在切换器列表末尾。
+                Box::new(EasyClawAdapter),
             ],
             context: DiscoveryContext::native(),
         }
@@ -2170,7 +2172,8 @@ mod tests {
                 "codex",
                 "dumate",
                 "ima",
-                "trae"
+                "trae",
+                "easyclaw"
             ]
         );
     }
@@ -2187,6 +2190,7 @@ mod tests {
             "Programs/AutoClaw/AutoClaw.exe",
             "Programs/Codex/Codex.exe",
             "Programs/DuMate/DuMate.exe",
+            "Programs/EasyClaw/EasyClaw.exe",
             "ima.copilot/Application/ima.copilot.exe",
             "Programs/Trae CN/Trae CN.exe",
             "Programs/TRAE SOLO CN/TRAE SOLO CN.exe",
@@ -2210,7 +2214,7 @@ mod tests {
         };
 
         let detections = registry.detections();
-        assert_eq!(detections.len(), 8);
+        assert_eq!(detections.len(), 9);
         assert_eq!(
             detections
                 .iter()
@@ -2256,6 +2260,7 @@ mod tests {
             ("autoclaw", "AutoClaw.exe"),
             ("codex", "Codex.exe"),
             ("dumate", "DuMate.exe"),
+            ("easyclaw", "EasyClaw.exe"),
             ("ima", "ima.copilot.exe"),
             ("trae", "Trae CN.exe"),
         ] {
@@ -2304,6 +2309,7 @@ mod tests {
             ("autoclaw", "AutoClaw.app"),
             ("codex", "Codex.app"),
             ("dumate", "DuMate.app"),
+            ("easyclaw", "easyclaw.app"),
             ("ima", "ima.copilot.app"),
             ("trae", "Trae CN.app"),
         ] {
