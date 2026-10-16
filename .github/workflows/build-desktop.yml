@@ -9,6 +9,7 @@ on:
   push:
     branches:
       - release-workflow
+      - release/workflow
   workflow_dispatch:
     inputs:
       ref:
