@@ -108,6 +108,7 @@ const mockAgentDisplayNames = {
   autoclaw: "AutoClaw",
   codex: "Codex",
   dumate: "百度搭子",
+  hermes: "Hermes Agent",
   ima: "ima",
   trae: "TRAE",
 } as const;

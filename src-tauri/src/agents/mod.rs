@@ -1,6 +1,7 @@
 mod codebuddy;
 mod codex;
 mod dumate;
+mod hermes;
 mod ima;
 mod ima_adapter;
 mod ima_local;
@@ -41,6 +42,7 @@ use self::{
     codebuddy::CodeBuddyAdapter,
     codex::CodexAdapter,
     dumate::DuMateAdapter,
+    hermes::HermesAdapter,
     ima_adapter::ImaAdapter,
     lifecycle::RestartOutcome,
     locator::{normalized_path_string, DiscoveryContext, Installation, InstallationKind},
@@ -352,6 +354,7 @@ impl Default for AgentRegistry {
                 Box::new(DuMateAdapter),
                 Box::new(ImaAdapter::default()),
                 Box::new(TraeAdapter::unified()),
+                Box::new(HermesAdapter),
             ],
             context: DiscoveryContext::native(),
         }
@@ -2170,7 +2173,8 @@ mod tests {
                 "codex",
                 "dumate",
                 "ima",
-                "trae"
+                "trae",
+                "hermes"
             ]
         );
     }
@@ -2195,9 +2199,17 @@ mod tests {
             fs::create_dir_all(executable.parent().expect("parent")).expect("app directory");
             fs::write(executable, b"test executable").expect("executable");
         }
+        let home = temp.path().join("home");
+        // Hermes 通过命令行安装被发现，同时需要已初始化的配置文件。
+        let hermes_bin = home.join(".local/bin/hermes.exe");
+        fs::create_dir_all(hermes_bin.parent().expect("hermes bin parent")).expect("hermes bin");
+        fs::write(&hermes_bin, b"test executable").expect("hermes executable");
+        fs::create_dir_all(home.join(".hermes")).expect("Hermes config directory");
+        fs::write(home.join(".hermes/config.yaml"), b"model: m\nprovider: p\n")
+            .expect("Hermes config");
         let registry = AgentRegistry {
             context: DiscoveryContext {
-                home: temp.path().join("home"),
+                home,
                 application_data_dir: temp.path().join("Roaming"),
                 application_dirs: Vec::new(),
                 path_entries: Vec::new(),
@@ -2210,7 +2222,7 @@ mod tests {
         };
 
         let detections = registry.detections();
-        assert_eq!(detections.len(), 8);
+        assert_eq!(detections.len(), 9);
         assert_eq!(
             detections
                 .iter()
@@ -2256,6 +2268,7 @@ mod tests {
             ("autoclaw", "AutoClaw.exe"),
             ("codex", "Codex.exe"),
             ("dumate", "DuMate.exe"),
+            ("hermes", "Hermes.exe"),
             ("ima", "ima.copilot.exe"),
             ("trae", "Trae CN.exe"),
         ] {
@@ -2304,6 +2317,7 @@ mod tests {
             ("autoclaw", "AutoClaw.app"),
             ("codex", "Codex.app"),
             ("dumate", "DuMate.app"),
+            ("hermes", "Hermes.app"),
             ("ima", "ima.copilot.app"),
             ("trae", "Trae CN.app"),
         ] {
