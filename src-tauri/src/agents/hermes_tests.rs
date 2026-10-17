@@ -205,6 +205,67 @@ fn verify_requires_the_env_file_key() {
 }
 
 #[test]
+fn ensure_env_api_key_backfills_missing_env_file_and_verification_passes() {
+    let temp = tempdir().expect("temp");
+    let path = temp.path().join("config.yaml");
+    seed(&path, LEGACY_CONFIG);
+    // 不播种 .env：真实切换流程中由 ensure_env_api_key 自动补建受管行。
+
+    let updated = HermesAdapter
+        .build_config(&detection(path.clone()), &desired())
+        .expect("build");
+    fs::write(&path, &updated).expect("apply");
+    ensure_env_api_key(&detection(path.clone()), desired().credential).expect("ensure env");
+
+    let env_path = path.parent().expect("config parent").join(".env");
+    let content = fs::read_to_string(&env_path).expect("env");
+    assert!(content.contains("HERMES_AT_SWITCH_API_KEY=local-token"));
+    HermesAdapter
+        .verify_config(&detection(path), &desired())
+        .expect("verified");
+}
+
+#[test]
+fn ensure_env_api_key_rotates_value_and_keeps_user_lines() {
+    let temp = tempdir().expect("temp");
+    let path = temp.path().join("config.yaml");
+    seed(&path, LEGACY_CONFIG);
+    let env_path = path.parent().expect("config parent").join(".env");
+    fs::write(
+        &env_path,
+        "HERMES_USER_KEY=keep\n  HERMES_AT_SWITCH_API_KEY=stale-token\nTAIL=1\n",
+    )
+    .expect("seed env");
+
+    ensure_env_api_key(&detection(path), "rotated-token").expect("ensure env");
+
+    let content = fs::read_to_string(&env_path).expect("env");
+    assert!(content.contains("HERMES_USER_KEY=keep"));
+    assert!(content.contains("HERMES_AT_SWITCH_API_KEY=rotated-token"));
+    assert!(content.contains("TAIL=1"));
+    assert!(!content.contains("stale-token"));
+    // 受管键只保留一行，不产生重复条目。
+    assert_eq!(
+        content
+            .lines()
+            .filter(|line| line.contains("HERMES_AT_SWITCH_API_KEY"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn ensure_env_api_key_rejects_empty_credential() {
+    let temp = tempdir().expect("temp");
+    let path = temp.path().join("config.yaml");
+    seed(&path, LEGACY_CONFIG);
+
+    let error = ensure_env_api_key(&detection(path.clone()), "  ").expect_err("empty credential");
+    assert_eq!(error.code, "hermes_api_key_empty");
+    assert!(!path.parent().expect("config parent").join(".env").exists());
+}
+
+#[test]
 fn verify_rejects_inline_api_key() {
     let temp = tempdir().expect("temp");
     let path = temp.path().join("config.yaml");

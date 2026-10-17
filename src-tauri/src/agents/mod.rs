@@ -1026,6 +1026,15 @@ impl AgentService {
                 return Err(error);
             }
         };
+        // Hermes 的 config.yaml 只落 key_env 指针，凭据本体必须写进同目录的
+        // .env 受管行；与配置写入共用同一个事务窗口，这里失败同样回滚配置。
+        if draft.agent_id == "hermes" {
+            if let Err(error) = hermes::ensure_env_api_key(&detection, desired.credential) {
+                let _ = self.transaction.restore_backup(&result.backup_path);
+                self.cleanup_new_local_token(&local_token_metadata);
+                return Err(error);
+            }
+        }
         // verify_config 自己读 config_path 上的最新文件内容，不依赖 detect 的
         // 副产物（installation/config_health 等都不会在写文件后变化），所以
         // 直接复用上一次 detection，避免再次跑 locate_desktop_app 的全平台扫描。
