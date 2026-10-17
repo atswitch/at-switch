@@ -3,7 +3,7 @@ use std::{fs, path::PathBuf};
 use tempfile::tempdir;
 
 use super::*;
-use crate::domain::{AgentBindingMode, AgentConfigHealth, AgentInstallStatus};
+use crate::domain::{AgentBindingMode, AgentConfigHealth, AgentInstallStatus, ApiProtocol};
 
 fn detection(config_path: PathBuf) -> AgentDetection {
     AgentDetection {
@@ -22,188 +22,216 @@ fn detection(config_path: PathBuf) -> AgentDetection {
     }
 }
 
-fn desired_proxy<'a>() -> DesiredAgentBinding<'a> {
+fn desired<'a>() -> DesiredAgentBinding<'a> {
     DesiredAgentBinding {
-        mode: AgentBindingMode::Proxy,
-        provider_name: "蒙云",
+        mode: AgentBindingMode::Direct,
+        provider_name: "蒙云智算",
         model_id: "GLM-5.2",
         supports_tools: true,
-        upstream_protocol: ApiProtocol::OpenaiResponses,
+        upstream_protocol: ApiProtocol::OpenaiChatCompletions,
         source_protocol: ApiProtocol::OpenaiChatCompletions,
-        base_url: "http://127.0.0.1:18123/v1/",
+        base_url: "https://api.g2claw.com/v1/",
         credential: "local-token",
     }
 }
 
-fn write_baseline(path: &PathBuf, body: &str) {
-    fs::create_dir_all(path.parent().expect("config parent")).expect("config dir");
-    fs::write(path, body).expect("baseline write");
+fn seed(path: &PathBuf, body: &str) {
+    fs::create_dir_all(path.parent().expect("config parent")).expect("config directory");
+    fs::write(path, body).expect("seed config");
 }
 
-#[test]
-fn hermes_adapter_metadata_is_stable() {
-    assert_eq!(HermesAdapter.id(), "hermes");
-    assert_eq!(HermesAdapter.display_name(), "Hermes Agent");
-    assert_eq!(
-        HermesAdapter.source_protocol(AgentBindingMode::Proxy, ApiProtocol::OpenaiResponses),
-        ApiProtocol::OpenaiChatCompletions
-    );
-    assert_eq!(
-        HermesAdapter.source_protocol(AgentBindingMode::Direct, ApiProtocol::AnthropicMessages),
-        ApiProtocol::AnthropicMessages
-    );
+fn seed_env(path: &Path) {
+    let env_path = path.parent().expect("config parent").join(".env");
+    fs::write(env_path, "HERMES_AT_SWITCH_API_KEY=test-key\n").expect("seed env");
 }
 
+fn model_block(path: &Path) -> serde_yaml::Mapping {
+    let raw = fs::read_to_string(path).expect("config");
+    let value: serde_yaml::Value = serde_yaml::from_str(&raw).expect("yaml");
+    value
+        .get("model")
+        .and_then(serde_yaml::Value::as_mapping)
+        .cloned()
+        .expect("model block")
+}
+
+const LEGACY_CONFIG: &str = r#"model: "deepseek-v4-flash"
+provider: "custom:at-switch:deepseek-v4-flash"
+custom_providers:
+  - name: at-switch
+    base_url: https://api.g2claw.com/v1
+    key_env: HERMES_AT_SWITCH_API_KEY
+    model: deepseek-v4-flash
+    api_mode: chat_completions
+  - name: Api.g2claw.com
+    base_url: https://api.g2claw.com/v1
+    key_env: HERMES_CUSTOM_API_G2CLAW_COM_API_KEY
+    model: NMauto
+    api_mode: chat_completions
+database:
+  journal_mode: wal
+"#;
+
 #[test]
-fn probe_accepts_minimal_hermes_configuration() {
+fn writes_the_v45_model_block_and_removes_legacy_entries() {
     let temp = tempdir().expect("temp");
-    let config_path = temp.path().join("config.yaml");
-    write_baseline(
-        &config_path,
-        "model: existing-model\nprovider: openrouter\nfallback_providers: []\n",
-    );
-    probe_hermes(&config_path).expect("probe");
-}
+    let path = temp.path().join("config.yaml");
+    seed(&path, LEGACY_CONFIG);
 
-#[test]
-fn probe_rejects_unparseable_yaml() {
-    let temp = tempdir().expect("temp");
-    let config_path = temp.path().join("config.yaml");
-    write_baseline(&config_path, "model: [\nbroken: yaml");
-    let error = probe_hermes(&config_path).expect_err("probe error");
-    assert_eq!(error.code, "agent_config_unparseable");
-}
-
-#[test]
-fn build_config_inserts_provider_block_preserves_comments() {
-    let temp = tempdir().expect("temp");
-    let config_path = temp.path().join("config.yaml");
-    write_baseline(
-        &config_path,
-        "# 用户自定义的注释，应该被保留\nmodel: previous-model\nprovider: openrouter\n\ntheme: dark\n",
-    );
-
-    let detection = detection(config_path.clone());
-    let desired = desired_proxy();
     let updated = HermesAdapter
-        .build_config(&detection, &desired)
-        .expect("build config");
-    let updated = std::str::from_utf8(&updated).expect("utf8");
+        .build_config(&detection(path.clone()), &desired())
+        .expect("build");
 
-    assert!(updated.contains("# 用户自定义的注释，应该被保留"));
-    assert!(updated.contains("theme: dark"));
-    assert!(updated.contains("model: \"GLM-5.2\""));
-    assert!(updated.contains("provider: \"custom:at-switch:GLM-5.2\""));
-    assert!(updated.contains("providers:"));
-    assert!(updated.contains("  at-switch:"));
-    assert!(updated.contains("    api: \"http://127.0.0.1:18123/v1\""));
-    assert!(updated.contains("    key_env: HERMES_AT_SWITCH_API_KEY"));
-    assert!(updated.contains("    transport: chat_completions"));
-    assert!(updated.contains("    default_model: \"GLM-5.2\""));
-    assert!(!updated.contains("api_key"));
-    assert!(!updated.contains("key_cmd"));
-    fs::write(&config_path, updated).expect("write updated");
+    fs::write(&path, &updated).expect("apply");
+    let model = model_block(&path);
+    assert_eq!(
+        model
+            .get(serde_yaml::Value::from("provider"))
+            .and_then(serde_yaml::Value::as_str),
+        Some("custom")
+    );
+    assert_eq!(
+        model
+            .get(serde_yaml::Value::from("default"))
+            .and_then(serde_yaml::Value::as_str),
+        Some("GLM-5.2")
+    );
+    assert_eq!(
+        model
+            .get(serde_yaml::Value::from("base_url"))
+            .and_then(serde_yaml::Value::as_str),
+        Some("https://api.g2claw.com/v1")
+    );
+    assert_eq!(
+        model
+            .get(serde_yaml::Value::from("key_env"))
+            .and_then(serde_yaml::Value::as_str),
+        Some("HERMES_AT_SWITCH_API_KEY")
+    );
+    assert_eq!(
+        model
+            .get(serde_yaml::Value::from("api_mode"))
+            .and_then(serde_yaml::Value::as_str),
+        Some("chat_completions")
+    );
+    // 明文凭据必须移除，凭据只经 key_env 指针引用。
+    assert!(model.get(serde_yaml::Value::from("api_key")).is_none());
+    // 未知块与用户自有 custom_providers 条目保留。
+    let raw = fs::read_to_string(&path).expect("config");
+    assert!(raw.contains("journal_mode: wal"));
+    assert!(raw.contains("Api.g2claw.com"));
+    assert!(!raw.contains("- name: at-switch"));
+    // 旧扁平 provider 键被清理。
+    assert!(!raw.contains("custom:at-switch"));
+}
+
+#[test]
+fn verify_accepts_the_written_config_with_env_key() {
+    let temp = tempdir().expect("temp");
+    let path = temp.path().join("config.yaml");
+    seed(&path, LEGACY_CONFIG);
+    seed_env(&path);
+
+    let updated = HermesAdapter
+        .build_config(&detection(path.clone()), &desired())
+        .expect("build");
+    fs::write(&path, &updated).expect("apply");
 
     HermesAdapter
-        .verify_config(&detection, &desired)
-        .expect("verify");
+        .verify_config(&detection(path), &desired())
+        .expect("verified");
 }
 
 #[test]
-fn build_config_replaces_previous_at_switch_provider_block() {
+fn verify_requires_the_env_file_key() {
     let temp = tempdir().expect("temp");
-    let config_path = temp.path().join("config.yaml");
-    write_baseline(
-        &config_path,
-        "model: previous-model\nprovider: \"custom:at-switch:old-model\"\nproviders:\n  at-switch:\n    api: \"https://old.example.com/v1\"\n    api_key: \"old-secret\"\n    transport: anthropic_messages\n    default_model: \"old-model\"\n  openrouter: {}\n",
-    );
+    let path = temp.path().join("config.yaml");
+    seed(&path, LEGACY_CONFIG);
+    // 不播种 .env：缺少凭据指针指向的键必须显式报错，而不是静默成功。
 
-    let detection = detection(config_path.clone());
-    let desired = desired_proxy();
     let updated = HermesAdapter
-        .build_config(&detection, &desired)
-        .expect("build config");
-    let updated = std::str::from_utf8(&updated).expect("utf8");
-    let occurrences = updated.matches("  at-switch:").count();
-    assert_eq!(occurrences, 1);
-    fs::write(&config_path, updated).expect("write updated");
-    assert!(!updated.contains("old-secret"));
-    assert!(!updated.contains("old.example.com"));
-    assert!(updated.contains("    transport: chat_completions"));
-    assert!(updated.contains("    default_model: \"GLM-5.2\""));
+        .build_config(&detection(path.clone()), &desired())
+        .expect("build");
+    fs::write(&path, &updated).expect("apply");
 
-    HermesAdapter
-        .verify_config(&detection, &desired)
-        .expect("verify");
-}
-
-#[test]
-fn build_config_appends_providers_when_missing() {
-    let temp = tempdir().expect("temp");
-    let config_path = temp.path().join("config.yaml");
-    write_baseline(
-        &config_path,
-        "model: fallback-model\nprovider: openrouter\n",
-    );
-    let detection = detection(config_path.clone());
-    let desired = desired_proxy();
-    let updated = HermesAdapter
-        .build_config(&detection, &desired)
-        .expect("build config");
-    let updated = std::str::from_utf8(&updated).expect("utf8");
-    assert!(updated.contains("providers:"));
-    assert!(updated.contains("  at-switch:"));
-    assert!(updated.contains("    key_env: HERMES_AT_SWITCH_API_KEY"));
-}
-
-#[test]
-fn verify_config_detects_unexpected_provider_layout() {
-    let temp = tempdir().expect("temp");
-    let config_path = temp.path().join("config.yaml");
-    write_baseline(
-        &config_path,
-        "model: GLM-5.2\nprovider: \"custom:at-switch:GLM-5.2\"\nproviders:\n  at-switch:\n    api: \"http://127.0.0.1:18123/v1\"\n    key_env: HERMES_AT_SWITCH_API_KEY\n    transport: anthropic_messages\n    default_model: \"GLM-5.2\"\n",
-    );
-    let detection = detection(config_path.clone());
-    let desired = desired_proxy();
     let error = HermesAdapter
-        .verify_config(&detection, &desired)
-        .expect_err("verify error");
+        .verify_config(&detection(path), &desired())
+        .expect_err("missing env key");
+    assert_eq!(error.code, "hermes_api_key_env_missing");
+}
+
+#[test]
+fn verify_rejects_inline_api_key() {
+    let temp = tempdir().expect("temp");
+    let path = temp.path().join("config.yaml");
+    seed_env(&path);
+    seed(
+        &path,
+        "model:\n  provider: custom\n  default: GLM-5.2\n  base_url: https://api.g2claw.com/v1\n  api_key: plaintext\n  api_mode: chat_completions\n",
+    );
+
+    let error = HermesAdapter
+        .verify_config(&detection(path), &desired())
+        .expect_err("inline api key");
     assert_eq!(error.code, "agent_config_not_applied");
 }
 
 #[test]
-fn build_native_config_restores_baseline_when_present() {
+fn retains_user_model_fields_across_switches() {
     let temp = tempdir().expect("temp");
-    let config_path = temp.path().join("config.yaml");
-    write_baseline(&config_path, "model: user-model\nprovider: openrouter\n");
-    let detection = detection(config_path.clone());
-    let original = fs::read(&config_path).expect("read baseline");
+    let path = temp.path().join("config.yaml");
+    seed_env(&path);
+    seed(
+        &path,
+        "model:\n  provider: custom\n  default: old-model\n  base_url: https://api.g2claw.com/v1\n  api_mode: chat_completions\n  reasoning_effort: medium\n",
+    );
+
+    let updated = HermesAdapter
+        .build_config(&detection(path.clone()), &desired())
+        .expect("build");
+    fs::write(&path, &updated).expect("apply");
+
+    let model = model_block(&path);
+    // 用户在模型块里的自定义字段跨切换保留。
+    assert_eq!(
+        model
+            .get(serde_yaml::Value::from("reasoning_effort"))
+            .and_then(serde_yaml::Value::as_str),
+        Some("medium")
+    );
+    assert_eq!(
+        model
+            .get(serde_yaml::Value::from("default"))
+            .and_then(serde_yaml::Value::as_str),
+        Some("GLM-5.2")
+    );
+}
+
+#[test]
+fn restore_returns_the_baseline_content() {
+    let temp = tempdir().expect("temp");
     let baseline = BaselineSnapshot {
         existed: true,
-        content: original,
+        content: b"model:\n  provider: custom\n  default: official-model\n".to_vec(),
     };
     let restored = HermesAdapter
-        .build_native_config(&detection, &baseline)
+        .build_native_config(&detection(temp.path().join("config.yaml")), &baseline)
         .expect("restore");
     assert_eq!(restored, baseline.content);
 }
 
 #[test]
-fn build_native_config_leaves_disk_untouched_when_no_baseline() {
+fn probe_accepts_v45_and_flat_shapes() {
     let temp = tempdir().expect("temp");
-    let config_path = temp.path().join("config.yaml");
-    write_baseline(&config_path, "model: placeholder\nprovider: placeholder\n");
-    let detection = detection(config_path);
-    let baseline = BaselineSnapshot {
-        existed: false,
-        content: Vec::new(),
-    };
-    let restored = HermesAdapter
-        .build_native_config(&detection, &baseline)
-        .expect("restore");
-    // No baseline means AT-Switch never wrote to this Agent. Emit an empty
-    // payload so the disk reverts to its first-run / factory state instead of
-    // being pinned to a hardcoded provider.
-    assert!(restored.is_empty());
+    let v45 = temp.path().join("v45.yaml");
+    seed(&v45, "model:\n  provider: custom\n  default: m\n");
+    probe_hermes(&v45).expect("v45 probe");
+
+    let flat = temp.path().join("flat.yaml");
+    seed(&flat, "model: m\nprovider: p\n");
+    probe_hermes(&flat).expect("flat probe");
+
+    let broken = temp.path().join("broken.yaml");
+    seed(&broken, "model:\n  - list\n  - not a mapping\n");
+    assert!(probe_hermes(&broken).is_err());
 }
