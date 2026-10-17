@@ -9,10 +9,14 @@
 ## 机制摘要
 
 - 应用：Hermes Agent。macOS `Hermes.app` / Bundle `com.hermes.agent`；Windows
-  `Programs/Hermes/Hermes.exe`、`Hermes/Hermes.exe`、`Hermes.exe`；同时支持命令行
-  安装发现（`~/.local/bin`、`~/.cargo/bin`、npm 全局目录、PATH、注册表 App Paths）。
-- 配置权威源：`$HERMES_HOME/config.yaml` 或 `~/.hermes/config.yaml`（YAML，
-  serde_yaml 解析）。
+  `Programs/Hermes/Hermes.exe`、`Hermes/Hermes.exe`、`Hermes.exe`、桌面版
+  `%LOCALAPPDATA%\Hermes Agent CN Desktop\hermes-agent-cn-desktop.exe`（优先于
+  CLI，因为配置也指向桌面版数据区）；同时支持命令行安装发现（`~/.local/bin`、
+  `~/.cargo/bin`、npm 全局目录、PATH、注册表 App Paths）。
+- 配置权威源：桌面版安装时为
+  `%LOCALAPPDATA%\Hermes Agent CN Desktop\data\hermes-home\`（与 CLI 的
+  `~/.hermes` 互不共享，桌面版 `.env` 也在这里）；否则 `$HERMES_HOME` 或
+  `~/.hermes`（YAML，serde_yaml 解析）。
 - 写入：受管 Provider `at-switch` + 默认模型；API Key 经环境变量
   `HERMES_AT_SWITCH_API_KEY` 引用，config.yaml 不落明文。切换时由 AT-Switch
   自动把凭据 upsert 进 `~/.hermes/.env` 的受管行（用户其余键原样保留；Direct
