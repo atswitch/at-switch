@@ -15,7 +15,7 @@ fn detection(config_path: PathBuf) -> AgentDetection {
         install_status: AgentInstallStatus::Installed,
         config_health: AgentConfigHealth::Healthy,
         write_supported: true,
-        needs_restart: false,
+        needs_restart: true,
         message: None,
         custom_install_path: None,
         using_custom_install_path: false,
@@ -45,14 +45,34 @@ fn seed_env(path: &Path) {
     fs::write(env_path, "HERMES_AT_SWITCH_API_KEY=test-key\n").expect("seed env");
 }
 
-fn model_block(path: &Path) -> serde_yaml::Mapping {
+fn yaml_block(path: &Path, key: &str) -> serde_yaml::Mapping {
     let raw = fs::read_to_string(path).expect("config");
     let value: serde_yaml::Value = serde_yaml::from_str(&raw).expect("yaml");
     value
-        .get("model")
+        .get(key)
         .and_then(serde_yaml::Value::as_mapping)
         .cloned()
-        .expect("model block")
+        .unwrap_or_else(|| panic!("{key} block"))
+}
+
+fn model_block(path: &Path) -> serde_yaml::Mapping {
+    yaml_block(path, "model")
+}
+
+fn managed_provider_entry(path: &Path) -> serde_yaml::Mapping {
+    let providers = yaml_block(path, "providers");
+    providers
+        .get(serde_yaml::Value::from(MANAGED_PROVIDER))
+        .and_then(serde_yaml::Value::as_mapping)
+        .cloned()
+        .expect("managed provider entry")
+}
+
+fn str_field(block: &serde_yaml::Mapping, key: &str) -> Option<String> {
+    block
+        .get(serde_yaml::Value::from(key))
+        .and_then(serde_yaml::Value::as_str)
+        .map(ToOwned::to_owned)
 }
 
 const LEGACY_CONFIG: &str = r#"model: "deepseek-v4-flash"
@@ -73,7 +93,7 @@ database:
 "#;
 
 #[test]
-fn writes_the_v45_model_block_and_removes_legacy_entries() {
+fn writes_named_provider_entry_and_removes_legacy_entries() {
     let temp = tempdir().expect("temp");
     let path = temp.path().join("config.yaml");
     seed(&path, LEGACY_CONFIG);
@@ -84,38 +104,32 @@ fn writes_the_v45_model_block_and_removes_legacy_entries() {
 
     fs::write(&path, &updated).expect("apply");
     let model = model_block(&path);
+    assert_eq!(str_field(&model, "provider").as_deref(), Some(MANAGED_PROVIDER));
+    assert_eq!(str_field(&model, "default").as_deref(), Some("GLM-5.2"));
+    // 端点与凭据收敛到 provider 条目，模型块不再重复承载。
+    assert!(str_field(&model, "base_url").is_none());
+    assert!(str_field(&model, "key_env").is_none());
+    assert!(str_field(&model, "api_mode").is_none());
+    assert!(model.get(serde_yaml::Value::from("api_key")).is_none());
+
+    let entry = managed_provider_entry(&path);
     assert_eq!(
-        model
-            .get(serde_yaml::Value::from("provider"))
-            .and_then(serde_yaml::Value::as_str),
-        Some("custom")
-    );
-    assert_eq!(
-        model
-            .get(serde_yaml::Value::from("default"))
-            .and_then(serde_yaml::Value::as_str),
-        Some("GLM-5.2")
-    );
-    assert_eq!(
-        model
-            .get(serde_yaml::Value::from("base_url"))
-            .and_then(serde_yaml::Value::as_str),
+        str_field(&entry, "base_url").as_deref(),
         Some("https://api.g2claw.com/v1")
     );
+    assert_eq!(str_field(&entry, "default_model").as_deref(), Some("GLM-5.2"));
     assert_eq!(
-        model
-            .get(serde_yaml::Value::from("key_env"))
-            .and_then(serde_yaml::Value::as_str),
-        Some("HERMES_AT_SWITCH_API_KEY")
+        str_field(&entry, "key_env").as_deref(),
+        Some(HERMES_API_KEY_ENV)
     );
     assert_eq!(
-        model
-            .get(serde_yaml::Value::from("api_mode"))
-            .and_then(serde_yaml::Value::as_str),
+        str_field(&entry, "api_mode").as_deref(),
         Some("chat_completions")
     );
+    assert_eq!(str_field(&entry, "name").as_deref(), Some(DISPLAY_NAME));
     // 明文凭据必须移除，凭据只经 key_env 指针引用。
-    assert!(model.get(serde_yaml::Value::from("api_key")).is_none());
+    assert!(entry.get(serde_yaml::Value::from("api_key")).is_none());
+
     // 未知块与用户自有 custom_providers 条目保留。
     let raw = fs::read_to_string(&path).expect("config");
     assert!(raw.contains("journal_mode: wal"));
@@ -123,6 +137,36 @@ fn writes_the_v45_model_block_and_removes_legacy_entries() {
     assert!(!raw.contains("- name: at-switch"));
     // 旧扁平 provider 键被清理。
     assert!(!raw.contains("custom:at-switch"));
+}
+
+#[test]
+fn switching_models_updates_both_model_block_and_provider_entry() {
+    let temp = tempdir().expect("temp");
+    let path = temp.path().join("config.yaml");
+    seed(&path, LEGACY_CONFIG);
+
+    let first = HermesAdapter
+        .build_config(&detection(path.clone()), &desired())
+        .expect("build first");
+    fs::write(&path, &first).expect("apply first");
+
+    let second = DesiredAgentBinding {
+        model_id: "NMauto",
+        ..desired()
+    };
+    let updated = HermesAdapter
+        .build_config(&detection(path.clone()), &second)
+        .expect("build second");
+    fs::write(&path, &updated).expect("apply second");
+
+    assert_eq!(
+        str_field(&model_block(&path), "default").as_deref(),
+        Some("NMauto")
+    );
+    assert_eq!(
+        str_field(&managed_provider_entry(&path), "default_model").as_deref(),
+        Some("NMauto")
+    );
 }
 
 #[test]
@@ -167,12 +211,25 @@ fn verify_rejects_inline_api_key() {
     seed_env(&path);
     seed(
         &path,
-        "model:\n  provider: custom\n  default: GLM-5.2\n  base_url: https://api.g2claw.com/v1\n  api_key: plaintext\n  api_mode: chat_completions\n",
+        "model:\n  provider: at-switch\n  default: GLM-5.2\nproviders:\n  at-switch:\n    name: AT-Switch\n    base_url: https://api.g2claw.com/v1\n    default_model: GLM-5.2\n    key_env: HERMES_AT_SWITCH_API_KEY\n    api_key: plaintext\n    api_mode: chat_completions\n",
     );
 
     let error = HermesAdapter
         .verify_config(&detection(path), &desired())
         .expect_err("inline api key");
+    assert_eq!(error.code, "agent_config_not_applied");
+}
+
+#[test]
+fn verify_rejects_missing_provider_entry() {
+    let temp = tempdir().expect("temp");
+    let path = temp.path().join("config.yaml");
+    seed_env(&path);
+    seed(&path, "model:\n  provider: at-switch\n  default: GLM-5.2\n");
+
+    let error = HermesAdapter
+        .verify_config(&detection(path), &desired())
+        .expect_err("missing entry");
     assert_eq!(error.code, "agent_config_not_applied");
 }
 
@@ -221,7 +278,7 @@ fn restore_returns_the_baseline_content() {
 }
 
 #[test]
-fn probe_accepts_v45_and_flat_shapes() {
+fn probe_accepts_v45_flat_and_named_shapes() {
     let temp = tempdir().expect("temp");
     let v45 = temp.path().join("v45.yaml");
     seed(&v45, "model:\n  provider: custom\n  default: m\n");
@@ -231,7 +288,15 @@ fn probe_accepts_v45_and_flat_shapes() {
     seed(&flat, "model: m\nprovider: p\n");
     probe_hermes(&flat).expect("flat probe");
 
+    let named = temp.path().join("named.yaml");
+    seed(&named, "model:\n  provider: at-switch\n  default: m\nproviders:\n  at-switch:\n    name: AT-Switch\n    base_url: https://api.g2claw.com/v1\n");
+    probe_hermes(&named).expect("named probe");
+
     let broken = temp.path().join("broken.yaml");
     seed(&broken, "model:\n  - list\n  - not a mapping\n");
     assert!(probe_hermes(&broken).is_err());
+
+    let providers_sequence = temp.path().join("providers-sequence.yaml");
+    seed(&providers_sequence, "providers:\n  - not a mapping\n");
+    assert!(probe_hermes(&providers_sequence).is_err());
 }
