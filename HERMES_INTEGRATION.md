@@ -14,7 +14,10 @@
 - 配置权威源：`$HERMES_HOME/config.yaml` 或 `~/.hermes/config.yaml`（YAML，
   serde_yaml 解析）。
 - 写入：受管 Provider `at-switch` + 默认模型；API Key 经环境变量
-  `HERMES_AT_SWITCH_API_KEY` 引用，不落明文。
+  `HERMES_AT_SWITCH_API_KEY` 引用，config.yaml 不落明文。切换时由 AT-Switch
+  自动把凭据 upsert 进 `~/.hermes/.env` 的受管行（用户其余键原样保留；Direct
+  凭据轮换 / Direct↔Proxy 互切时原地替换），该写入与 config.yaml 共用同一
+  事务窗口，失败时随配置一起回滚。
 - 协议：Direct 仅 OpenAI Chat Completions（`hermes_direct_protocol_unsupported`）；
   其余协议走本地代理。
 - 事务：`ConfigTransaction` 基线 + 加密备份 + 原子替换 + 回读校验 + 失败回滚。

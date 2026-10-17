@@ -169,7 +169,7 @@ impl AgentAdapter for HermesAdapter {
                 "Hermes 的凭据文件缺少 HERMES_AT_SWITCH_API_KEY",
             )
             .with_recovery(
-                "请在 ~/.hermes/.env 中添加一行 HERMES_AT_SWITCH_API_KEY=<你的 API Key>，然后重试。",
+                "AT-Switch 切换时会自动写入该键；若 ~/.hermes/.env 被手动改动，重新执行一次切换即可修复。",
             ));
         }
         Ok(())
@@ -347,6 +347,65 @@ fn env_file_has_api_key(detection: &AgentDetection) -> bool {
             .strip_prefix("HERMES_AT_SWITCH_API_KEY=")
             .is_some_and(|value| !value.trim().is_empty())
     })
+}
+
+/// 切换时把凭据写入 `~/.hermes/.env` 的受管行：已有则原地替换（覆盖
+/// Direct 凭据轮换与 Direct↔Proxy 互切后的本地令牌），没有则追加；用户
+/// 自有的其它键原样保留。config.yaml 只承载 `key_env` 指针，凭据本体由
+/// 这一步落盘，`verify_config` 才能放行。
+pub(super) fn ensure_env_api_key(
+    detection: &AgentDetection,
+    credential: &str,
+) -> AppResult<()> {
+    if credential.trim().is_empty() {
+        return Err(CommandError::new(
+            "hermes_api_key_empty",
+            "待写入的 Hermes API Key 为空",
+        ));
+    }
+    let path = env_file_path(detection)
+        .ok_or_else(|| CommandError::new("agent_config_path_missing", "Hermes 配置路径不可用"))?;
+    let prefix = format!("{HERMES_API_KEY_ENV}=");
+    let managed_line = format!("{prefix}{credential}");
+    let mut lines: Vec<String> = fs::read_to_string(&path)
+        .unwrap_or_default()
+        .lines()
+        .map(ToOwned::to_owned)
+        .collect();
+    let mut replaced = false;
+    for line in lines.iter_mut() {
+        if line.trim_start().starts_with(&prefix) {
+            *line = managed_line.clone();
+            replaced = true;
+        }
+    }
+    if !replaced {
+        lines.push(managed_line);
+    }
+    #[cfg(unix)]
+    let created = !path.exists();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            CommandError::new(
+                "hermes_env_write_failed",
+                format!("无法创建 Hermes 凭据目录：{error}"),
+            )
+        })?;
+    }
+    fs::write(&path, lines.join("\n") + "\n").map_err(|error| {
+        CommandError::new(
+            "hermes_env_write_failed",
+            format!("无法写入 Hermes 凭据文件：{error}"),
+        )
+    })?;
+    #[cfg(unix)]
+    {
+        if created {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        }
+    }
+    Ok(())
 }
 
 fn applied_error() -> CommandError {
