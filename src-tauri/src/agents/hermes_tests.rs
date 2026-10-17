@@ -361,3 +361,118 @@ fn probe_accepts_v45_flat_and_named_shapes() {
     seed(&providers_sequence, "providers:\n  - not a mapping\n");
     assert!(probe_hermes(&providers_sequence).is_err());
 }
+
+#[cfg(target_os = "windows")]
+fn test_context(home: PathBuf, local_app_data: Option<PathBuf>) -> DiscoveryContext {
+    DiscoveryContext {
+        home,
+        application_data_dir: home.join("AppData/Roaming"),
+        application_dirs: Vec::new(),
+        path_entries: Vec::new(),
+        system_application_search: false,
+        custom_installation_path: None,
+        local_app_data,
+        program_files: Vec::new(),
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn config_directory_prefers_the_desktop_data_home_when_installed() {
+    let temp = tempdir().expect("temp");
+    let local = temp.path().join("LocalAppData");
+    let data_home = local
+        .join("Hermes Agent CN Desktop")
+        .join("data")
+        .join("hermes-home");
+    fs::create_dir_all(&data_home).expect("desktop data home");
+    let context = test_context(temp.path().join("home"), Some(local));
+
+    assert_eq!(
+        resolve_config_directory(&context, None),
+        Some(data_home)
+    );
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn config_directory_treats_a_fresh_desktop_install_as_managed() {
+    let temp = tempdir().expect("temp");
+    let local = temp.path().join("LocalAppData");
+    let app_root = local.join("Hermes Agent CN Desktop");
+    fs::create_dir_all(&app_root).expect("app root");
+    fs::write(
+        app_root.join("hermes-agent-cn-desktop.exe"),
+        b"stub executable",
+    )
+    .expect("desktop exe");
+    let context = test_context(temp.path().join("home"), Some(local));
+
+    // 装好但尚未启动过：hermes-home 还不存在，仍按桌面版数据目录解析。
+    assert_eq!(
+        resolve_config_directory(&context, None),
+        Some(app_root.join("data").join("hermes-home"))
+    );
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn config_directory_falls_back_to_the_cli_home_without_a_desktop_install() {
+    let temp = tempdir().expect("temp");
+    let home = temp.path().join("home");
+    let context = test_context(home.clone(), Some(temp.path().join("LocalAppData")));
+
+    assert_eq!(
+        resolve_config_directory(&context, None),
+        Some(home.join(".hermes"))
+    );
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn hermes_home_override_beats_the_desktop_data_home() {
+    let temp = tempdir().expect("temp");
+    let local = temp.path().join("LocalAppData");
+    fs::create_dir_all(
+        local
+            .join("Hermes Agent CN Desktop")
+            .join("data")
+            .join("hermes-home"),
+    )
+    .expect("desktop data home");
+    let context = test_context(temp.path().join("home"), Some(local));
+    let override_dir = temp.path().join("custom-hermes-home");
+
+    assert_eq!(
+        resolve_config_directory(&context, Some(override_dir.to_str().unwrap())),
+        Some(override_dir)
+    );
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn detect_reports_the_desktop_app_and_its_data_home_config() {
+    let temp = tempdir().expect("temp");
+    let local = temp.path().join("LocalAppData");
+    let app_root = local.join("Hermes Agent CN Desktop");
+    fs::create_dir_all(app_root.join("data").join("hermes-home")).expect("data home");
+    fs::write(
+        app_root.join("hermes-agent-cn-desktop.exe"),
+        b"stub executable",
+    )
+    .expect("desktop exe");
+    let context = test_context(temp.path().join("home"), Some(local.clone()));
+
+    let found = HermesAdapter.detect(&context);
+
+    let installation = found.installation.expect("installation");
+    assert_eq!(installation.kind, InstallationKind::DesktopApp);
+    assert_eq!(
+        installation.path,
+        app_root.join("hermes-agent-cn-desktop.exe")
+    );
+    assert_eq!(
+        found.config_path,
+        Some(app_root.join("data").join("hermes-home").join("config.yaml"))
+    );
+}

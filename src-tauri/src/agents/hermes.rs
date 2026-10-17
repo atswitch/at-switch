@@ -49,26 +49,27 @@ impl AgentAdapter for HermesAdapter {
     }
 
     fn detect(&self, context: &DiscoveryContext) -> AgentDetection {
-        let installation = Self::detect_command(context)
-            .or_else(|| {
-                locate_desktop_app(
-                    context,
-                    &["Hermes.app", "Hermes.exe", "Hermes"],
-                    &["com.hermes.agent"],
-                    &[
-                        "Programs/Hermes/Hermes.exe",
-                        "Hermes/Hermes.exe",
-                        "Hermes.exe",
-                    ],
-                )
+        // 桌面版优先：桌面版存在时 config_directory 也指向它的 hermes-home，
+        // 暂停/重启必须作用于桌面版进程，而不是 PATH 上的 CLI。
+        let installation = locate_desktop_app(
+            context,
+            &["Hermes.app", "Hermes.exe", "Hermes"],
+            &["com.hermes.agent"],
+            &[
+                "Programs/Hermes/Hermes.exe",
+                "Hermes/Hermes.exe",
+                "Hermes.exe",
+                "Hermes Agent CN Desktop/hermes-agent-cn-desktop.exe",
+            ],
+        )
+        .or_else(|| Self::detect_command(context))
+        .or_else(|| {
+            config_directory(context).map(|directory| Installation {
+                version: None,
+                path: directory,
+                kind: InstallationKind::Command,
             })
-            .or_else(|| {
-                config_directory(context).map(|directory| Installation {
-                    version: None,
-                    path: directory,
-                    kind: InstallationKind::Command,
-                })
-            });
+        });
 
         let config_path = config_directory(context)
             .map(|directory| directory.join(CONFIG_FILE))
@@ -177,13 +178,47 @@ impl AgentAdapter for HermesAdapter {
 }
 
 fn config_directory(context: &DiscoveryContext) -> Option<PathBuf> {
-    if let Ok(home) = env::var("HERMES_HOME") {
+    resolve_config_directory(context, env::var("HERMES_HOME").ok().as_deref())
+}
+
+fn resolve_config_directory(
+    context: &DiscoveryContext,
+    hermes_home: Option<&str>,
+) -> Option<PathBuf> {
+    if let Some(home) = hermes_home {
         let directory = PathBuf::from(home);
         if directory.is_absolute() {
             return Some(directory);
         }
     }
+    if let Some(directory) = desktop_data_home(context) {
+        return Some(directory);
+    }
     Some(context.home.join(".hermes"))
+}
+
+/// 桌面版（Hermes Agent CN Desktop）把 CLI 的 hermes-home 数据目录放在
+/// `%LOCALAPPDATA%\Hermes Agent CN Desktop\data\hermes-home`，与 CLI 的
+/// `~/.hermes` 互不共享。装了桌面版时用户实际读取的是这里，必须优先；
+/// 数据目录尚不存在（装好未启动过）时也按桌面版处理，写入会自动建目录。
+fn desktop_data_home(context: &DiscoveryContext) -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        let local = context
+            .local_app_data
+            .clone()
+            .or_else(|| env::var_os("LOCALAPPDATA").map(PathBuf::from))?;
+        let app_root = local.join("Hermes Agent CN Desktop");
+        let data_home = app_root.join("data").join("hermes-home");
+        let installed =
+            app_root.join("hermes-agent-cn-desktop.exe").is_file() || data_home.is_dir();
+        return installed.then_some(data_home);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = context;
+    }
+    None
 }
 
 fn config_path(detection: &AgentDetection) -> AppResult<&Path> {
