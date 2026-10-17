@@ -79,7 +79,7 @@ impl AgentAdapter for HermesAdapter {
             installation,
             config_path,
             probe_hermes,
-            false,
+            true,
         )
     }
 
@@ -129,17 +129,34 @@ impl AgentAdapter for HermesAdapter {
         let mapping = read_config_mapping(config_path(detection)?)?;
         let model = model_block(&mapping).ok_or_else(applied_error)?;
 
-        let field = |key: &str| model.get(key).and_then(Value::as_str);
-        if field("provider") != Some("custom")
-            || field("default") != Some(desired.model_id)
-            || field("base_url") != Some(desired.base_url.trim_end_matches('/'))
-            || field("api_mode") != Some("chat_completions")
-            || field("key_env") != Some(HERMES_API_KEY_ENV)
+        fn field<'a>(block: &'a Mapping, key: &str) -> Option<&'a str> {
+            block.get(key).and_then(Value::as_str)
+        }
+        if field(model, "provider") != Some(MANAGED_PROVIDER)
+            || field(model, "default") != Some(desired.model_id)
         {
             return Err(applied_error());
         }
-        // 密钥只能通过 key_env 指针引用，绝不允许明文内联。
+        // 模型块不承载明文凭据。
         if model.contains_key("api_key") {
+            return Err(applied_error());
+        }
+        // 受管 provider 条目必须与目标一致（端点、模型、凭据指针、API 形态）。
+        let entry = mapping
+            .get(Value::from("providers"))
+            .and_then(Value::as_mapping)
+            .and_then(|providers| providers.get(Value::from(MANAGED_PROVIDER)))
+            .and_then(Value::as_mapping)
+            .ok_or_else(applied_error)?;
+        if field(entry, "base_url") != Some(desired.base_url.trim_end_matches('/'))
+            || field(entry, "default_model") != Some(desired.model_id)
+            || field(entry, "key_env") != Some(HERMES_API_KEY_ENV)
+            || field(entry, "api_mode") != Some("chat_completions")
+        {
+            return Err(applied_error());
+        }
+        // provider 条目同样拒绝明文凭据。
+        if entry.contains_key("api_key") {
             return Err(applied_error());
         }
         // 旧版适配器遗留的受管 custom_providers 条目必须清理。
@@ -185,8 +202,13 @@ fn probe_hermes(path: &PathBuf) -> AppResult<()> {
             return Err(shape_error());
         }
     }
-    if let Some(providers) = mapping.get(Value::from("custom_providers")) {
-        if !providers.is_sequence() && !providers.is_null() {
+    if let Some(custom_providers) = mapping.get(Value::from("custom_providers")) {
+        if !custom_providers.is_sequence() && !custom_providers.is_null() {
+            return Err(shape_error());
+        }
+    }
+    if let Some(providers) = mapping.get(Value::from("providers")) {
+        if !providers.is_mapping() && !providers.is_null() {
             return Err(shape_error());
         }
     }
@@ -204,10 +226,12 @@ fn read_config_mapping(path: &Path) -> AppResult<Mapping> {
     value.as_mapping().cloned().ok_or_else(shape_error)
 }
 
-/// Hermes v0.21.x（`_config_version: 45`）的模型选择是自包含的嵌套 `model:` 块：
-/// `{provider: custom, default, base_url, api_mode, key_env}`。旧版扁平键
-/// （`model: <字符串>` / `provider: custom:...`）会被运行时忽略，因此写入必须
-/// 落在这个块上。凭据通过 `key_env` 指针引用 `~/.hermes/.env`，不落明文。
+/// Hermes v0.21.x（`_config_version: 45`）只认两种受管写法：
+/// 命名 provider 条目（`providers.<name>`，凭据经条目 `key_env` 指针解析），
+/// 或裸 `provider: custom` 终端回退。裸 custom 的终端解析器**不读**模型块上的
+/// `key_env`——没有 key 时会以 `no-key-required` 占位符发起请求，服务端返回
+/// 401。因此写入命名条目并让 `model.provider` 指向它；凭据经
+/// `~/.hermes/.env` 的 `key_env` 指针，不落明文。
 fn update_hermes_config(original: &str, desired: &DesiredAgentBinding<'_>) -> AppResult<String> {
     let mut root: Value = serde_yaml::from_str(original).map_err(|_| unparseable_error())?;
     if !root.is_mapping() {
@@ -216,19 +240,31 @@ fn update_hermes_config(original: &str, desired: &DesiredAgentBinding<'_>) -> Ap
     let root_map = root.as_mapping_mut().expect("checked mapping");
 
     let model = ensure_mapping(root_map, "model")?;
-    let entries = [
-        ("provider", "custom"),
-        ("default", desired.model_id),
-        ("base_url", desired.base_url.trim_end_matches('/')),
-        ("api_mode", "chat_completions"),
-        ("key_env", HERMES_API_KEY_ENV),
-    ];
-    for (key, value) in entries {
+    for (key, value) in [("provider", MANAGED_PROVIDER), ("default", desired.model_id)] {
         model.insert(Value::from(key), Value::from(value));
     }
+    // 端点与凭据收敛到 provider 条目；模型块不再重复承载（也顺带清掉旧适配器
+    // 写进模型块的 key_env/base_url，避免裸 custom 回退路径读到悬空指针）。
+    for key in ["base_url", "api_mode", "key_env", "api_key", "api_key_env"] {
+        model.remove(Value::from(key));
+    }
+
+    let providers = ensure_mapping(root_map, "providers")?;
+    let entry = ensure_mapping(providers, MANAGED_PROVIDER)?;
+    let entry_fields = [
+        ("name", DISPLAY_NAME),
+        ("base_url", desired.base_url.trim_end_matches('/')),
+        ("default_model", desired.model_id),
+        ("key_env", HERMES_API_KEY_ENV),
+        ("api_mode", "chat_completions"),
+    ];
+    for (key, value) in entry_fields {
+        entry.insert(Value::from(key), Value::from(value));
+    }
+    entry.insert(Value::from("enabled"), Value::from(true));
     // 拒绝明文凭据：无论来自旧适配器还是用户手写，统一改为 key_env 指针。
-    model.remove(Value::from("api_key"));
-    model.remove(Value::from("api_key_env"));
+    entry.remove(Value::from("api_key"));
+    entry.remove(Value::from("api_key_env"));
 
     remove_legacy_managed_custom_provider(root_map);
     remove_legacy_managed_flat_provider(root_map);
