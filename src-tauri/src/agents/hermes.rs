@@ -201,23 +201,22 @@ fn resolve_config_directory(
 /// `%LOCALAPPDATA%\Hermes Agent CN Desktop\data\hermes-home`，与 CLI 的
 /// `~/.hermes` 互不共享。装了桌面版时用户实际读取的是这里，必须优先；
 /// 数据目录尚不存在（装好未启动过）时也按桌面版处理，写入会自动建目录。
+#[cfg(target_os = "windows")]
 fn desktop_data_home(context: &DiscoveryContext) -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        let local = context
-            .local_app_data
-            .clone()
-            .or_else(|| env::var_os("LOCALAPPDATA").map(PathBuf::from))?;
-        let app_root = local.join("Hermes Agent CN Desktop");
-        let data_home = app_root.join("data").join("hermes-home");
-        let installed =
-            app_root.join("hermes-agent-cn-desktop.exe").is_file() || data_home.is_dir();
-        return installed.then_some(data_home);
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = context;
-    }
+    let local = context
+        .local_app_data
+        .clone()
+        .or_else(|| env::var_os("LOCALAPPDATA").map(PathBuf::from))?;
+    let app_root = local.join("Hermes Agent CN Desktop");
+    let data_home = app_root.join("data").join("hermes-home");
+    let installed =
+        app_root.join("hermes-agent-cn-desktop.exe").is_file() || data_home.is_dir();
+    installed.then_some(data_home)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn desktop_data_home(context: &DiscoveryContext) -> Option<PathBuf> {
+    let _ = context;
     None
 }
 

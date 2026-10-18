@@ -365,8 +365,8 @@ fn probe_accepts_v45_flat_and_named_shapes() {
 #[cfg(target_os = "windows")]
 fn test_context(home: PathBuf, local_app_data: Option<PathBuf>) -> DiscoveryContext {
     DiscoveryContext {
-        home,
         application_data_dir: home.join("AppData/Roaming"),
+        home,
         application_dirs: Vec::new(),
         path_entries: Vec::new(),
         system_application_search: false,
