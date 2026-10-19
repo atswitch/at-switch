@@ -928,7 +928,9 @@ mod tests {
         // 官方 easyclaw 的 Agent 配置不动。
         assert_eq!(
             root.pointer("/agents/list/1/model/primary"),
-            Some(&Value::String("easyclaw/deepseek.deepseek-v4-flash".to_owned()))
+            Some(&Value::String(
+                "easyclaw/deepseek.deepseek-v4-flash".to_owned()
+            ))
         );
         assert_eq!(root.pointer("/agents/list/2/model"), None);
         assert_eq!(
@@ -1298,9 +1300,8 @@ mod tests {
         let sessions = temp.path().join("agents/main/sessions/sessions.json");
         seed_sessions(&sessions);
 
-        let updates =
-            build_session_model_updates(&file_detection(config), "deepseek-v4-flash")
-                .expect("update");
+        let updates = build_session_model_updates(&file_detection(config), "deepseek-v4-flash")
+            .expect("update");
         let change = updates
             .iter()
             .find(|change| change.path == sessions)
