@@ -23,6 +23,24 @@
   Anthropic Messages）；Proxy 固定 OpenAI Chat 由本地代理转换。
 - 生效时机：需重启 EasyClaw（`needs_restart = true`）。
 
+## 模型锚点（三层，2026-10-19 补齐）
+
+EasyClaw 的"当前模型"锚定在 `easyclaw.json` 之外还有三处，切换时必须一并更新，
+否则已存在的 Agent / 会话会继续请求切换前的模型：
+
+1. `agents.list[*].model.primary`——每个 Agent 定义自带的模型，**优先级高于
+   `agents.defaults.model`**。只改指向自定义 Provider（非官方 `easyclaw`）的
+   primary，官方模型的 Agent 配置不动。
+2. `agents/main/sessions/sessions.json`——每个会话对象的 `model` 字段；没有该
+   字段的会话本来就走默认。
+3. 会话线程转录 `agents/main/sessions/*.jsonl`——每条消息的 `"model"` 元数据，
+   网关恢复线程时按最后一条续聊。只改写**裸 id**（不含 `/`，用户自建/受管端点
+   的模型）；带 provider 前缀的官方 id 保持原样。
+
+第 2、3 层通过 `AgentAdapter::build_sidecar_updates` 伴生更新钩子实现：与主配置
+写入共用同一事务窗口，任一失败或 verify 失败全部一起回滚。该钩子为 trait 默认
+空实现，非 OpenClaw 系适配器不受影响；QClaw / AutoClaw 共享同一内核，同样受益。
+
 ## 验收状态
 
 - 自动化门禁（2026-10-16，macOS）：`cargo fmt --check`、`cargo clippy -D warnings`、
