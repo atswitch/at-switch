@@ -45,7 +45,7 @@ use self::{
     ima_adapter::ImaAdapter,
     lifecycle::RestartOutcome,
     locator::{normalized_path_string, DiscoveryContext, Installation, InstallationKind},
-    openclaw::{AutoClawAdapter, QClawAdapter},
+    openclaw::{AutoClawAdapter, EasyClawAdapter, QClawAdapter},
     trae::TraeAdapter,
     workbuddy::WorkBuddyAdapter,
     zcode::ZCodeAdapter,
@@ -318,6 +318,16 @@ trait AgentAdapter: Send + Sync {
         detection: &AgentDetection,
         desired: &DesiredAgentBinding<'_>,
     ) -> AppResult<()>;
+    /// 配置文件之外需要一并更新的伴生状态（会话激活模型、凭据指针等）。
+    /// 返回的 FileChange 在主配置写入后、verify 前依序落盘；verify 失败时
+    /// 与主配置一起回滚。默认无伴生更新。
+    fn build_sidecar_updates(
+        &self,
+        _detection: &AgentDetection,
+        _desired: &DesiredAgentBinding<'_>,
+    ) -> AppResult<Vec<FileChange>> {
+        Ok(Vec::new())
+    }
     fn activation_required(&self, _detection: &AgentDetection) -> bool {
         false
     }
@@ -363,6 +373,8 @@ impl Default for AgentRegistry {
                 Box::new(ImaAdapter::default()),
                 Box::new(TraeAdapter::unified()),
                 Box::new(ZCodeAdapter),
+                // EasyClaw 最新接入，渲染在切换器列表末尾。
+                Box::new(EasyClawAdapter),
             ],
             context: DiscoveryContext::native(),
         }
@@ -1017,6 +1029,13 @@ impl AgentService {
                 return Err(error);
             }
         };
+        let sidecar_updates = match adapter.build_sidecar_updates(&detection, &desired) {
+            Ok(updates) => updates,
+            Err(error) => {
+                self.cleanup_new_local_token(&local_token_metadata);
+                return Err(error);
+            }
+        };
         if let Err(error) = self.transaction.baseline(&draft.agent_id, &config_path) {
             self.cleanup_new_local_token(&local_token_metadata);
             return Err(error);
@@ -1034,6 +1053,22 @@ impl AgentService {
                 return Err(error);
             }
         };
+        // 伴生状态（会话激活模型等）与主配置共用同一个事务窗口：任一失败
+        // 或后续 verify 失败，全部一起回滚。
+        let mut sidecar_backups = Vec::new();
+        for change in sidecar_updates {
+            match self.transaction.apply_file(&draft.agent_id, change) {
+                Ok(applied) => sidecar_backups.push(applied.backup_path),
+                Err(error) => {
+                    let _ = self.transaction.restore_backup(&result.backup_path);
+                    for backup in &sidecar_backups {
+                        let _ = self.transaction.restore_backup(backup);
+                    }
+                    self.cleanup_new_local_token(&local_token_metadata);
+                    return Err(error);
+                }
+            }
+        }
         // verify_config 自己读 config_path 上的最新文件内容，不依赖 detect 的
         // 副产物（installation/config_health 等都不会在写文件后变化），所以
         // 直接复用上一次 detection，避免再次跑 locate_desktop_app 的全平台扫描。
@@ -1041,6 +1076,9 @@ impl AgentService {
         // 要枚举全系统进程表 + 查注册表 + 扫 PATH，单次 1~3 秒。
         if let Err(error) = adapter.verify_config(&detection, &desired) {
             let restore_result = self.transaction.restore_backup(&result.backup_path);
+            for backup in &sidecar_backups {
+                let _ = self.transaction.restore_backup(backup);
+            }
             self.cleanup_new_local_token(&local_token_metadata);
             return match restore_result {
                 Ok(()) => Err(CommandError::new(
@@ -2233,7 +2271,8 @@ mod tests {
                 "dumate",
                 "ima",
                 "trae",
-                "zcode"
+                "zcode",
+                "easyclaw"
             ]
         );
     }
@@ -2250,6 +2289,7 @@ mod tests {
             "Programs/AutoClaw/AutoClaw.exe",
             "Programs/Codex/Codex.exe",
             "Programs/DuMate/DuMate.exe",
+            "Programs/EasyClaw/EasyClaw.exe",
             "ima.copilot/Application/ima.copilot.exe",
             "Programs/Trae CN/Trae CN.exe",
             "Programs/TRAE SOLO CN/TRAE SOLO CN.exe",
@@ -2274,7 +2314,7 @@ mod tests {
         };
 
         let detections = registry.detections();
-        assert_eq!(detections.len(), 9);
+        assert_eq!(detections.len(), 10);
         assert_eq!(
             detections
                 .iter()
@@ -2320,6 +2360,7 @@ mod tests {
             ("autoclaw", "AutoClaw.exe"),
             ("codex", "Codex.exe"),
             ("dumate", "DuMate.exe"),
+            ("easyclaw", "EasyClaw.exe"),
             ("ima", "ima.copilot.exe"),
             ("trae", "Trae CN.exe"),
             ("zcode", "ZCode.exe"),
@@ -2369,6 +2410,7 @@ mod tests {
             ("autoclaw", "AutoClaw.app"),
             ("codex", "Codex.app"),
             ("dumate", "DuMate.app"),
+            ("easyclaw", "easyclaw.app"),
             ("ima", "ima.copilot.app"),
             ("trae", "Trae CN.app"),
             ("zcode", "ZCode.app"),
