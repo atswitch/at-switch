@@ -224,7 +224,7 @@ dependencies = [
 
 [[package]]
 name = "at-switch"
-version = "3.17.0"
+version = "3.17.2"
 dependencies = [
  "async-stream",
  "axum",
