@@ -372,9 +372,9 @@ impl Default for AgentRegistry {
                 Box::new(DuMateAdapter),
                 Box::new(ImaAdapter::default()),
                 Box::new(TraeAdapter::unified()),
-                Box::new(ZCodeAdapter),
-                // EasyClaw 最新接入，渲染在切换器列表末尾。
                 Box::new(EasyClawAdapter),
+                // 新接入的智能体一律排在列表末尾。
+                Box::new(ZCodeAdapter),
             ],
             context: DiscoveryContext::native(),
         }
@@ -2271,8 +2271,8 @@ mod tests {
                 "dumate",
                 "ima",
                 "trae",
-                "zcode",
-                "easyclaw"
+                "easyclaw",
+                "zcode"
             ]
         );
     }
