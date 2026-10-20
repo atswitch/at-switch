@@ -370,6 +370,86 @@ impl AgentAdapter for EasyClawAdapter {
     }
 }
 
+/// AionClaw 把 OpenClaw 运行时放在 macOS 沙盒容器内，因此其 `openclaw.json`
+/// 不在 `~/.aionclaw`，而在容器的 `AionClaw/openclaw/state/` 下；实测该路径
+/// 对当前用户可读写，且结构（`models.providers` + `agents.defaults.model.primary`）
+/// 与其它 OpenClaw 发行版完全一致，因此直接复用同一套读写实现。
+fn aionclaw_state_dir(context: &DiscoveryContext) -> PathBuf {
+    let container = context.home.join(
+        "Library/Containers/com.quyuanai.aionclaw/Data/Library/Application Support/AionClaw/openclaw/state",
+    );
+    if container.join("openclaw.json").exists() {
+        return container;
+    }
+    let portable = context.application_data_dir.join("AionClaw/openclaw/state");
+    if portable.join("openclaw.json").exists() {
+        return portable;
+    }
+    // 两者都不存在时仍返回沙盒路径，保证写入目标稳定、报错信息一致。
+    container
+}
+
+pub struct AionClawAdapter;
+
+impl AgentAdapter for AionClawAdapter {
+    fn id(&self) -> &'static str {
+        "aionclaw"
+    }
+
+    fn display_name(&self) -> &'static str {
+        "AionClaw"
+    }
+
+    fn detect(&self, context: &DiscoveryContext) -> AgentDetection {
+        let installation = locate_desktop_app(
+            context,
+            &["AionClaw.app"],
+            &["com.quyuanai.aionclaw"],
+            &["Programs/AionClaw/AionClaw.exe", "AionClaw/AionClaw.exe"],
+        );
+        AgentDetection::from_file_probe(
+            self.id(),
+            self.display_name(),
+            installation,
+            aionclaw_state_dir(context).join("openclaw.json"),
+            probe_openclaw,
+            true,
+        )
+    }
+
+    fn source_protocol(
+        &self,
+        mode: AgentBindingMode,
+        upstream_protocol: ApiProtocol,
+    ) -> ApiProtocol {
+        openclaw_source_protocol(mode, upstream_protocol)
+    }
+
+    fn build_config(
+        &self,
+        detection: &AgentDetection,
+        desired: &DesiredAgentBinding<'_>,
+    ) -> AppResult<Vec<u8>> {
+        build_openclaw_config(detection, desired)
+    }
+
+    fn build_native_config(
+        &self,
+        detection: &AgentDetection,
+        baseline: &BaselineSnapshot,
+    ) -> AppResult<Vec<u8>> {
+        build_native_openclaw_config(detection, baseline)
+    }
+
+    fn verify_config(
+        &self,
+        detection: &AgentDetection,
+        desired: &DesiredAgentBinding<'_>,
+    ) -> AppResult<()> {
+        verify_openclaw_config(detection, desired)
+    }
+}
+
 fn openclaw_source_protocol(mode: AgentBindingMode, upstream: ApiProtocol) -> ApiProtocol {
     match mode {
         AgentBindingMode::Direct => upstream,

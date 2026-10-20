@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v3.17.6] - 2026-10-20
+
+### Added
+- AionClaw desktop (com.quyuanai.aionclaw) integration reusing the OpenClaw write kernel with the authoritative state in its sqlite database (`kv.app_config` + `agents.model` dual write): Direct passthrough for OpenAI Chat / Responses / Anthropic Messages and Proxy conversion, with ConfigTransaction baseline, encrypted backup and rollback.
+
 ## [v3.17.2] - 2026-10-20
 
 ### Added

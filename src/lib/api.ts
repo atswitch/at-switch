@@ -108,6 +108,7 @@ const mockAgentDisplayNames = {
   autoclaw: "AutoClaw",
   codex: "Codex",
   dumate: "百度搭子",
+  aionclaw: "AionClaw",
   ima: "ima",
   trae: "TRAE",
   easyclaw: "EasyClaw",
