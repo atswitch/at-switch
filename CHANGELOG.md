@@ -12,6 +12,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - AionClaw desktop (com.quyuanai.aionclaw) integration reusing the OpenClaw write kernel with the authoritative state in its sqlite database (`kv.app_config` + `agents.model` dual write): Direct passthrough for OpenAI Chat / Responses / Anthropic Messages and Proxy conversion, with ConfigTransaction baseline, encrypted backup and rollback.
 
+## [v3.17.2] - 2026-10-20
+
+### Added
+- A ZCode integration that declares the managed provider in ZCode's personal provider configuration and syncs the selected model in its task index and Chromium local storage, with Direct and Proxy support for OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages.
+
+### Fixed
+- macOS main-process detection now also matches processes that report only the executable name, so ZCode is paused and relaunched for a configuration change instead of being reported as not running.
+
+## [v3.17.0] - 2026-10-20
+
+### Added
+- EasyClaw desktop (ai.easyclawcn.desktop) integration reusing the OpenClaw write kernel: managed Provider and `agents.defaults.model.primary` in `~/.easyclaw/easyclaw.json`, Direct passthrough for OpenAI Chat / Responses / Anthropic Messages and Proxy conversion, with ConfigTransaction baseline, encrypted backup and rollback.
+- A `build_sidecar_updates` adapter hook that applies companion-state updates (session activation models, credential pointers) inside the same transaction window as the main configuration write, rolling back together on failure.
+
+### Fixed
+- OpenClaw-family agents (QClaw / AutoClaw / EasyClaw) kept requesting the pre-switch model after a switch: the active model is anchored in three additional places beyond `agents.defaults.model`. Switching now also rewrites `agents.list[*].model.primary` entries that point at custom providers, the per-session `model` fields in `agents/main/sessions/sessions.json`, and the bare model ids in session thread transcripts (`*.jsonl`) that the gateway resumes threads from. Official `easyclaw/…` prefixed ids and user configuration are preserved.
+
+### Changed
+- Restore the default Vite `dist/` cleanup in builds; the previous `emptyOutDir: false` bypass targeted the retired Z: network-drive packaging path.
+
 ## [v3.16.1] - 2026-10-12
 
 ### Added

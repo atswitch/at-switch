@@ -13,6 +13,7 @@ mod service_adapter;
 mod service_adapter_tests;
 mod trae;
 mod workbuddy;
+mod zcode;
 
 use std::{
     collections::HashMap,
@@ -45,9 +46,10 @@ use self::{
     ima_adapter::ImaAdapter,
     lifecycle::RestartOutcome,
     locator::{normalized_path_string, DiscoveryContext, Installation, InstallationKind},
-    openclaw::{AionClawAdapter, AutoClawAdapter, QClawAdapter},
+    openclaw::{AionClawAdapter, AutoClawAdapter, EasyClawAdapter, QClawAdapter},
     trae::TraeAdapter,
     workbuddy::WorkBuddyAdapter,
+    zcode::ZCodeAdapter,
 };
 
 type ConfigProbe = fn(&PathBuf) -> AppResult<()>;
@@ -72,6 +74,14 @@ struct WorkBuddyRestorePlan {
     changes: Vec<workbuddy::SessionModelChange>,
     previous_new_task: Option<workbuddy::NewTaskSelection>,
     restored_new_task_value: Option<Vec<u8>>,
+}
+
+/// Records ZCode's task index and Chromium local storage values that AT-Switch
+/// rewrote while the app was paused, so a failed apply can put both back.
+#[derive(Default)]
+struct ZCodeSelectionMutation {
+    tasks: Vec<zcode::TaskModelChange>,
+    selections: Vec<zcode::ModelSelectionChange>,
 }
 
 #[derive(Default)]
@@ -309,6 +319,16 @@ trait AgentAdapter: Send + Sync {
         detection: &AgentDetection,
         desired: &DesiredAgentBinding<'_>,
     ) -> AppResult<()>;
+    /// 配置文件之外需要一并更新的伴生状态（会话激活模型、凭据指针等）。
+    /// 返回的 FileChange 在主配置写入后、verify 前依序落盘；verify 失败时
+    /// 与主配置一起回滚。默认无伴生更新。
+    fn build_sidecar_updates(
+        &self,
+        _detection: &AgentDetection,
+        _desired: &DesiredAgentBinding<'_>,
+    ) -> AppResult<Vec<FileChange>> {
+        Ok(Vec::new())
+    }
     fn activation_required(&self, _detection: &AgentDetection) -> bool {
         false
     }
@@ -353,6 +373,8 @@ impl Default for AgentRegistry {
                 Box::new(DuMateAdapter),
                 Box::new(ImaAdapter::default()),
                 Box::new(TraeAdapter::unified()),
+                Box::new(EasyClawAdapter),
+                Box::new(ZCodeAdapter),
                 // AionClaw 最新接入，渲染在切换器列表末尾。
                 Box::new(AionClawAdapter),
             ],
@@ -1009,6 +1031,13 @@ impl AgentService {
                 return Err(error);
             }
         };
+        let sidecar_updates = match adapter.build_sidecar_updates(&detection, &desired) {
+            Ok(updates) => updates,
+            Err(error) => {
+                self.cleanup_new_local_token(&local_token_metadata);
+                return Err(error);
+            }
+        };
         if let Err(error) = self.transaction.baseline(&draft.agent_id, &config_path) {
             self.cleanup_new_local_token(&local_token_metadata);
             return Err(error);
@@ -1026,6 +1055,22 @@ impl AgentService {
                 return Err(error);
             }
         };
+        // 伴生状态（会话激活模型等）与主配置共用同一个事务窗口：任一失败
+        // 或后续 verify 失败，全部一起回滚。
+        let mut sidecar_backups = Vec::new();
+        for change in sidecar_updates {
+            match self.transaction.apply_file(&draft.agent_id, change) {
+                Ok(applied) => sidecar_backups.push(applied.backup_path),
+                Err(error) => {
+                    let _ = self.transaction.restore_backup(&result.backup_path);
+                    for backup in &sidecar_backups {
+                        let _ = self.transaction.restore_backup(backup);
+                    }
+                    self.cleanup_new_local_token(&local_token_metadata);
+                    return Err(error);
+                }
+            }
+        }
         // verify_config 自己读 config_path 上的最新文件内容，不依赖 detect 的
         // 副产物（installation/config_health 等都不会在写文件后变化），所以
         // 直接复用上一次 detection，避免再次跑 locate_desktop_app 的全平台扫描。
@@ -1033,6 +1078,9 @@ impl AgentService {
         // 要枚举全系统进程表 + 查注册表 + 扫 PATH，单次 1~3 秒。
         if let Err(error) = adapter.verify_config(&detection, &desired) {
             let restore_result = self.transaction.restore_backup(&result.backup_path);
+            for backup in &sidecar_backups {
+                let _ = self.transaction.restore_backup(backup);
+            }
             self.cleanup_new_local_token(&local_token_metadata);
             return match restore_result {
                 Ok(()) => Err(CommandError::new(
@@ -1046,6 +1094,23 @@ impl AgentService {
             };
         }
 
+        // ZCode keeps the *selected* model in its task index and mirrors it into
+        // Chromium local storage; the provider config only decides the model of
+        // newly created tasks. Both layers must be repointed while the app is
+        // paused, otherwise a restart still selects the previous model even
+        // though the configuration file is correct.
+        let zcode_selection_mutation = if draft.agent_id == "zcode" {
+            match self.apply_zcode_selection_while_paused(&detection, &draft.model_id) {
+                Ok(mutation) => Some(mutation),
+                Err(error) => {
+                    let _ = self.transaction.restore_backup(&result.backup_path);
+                    self.cleanup_new_local_token(&local_token_metadata);
+                    return Err(error);
+                }
+            }
+        } else {
+            None
+        };
         let workbuddy_session_mutation = if draft.agent_id == "workbuddy" {
             match self.activate_workbuddy_session_while_paused(&detection) {
                 Ok(mutation) => Some(mutation),
@@ -1112,6 +1177,7 @@ impl AgentService {
             let _ = self.transaction.restore_backup(&result.backup_path);
             self.rollback_workbuddy_session(&detection, workbuddy_session_mutation.as_ref());
             self.rollback_codebuddy_workspaces(codebuddy_workspace_mutation.as_ref());
+            self.rollback_zcode_selection(&detection, zcode_selection_mutation.as_ref());
             self.cleanup_new_local_token(&local_token_metadata);
             return Err(error);
         }
@@ -1599,6 +1665,39 @@ impl AgentService {
                 summary.config_health = AgentConfigHealth::TakeoverInterrupted;
                 summary.message = Some("Agent 绑定模式无法识别，请重新应用配置".to_owned());
             }
+        }
+    }
+
+    fn apply_zcode_selection_while_paused(
+        &self,
+        detection: &AgentDetection,
+        model_id: &str,
+    ) -> AppResult<ZCodeSelectionMutation> {
+        let tasks = zcode::apply_task_model(detection, model_id)?;
+        let selections = zcode::apply_model_selection(detection, model_id)?;
+        Ok(ZCodeSelectionMutation { tasks, selections })
+    }
+
+    /// Puts ZCode's task index and local storage back exactly as they were.
+    ///
+    /// The configuration file is restored by `ConfigTransaction`; this only
+    /// undoes the two selection layers the pipeline wrote alongside it.
+    fn rollback_zcode_selection(
+        &self,
+        detection: &AgentDetection,
+        mutation: Option<&ZCodeSelectionMutation>,
+    ) {
+        let Some(mutation) = mutation else {
+            return;
+        };
+        if let Err(error) = zcode::restore_task_model(detection, &mutation.tasks) {
+            log::warn!("ZCode task models could not be restored: {}", error.message);
+        }
+        if let Err(error) = zcode::restore_model_selection(detection, &mutation.selections) {
+            log::warn!(
+                "ZCode model selection could not be restored: {}",
+                error.message
+            );
         }
     }
 
@@ -2196,6 +2295,8 @@ mod tests {
                 "dumate",
                 "ima",
                 "trae",
+                "easyclaw",
+                "zcode",
                 "aionclaw"
             ]
         );
@@ -2213,10 +2314,12 @@ mod tests {
             "Programs/AutoClaw/AutoClaw.exe",
             "Programs/Codex/Codex.exe",
             "Programs/DuMate/DuMate.exe",
+            "Programs/EasyClaw/EasyClaw.exe",
             "Programs/AionClaw/AionClaw.exe",
             "ima.copilot/Application/ima.copilot.exe",
             "Programs/Trae CN/Trae CN.exe",
             "Programs/TRAE SOLO CN/TRAE SOLO CN.exe",
+            "Programs/ZCode/ZCode.exe",
         ] {
             let executable = local_app_data.join(relative);
             fs::create_dir_all(executable.parent().expect("parent")).expect("app directory");
@@ -2237,7 +2340,7 @@ mod tests {
         };
 
         let detections = registry.detections();
-        assert_eq!(detections.len(), 9);
+        assert_eq!(detections.len(), 11);
         assert_eq!(
             detections
                 .iter()
@@ -2283,9 +2386,11 @@ mod tests {
             ("autoclaw", "AutoClaw.exe"),
             ("codex", "Codex.exe"),
             ("dumate", "DuMate.exe"),
+            ("easyclaw", "EasyClaw.exe"),
             ("aionclaw", "AionClaw.exe"),
             ("ima", "ima.copilot.exe"),
             ("trae", "Trae CN.exe"),
+            ("zcode", "ZCode.exe"),
         ] {
             let custom_directory = temp.path().join(format!("custom-{agent_id}"));
             let executable = custom_directory.join(executable_name);
@@ -2332,9 +2437,11 @@ mod tests {
             ("autoclaw", "AutoClaw.app"),
             ("codex", "Codex.app"),
             ("dumate", "DuMate.app"),
+            ("easyclaw", "easyclaw.app"),
             ("aionclaw", "AionClaw.app"),
             ("ima", "ima.copilot.app"),
             ("trae", "Trae CN.app"),
+            ("zcode", "ZCode.app"),
         ] {
             let custom_directory = temp.path().join(format!("custom-{agent_id}"));
             let app = custom_directory.join(app_name);

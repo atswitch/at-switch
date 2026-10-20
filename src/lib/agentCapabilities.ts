@@ -14,6 +14,11 @@ export const SWITCHABLE_AGENT_IDS = [
   "dumate",
   "ima",
   "trae",
+  // EasyClaw ships the OpenClaw runtime (gateway.asar/openclaw.mjs) and keeps its
+  // authoritative config at `~/.easyclaw/easyclaw.json`, so it reuses the same
+  // `models.providers` / `agents.defaults.model.primary` write kernel as QClaw.
+  "easyclaw",
+  "zcode",
   // AionClaw embeds the OpenClaw runtime inside a macOS sandbox container, so it
   // uses the same `models.providers` / `agents.defaults.model.primary` shape as
   // QClaw, with the authoritative state in its sqlite database.
