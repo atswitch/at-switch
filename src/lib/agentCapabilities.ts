@@ -18,6 +18,7 @@ export const SWITCHABLE_AGENT_IDS = [
   // authoritative config at `~/.easyclaw/easyclaw.json`, so it reuses the same
   // `models.providers` / `agents.defaults.model.primary` write kernel as QClaw.
   "easyclaw",
+  "zcode",
 ] as const;
 
 export function isSwitchableAgent(agent: AgentSummary): boolean {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  SWITCHABLE_AGENT_IDS,
   providerSupportedProtocols,
   supportsDirectBinding,
   supportsProxyBinding,
@@ -86,6 +87,20 @@ describe("Agent protocol capabilities", () => {
       })).toBe(true);
       expect(supportsProxyBinding(agentId)).toBe(false);
     }
+  });
+
+  // ZCode 通过个人 Provider 通道接受三种协议，直连与代理都可用，
+  // 前端能力声明必须与适配器实际支持的组合一致。
+  it("supports ZCode direct and proxy binding for every ZCode protocol", () => {
+    for (const protocol of [
+      "openai_chat_completions",
+      "openai_responses",
+      "anthropic_messages",
+    ] as const) {
+      expect(supportsDirectBinding("zcode", { kind: "custom", protocol })).toBe(true);
+    }
+    expect(supportsProxyBinding("zcode")).toBe(true);
+    expect(SWITCHABLE_AGENT_IDS).toContain("zcode");
   });
 
   it.each([

@@ -9,6 +9,7 @@ import imaIcon from "../assets/agents/ima.png";
 import qclawIcon from "../assets/agents/qclaw.png";
 import traeIcon from "../assets/agents/trae.svg";
 import workbuddyIcon from "../assets/agents/workbuddy.png";
+import zcodeIcon from "../assets/agents/zcode.png";
 
 const agentLogos: Partial<Record<string, string>> = {
   workbuddy: workbuddyIcon,
@@ -20,6 +21,7 @@ const agentLogos: Partial<Record<string, string>> = {
   easyclaw: easyclawIcon,
   ima: imaIcon,
   trae: traeIcon,
+  zcode: zcodeIcon,
 };
 
 interface AgentLogoProps {

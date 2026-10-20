@@ -336,13 +336,23 @@ fn macos_bundle_executable(app_path: &Path, display_name: &str) -> AppResult<Pat
 
 #[cfg(target_os = "macos")]
 fn macos_main_process_ids(process_list: &str, executable: &str, display_name: &str) -> Vec<u32> {
+    // Some desktop Agents (ZCode) start with `argv[0]` reduced to the bare
+    // executable name, so a full-path comparison reports them as not running
+    // and skips the pause/restart that their configuration change requires.
+    // Matching the file name as well keeps the lookup scoped to processes that
+    // report exactly that name, not every path ending with it.
+    let file_name = Path::new(executable)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned());
     process_list
         .lines()
         .filter_map(|line| {
             let mut parts = line.trim().splitn(2, char::is_whitespace);
             let pid = parts.next()?.parse::<u32>().ok()?;
             let command = parts.next()?.trim_start();
+            let bare_executable = file_name.as_deref().is_some_and(|name| command == name);
             (command == executable
+                || bare_executable
                 || (display_name == "TRAE"
                     && command == format!("{executable} --remote-debugging-pipe")))
             .then_some(pid)
@@ -1123,6 +1133,24 @@ mod tests {
             vec![101]
         );
         assert!(macos_main_process_ids(&process_list, executable, "Codex").is_empty());
+    }
+
+    // ZCode 启动时 `argv[0]` 只有可执行文件名，按绝对路径匹配会漏判它“未运行”，
+    // 进而跳过暂停与重启。同名但来自其他应用包的进程不能被误判为 ZCode 主进程。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_process_match_accepts_bare_executable_name() {
+        let executable = "/Applications/ZCode.app/Contents/MacOS/ZCode";
+        let process_list = format!(
+            "  101 ZCode\n\
+               102 /Applications/ZCode.app/Contents/Frameworks/ZCode Helper.app/Contents/MacOS/ZCode Helper --type=gpu-process\n\
+               103 {executable} --type=renderer\n\
+               104 /Applications/Other.app/Contents/MacOS/ZCode\n"
+        );
+        assert_eq!(
+            macos_main_process_ids(&process_list, executable, "ZCode"),
+            vec![101]
+        );
     }
 
     // 跨平台不变量：错误构造器必须携带稳定错误码和面向用户的恢复建议，
