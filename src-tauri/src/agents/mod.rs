@@ -375,11 +375,11 @@ impl Default for AgentRegistry {
                 Box::new(DuMateAdapter),
                 Box::new(ImaAdapter::default()),
                 Box::new(TraeAdapter::unified()),
-                Box::new(HermesAdapter),
                 Box::new(EasyClawAdapter),
                 Box::new(ZCodeAdapter),
-                // AionClaw 最新接入，渲染在切换器列表末尾。
                 Box::new(AionClawAdapter),
+                // Hermes 最新接入，渲染在切换器列表末尾。
+                Box::new(HermesAdapter),
             ],
             context: DiscoveryContext::native(),
         }
@@ -2307,10 +2307,10 @@ mod tests {
                 "dumate",
                 "ima",
                 "trae",
-                "hermes",
                 "easyclaw",
                 "zcode",
-                "aionclaw"
+                "aionclaw",
+                "hermes"
             ]
         );
     }
@@ -2407,9 +2407,9 @@ mod tests {
             ("autoclaw", "AutoClaw.exe"),
             ("codex", "Codex.exe"),
             ("dumate", "DuMate.exe"),
-            ("hermes", "Hermes.exe"),
             ("easyclaw", "EasyClaw.exe"),
             ("aionclaw", "AionClaw.exe"),
+            ("hermes", "Hermes.exe"),
             ("ima", "ima.copilot.exe"),
             ("trae", "Trae CN.exe"),
             ("zcode", "ZCode.exe"),
@@ -2459,9 +2459,9 @@ mod tests {
             ("autoclaw", "AutoClaw.app"),
             ("codex", "Codex.app"),
             ("dumate", "DuMate.app"),
-            ("hermes", "Hermes.app"),
             ("easyclaw", "easyclaw.app"),
             ("aionclaw", "AionClaw.app"),
+            ("hermes", "Hermes.app"),
             ("ima", "ima.copilot.app"),
             ("trae", "Trae CN.app"),
             ("zcode", "ZCode.app"),

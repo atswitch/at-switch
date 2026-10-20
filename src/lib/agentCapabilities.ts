@@ -14,9 +14,6 @@ export const SWITCHABLE_AGENT_IDS = [
   "dumate",
   "ima",
   "trae",
-  // Hermes Agent 更新 $HERMES_HOME/config.yaml 或 ~/.hermes/config.yaml 中的受管
-  // Provider 与默认模型；Direct 仅支持 OpenAI Chat Completions。
-  "hermes",
   // EasyClaw ships the OpenClaw runtime (gateway.asar/openclaw.mjs) and keeps its
   // authoritative config at `~/.easyclaw/easyclaw.json`, so it reuses the same
   // `models.providers` / `agents.defaults.model.primary` write kernel as QClaw.
@@ -26,6 +23,9 @@ export const SWITCHABLE_AGENT_IDS = [
   // uses the same `models.providers` / `agents.defaults.model.primary` shape as
   // QClaw, with the authoritative state in its sqlite database.
   "aionclaw",
+  // Hermes Agent 更新 $HERMES_HOME/config.yaml 或 ~/.hermes/config.yaml 中的受管
+  // Provider 与默认模型；Direct 仅支持 OpenAI Chat Completions。
+  "hermes",
 ] as const;
 
 export function isSwitchableAgent(agent: AgentSummary): boolean {
