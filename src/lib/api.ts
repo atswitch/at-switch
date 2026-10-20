@@ -110,6 +110,7 @@ const mockAgentDisplayNames = {
   dumate: "百度搭子",
   ima: "ima",
   trae: "TRAE",
+  easyclaw: "EasyClaw",
 } as const;
 
 const mockSnapshotTemplate: AppSnapshot = {
