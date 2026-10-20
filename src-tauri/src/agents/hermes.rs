@@ -209,8 +209,7 @@ fn desktop_data_home(context: &DiscoveryContext) -> Option<PathBuf> {
         .or_else(|| env::var_os("LOCALAPPDATA").map(PathBuf::from))?;
     let app_root = local.join("Hermes Agent CN Desktop");
     let data_home = app_root.join("data").join("hermes-home");
-    let installed =
-        app_root.join("hermes-agent-cn-desktop.exe").is_file() || data_home.is_dir();
+    let installed = app_root.join("hermes-agent-cn-desktop.exe").is_file() || data_home.is_dir();
     installed.then_some(data_home)
 }
 
@@ -274,7 +273,10 @@ fn update_hermes_config(original: &str, desired: &DesiredAgentBinding<'_>) -> Ap
     let root_map = root.as_mapping_mut().expect("checked mapping");
 
     let model = ensure_mapping(root_map, "model")?;
-    for (key, value) in [("provider", MANAGED_PROVIDER), ("default", desired.model_id)] {
+    for (key, value) in [
+        ("provider", MANAGED_PROVIDER),
+        ("default", desired.model_id),
+    ] {
         model.insert(Value::from(key), Value::from(value));
     }
     // 端点与凭据收敛到 provider 条目；模型块不再重复承载（也顺带清掉旧适配器
@@ -387,10 +389,7 @@ fn env_file_has_api_key(detection: &AgentDetection) -> bool {
 /// Direct 凭据轮换与 Direct↔Proxy 互切后的本地令牌），没有则追加；用户
 /// 自有的其它键原样保留。config.yaml 只承载 `key_env` 指针，凭据本体由
 /// 这一步落盘，`verify_config` 才能放行。
-pub(super) fn ensure_env_api_key(
-    detection: &AgentDetection,
-    credential: &str,
-) -> AppResult<()> {
+pub(super) fn ensure_env_api_key(detection: &AgentDetection, credential: &str) -> AppResult<()> {
     if credential.trim().is_empty() {
         return Err(CommandError::new(
             "hermes_api_key_empty",

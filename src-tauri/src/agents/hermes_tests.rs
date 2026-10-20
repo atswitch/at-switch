@@ -104,7 +104,10 @@ fn writes_named_provider_entry_and_removes_legacy_entries() {
 
     fs::write(&path, &updated).expect("apply");
     let model = model_block(&path);
-    assert_eq!(str_field(&model, "provider").as_deref(), Some(MANAGED_PROVIDER));
+    assert_eq!(
+        str_field(&model, "provider").as_deref(),
+        Some(MANAGED_PROVIDER)
+    );
     assert_eq!(str_field(&model, "default").as_deref(), Some("GLM-5.2"));
     // 端点与凭据收敛到 provider 条目，模型块不再重复承载。
     assert!(str_field(&model, "base_url").is_none());
@@ -117,7 +120,10 @@ fn writes_named_provider_entry_and_removes_legacy_entries() {
         str_field(&entry, "base_url").as_deref(),
         Some("https://api.g2claw.com/v1")
     );
-    assert_eq!(str_field(&entry, "default_model").as_deref(), Some("GLM-5.2"));
+    assert_eq!(
+        str_field(&entry, "default_model").as_deref(),
+        Some("GLM-5.2")
+    );
     assert_eq!(
         str_field(&entry, "key_env").as_deref(),
         Some(HERMES_API_KEY_ENV)
@@ -388,10 +394,7 @@ fn config_directory_prefers_the_desktop_data_home_when_installed() {
     fs::create_dir_all(&data_home).expect("desktop data home");
     let context = test_context(temp.path().join("home"), Some(local));
 
-    assert_eq!(
-        resolve_config_directory(&context, None),
-        Some(data_home)
-    );
+    assert_eq!(resolve_config_directory(&context, None), Some(data_home));
 }
 
 #[cfg(target_os = "windows")]
@@ -473,6 +476,11 @@ fn detect_reports_the_desktop_app_and_its_data_home_config() {
     );
     assert_eq!(
         found.config_path,
-        Some(app_root.join("data").join("hermes-home").join("config.yaml"))
+        Some(
+            app_root
+                .join("data")
+                .join("hermes-home")
+                .join("config.yaml")
+        )
     );
 }

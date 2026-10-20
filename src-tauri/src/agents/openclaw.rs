@@ -3,7 +3,7 @@ use std::{fs, path::PathBuf};
 use serde_json::{json, Map, Value};
 
 use crate::domain::{AgentBindingMode, ApiProtocol, AppResult, CommandError};
-use crate::services::BaselineSnapshot;
+use crate::services::{BaselineSnapshot, FileChange};
 
 use super::{
     locator::{locate_desktop_app, DiscoveryContext},
@@ -18,6 +18,132 @@ const AUTOCLAW_PROVIDER_ID: &str = "at-switch";
 // Keep it stable across model switches so the old generated provider is
 // replaced instead of accumulating a new provider on every switch.
 const AUTOCLAW_CONFIG_ID: &str = "at-switch-managed";
+
+/// OpenClaw 系 Agent 的会话各自记录激活模型，恢复会话时沿用会话模型而不跟随
+/// `agents.defaults.model`，导致切换后已存在的会话继续请求旧模型。锚点有两处：
+/// `agents/main/sessions/sessions.json`（每个会话对象的 `model` 字段）和会话
+/// 线程转录 `*.jsonl`（每条消息的 `"model"` 元数据，网关按最后一条续聊）。
+/// 这里生成把两处改为新模型 id 的伴生更新；状态文件不存在（Agent 尚未运行
+/// 过）或没有任何需要更新的会话时返回空。
+///
+/// 线程转录里只改写**裸 id**（不含 `/`，用户自建/受管端点的模型，如
+/// `NMauto`）；官方模型带 provider 前缀（`easyclaw/deepseek.deepseek-v4-flash`）
+/// 的 id 保持原样。
+fn build_session_model_updates(
+    detection: &AgentDetection,
+    model_id: &str,
+) -> AppResult<Vec<FileChange>> {
+    let config_path = detection.config_path.as_ref().ok_or_else(|| {
+        CommandError::new("agent_config_path_missing", "未找到 OpenClaw 配置路径")
+    })?;
+    let Some(sessions_dir) = config_path
+        .parent()
+        .map(|directory| directory.join("agents/main/sessions"))
+    else {
+        return Err(CommandError::new(
+            "agent_config_path_missing",
+            "未找到 OpenClaw 配置路径",
+        ));
+    };
+    let mut changes = Vec::new();
+
+    let sessions_path = sessions_dir.join("sessions.json");
+    if sessions_path.is_file() {
+        let mut root: Value = serde_json::from_slice(&fs::read(&sessions_path)?)
+            .map_err(|_| CommandError::new("agent_config_unparseable", "会话状态文件无法解析"))?;
+        let mut sessions: Vec<&mut Value> = match &mut root {
+            Value::Object(map) => map.values_mut().collect(),
+            Value::Array(items) => items.iter_mut().collect(),
+            _ => Vec::new(),
+        };
+        let mut updated = 0;
+        for session in sessions.iter_mut() {
+            if let Some(model) = session
+                .as_object_mut()
+                .and_then(|object| object.get_mut("model"))
+                .filter(|model| model.is_string())
+            {
+                *model = Value::String(model_id.to_owned());
+                updated += 1;
+            }
+        }
+        if updated > 0 {
+            let content = serde_json::to_vec(&root).map_err(|error| {
+                CommandError::new(
+                    "agent_config_serialize_failed",
+                    format!("无法生成会话状态更新：{error}"),
+                )
+            })?;
+            changes.push(FileChange {
+                path: sessions_path,
+                new_content: content,
+            });
+        }
+    }
+
+    if let Ok(entries) = fs::read_dir(&sessions_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let Ok(content) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let (patched, modified) = rewrite_thread_models(&content, model_id);
+            if modified {
+                changes.push(FileChange {
+                    path,
+                    new_content: patched.into_bytes(),
+                });
+            }
+        }
+    }
+    Ok(changes)
+}
+
+/// 把线程转录里 `"model":"<裸 id>"` 的值替换为新模型 id（兼容 `"model": "…"`
+/// 的 pretty 形式；带 provider 前缀的 id 不动）。返回 (新内容, 是否有修改)。
+fn rewrite_thread_models(content: &str, model_id: &str) -> (String, bool) {
+    let needle = "\"model\":";
+    let mut out = String::with_capacity(content.len());
+    let mut modified = false;
+    let mut rest = content;
+    while let Some(position) = rest.find(needle) {
+        out.push_str(&rest[..position + needle.len()]);
+        rest = &rest[position + needle.len()..];
+        let spaces = rest.len() - rest.trim_start().len();
+        let (spaces, rest_after_spaces) = rest.split_at(spaces);
+        out.push_str(spaces);
+        rest = rest_after_spaces;
+        match rest.strip_prefix('"') {
+            Some(after_quote) => {
+                out.push('"');
+                rest = after_quote;
+                match rest.find('"') {
+                    Some(end) => {
+                        let value = &rest[..end];
+                        if !value.contains('/') && value != model_id {
+                            out.push_str(model_id);
+                            modified = true;
+                        } else {
+                            out.push_str(value);
+                        }
+                        out.push('"');
+                        rest = &rest[end + 1..];
+                    }
+                    None => {
+                        out.push_str(rest);
+                        rest = "";
+                    }
+                }
+            }
+            None => continue,
+        }
+    }
+    out.push_str(rest);
+    (out, modified)
+}
 
 impl AgentAdapter for QClawAdapter {
     fn id(&self) -> &'static str {
@@ -83,6 +209,14 @@ impl AgentAdapter for QClawAdapter {
     ) -> AppResult<()> {
         verify_openclaw_config(detection, desired)
     }
+
+    fn build_sidecar_updates(
+        &self,
+        detection: &AgentDetection,
+        desired: &DesiredAgentBinding<'_>,
+    ) -> AppResult<Vec<FileChange>> {
+        build_session_model_updates(detection, desired.model_id)
+    }
 }
 
 impl AgentAdapter for AutoClawAdapter {
@@ -146,6 +280,173 @@ impl AgentAdapter for AutoClawAdapter {
         desired: &DesiredAgentBinding<'_>,
     ) -> AppResult<()> {
         verify_autoclaw_settings(detection, desired)
+    }
+
+    fn build_sidecar_updates(
+        &self,
+        detection: &AgentDetection,
+        desired: &DesiredAgentBinding<'_>,
+    ) -> AppResult<Vec<FileChange>> {
+        build_session_model_updates(detection, desired.model_id)
+    }
+}
+
+/// EasyClaw（猎豹移动，`ai.easyclawcn.desktop`）同样是 OpenClaw 发行版：应用内
+/// `Resources/cfmind/gateway.asar/openclaw.mjs` 就是 OpenClaw 运行时，配置落在
+/// `~/.easyclaw/easyclaw.json`，其中 `models.providers` 与
+/// `agents.defaults.model.primary` 的结构与 QClaw / AionClaw 逐字一致，因此直接复用
+/// 同一套读写实现。
+///
+/// 与 AutoClaw 不同，这里不需要再写第二处：`~/.easyclaw/easyclawcli` 里明确设置了
+/// `EASYCLAW_CONFIG_DIR=/…/.easyclaw`，`easyclaw.json` 本身就是权威配置。它只在安装/
+/// 升级时按 `.config-merge-signal.json` 合并一次默认值（并留一份
+/// `.easyclaw-snapshots/*.bak`），不会在每次启动时重建。
+pub struct EasyClawAdapter;
+
+impl AgentAdapter for EasyClawAdapter {
+    fn id(&self) -> &'static str {
+        "easyclaw"
+    }
+
+    fn display_name(&self) -> &'static str {
+        "EasyClaw"
+    }
+
+    fn detect(&self, context: &DiscoveryContext) -> AgentDetection {
+        let installation = locate_desktop_app(
+            context,
+            &["easyclaw.app"],
+            &["ai.easyclawcn.desktop"],
+            &["Programs/EasyClaw/EasyClaw.exe", "EasyClaw/EasyClaw.exe"],
+        );
+        AgentDetection::from_file_probe(
+            self.id(),
+            self.display_name(),
+            installation,
+            context.home.join(".easyclaw").join("easyclaw.json"),
+            probe_openclaw,
+            true,
+        )
+    }
+
+    fn source_protocol(
+        &self,
+        mode: AgentBindingMode,
+        upstream_protocol: ApiProtocol,
+    ) -> ApiProtocol {
+        openclaw_source_protocol(mode, upstream_protocol)
+    }
+
+    fn build_config(
+        &self,
+        detection: &AgentDetection,
+        desired: &DesiredAgentBinding<'_>,
+    ) -> AppResult<Vec<u8>> {
+        build_openclaw_config(detection, desired)
+    }
+
+    fn build_native_config(
+        &self,
+        detection: &AgentDetection,
+        baseline: &BaselineSnapshot,
+    ) -> AppResult<Vec<u8>> {
+        build_native_openclaw_config(detection, baseline)
+    }
+
+    fn verify_config(
+        &self,
+        detection: &AgentDetection,
+        desired: &DesiredAgentBinding<'_>,
+    ) -> AppResult<()> {
+        verify_openclaw_config(detection, desired)
+    }
+
+    fn build_sidecar_updates(
+        &self,
+        detection: &AgentDetection,
+        desired: &DesiredAgentBinding<'_>,
+    ) -> AppResult<Vec<FileChange>> {
+        build_session_model_updates(detection, desired.model_id)
+    }
+}
+
+/// AionClaw 把 OpenClaw 运行时放在 macOS 沙盒容器内，因此其 `openclaw.json`
+/// 不在 `~/.aionclaw`，而在容器的 `AionClaw/openclaw/state/` 下；实测该路径
+/// 对当前用户可读写，且结构（`models.providers` + `agents.defaults.model.primary`）
+/// 与其它 OpenClaw 发行版完全一致，因此直接复用同一套读写实现。
+fn aionclaw_state_dir(context: &DiscoveryContext) -> PathBuf {
+    let container = context.home.join(
+        "Library/Containers/com.quyuanai.aionclaw/Data/Library/Application Support/AionClaw/openclaw/state",
+    );
+    if container.join("openclaw.json").exists() {
+        return container;
+    }
+    let portable = context.application_data_dir.join("AionClaw/openclaw/state");
+    if portable.join("openclaw.json").exists() {
+        return portable;
+    }
+    // 两者都不存在时仍返回沙盒路径，保证写入目标稳定、报错信息一致。
+    container
+}
+
+pub struct AionClawAdapter;
+
+impl AgentAdapter for AionClawAdapter {
+    fn id(&self) -> &'static str {
+        "aionclaw"
+    }
+
+    fn display_name(&self) -> &'static str {
+        "AionClaw"
+    }
+
+    fn detect(&self, context: &DiscoveryContext) -> AgentDetection {
+        let installation = locate_desktop_app(
+            context,
+            &["AionClaw.app"],
+            &["com.quyuanai.aionclaw"],
+            &["Programs/AionClaw/AionClaw.exe", "AionClaw/AionClaw.exe"],
+        );
+        AgentDetection::from_file_probe(
+            self.id(),
+            self.display_name(),
+            installation,
+            aionclaw_state_dir(context).join("openclaw.json"),
+            probe_openclaw,
+            true,
+        )
+    }
+
+    fn source_protocol(
+        &self,
+        mode: AgentBindingMode,
+        upstream_protocol: ApiProtocol,
+    ) -> ApiProtocol {
+        openclaw_source_protocol(mode, upstream_protocol)
+    }
+
+    fn build_config(
+        &self,
+        detection: &AgentDetection,
+        desired: &DesiredAgentBinding<'_>,
+    ) -> AppResult<Vec<u8>> {
+        build_openclaw_config(detection, desired)
+    }
+
+    fn build_native_config(
+        &self,
+        detection: &AgentDetection,
+        baseline: &BaselineSnapshot,
+    ) -> AppResult<Vec<u8>> {
+        build_native_openclaw_config(detection, baseline)
+    }
+
+    fn verify_config(
+        &self,
+        detection: &AgentDetection,
+        desired: &DesiredAgentBinding<'_>,
+    ) -> AppResult<()> {
+        verify_openclaw_config(detection, desired)
     }
 }
 
@@ -491,6 +792,32 @@ fn build_openclaw_config(
         Value::String(format!("{provider_id}/{}", desired.model_id)),
     );
 
+    // `agents.list[*].model.primary` 是每个 Agent 定义自带的模型，优先级高于
+    // `agents.defaults.model`——不改它时已存在的 Agent（如 main）会继续用切换
+    // 前的模型。只改指向自定义 Provider（非官方 easyclaw）的 primary，官方
+    // 模型的 Agent 配置保持原样。
+    if let Some(list) = agents.get_mut("list").and_then(Value::as_array_mut) {
+        for agent in list.iter_mut() {
+            let managed = agent
+                .pointer("/model/primary")
+                .and_then(Value::as_str)
+                .and_then(|value| value.split_once('/'))
+                .is_some_and(|(prefix, _)| prefix != "easyclaw");
+            if managed {
+                if let Some(agent_model) = agent
+                    .as_object_mut()
+                    .and_then(|object| object.get_mut("model"))
+                    .and_then(Value::as_object_mut)
+                {
+                    agent_model.insert(
+                        "primary".to_owned(),
+                        Value::String(format!("{provider_id}/{}", desired.model_id)),
+                    );
+                }
+            }
+        }
+    }
+
     serde_json::to_vec_pretty(&root)
         .map_err(|_| CommandError::internal("无法生成 OpenClaw 配置"))
         .map(|mut bytes| {
@@ -649,6 +976,47 @@ mod tests {
             base_url: "http://127.0.0.1:54187/v1",
             credential: "local-token",
         }
+    }
+
+    #[test]
+    fn openclaw_update_rewrites_agent_list_model_primary() {
+        let temp = tempfile::tempdir().expect("temp");
+        let path = temp.path().join("easyclaw.json");
+        fs::write(
+            &path,
+            br#"{
+  "models": {"mode": "merge", "providers": {"custom": {"baseUrl": "https://x/v1", "models": [{"id": "NMauto", "name": "NMauto"}]}}},
+  "agents": {
+    "defaults": {"model": {"primary": "custom/NMauto"}},
+    "list": [
+      {"name": "main", "model": {"primary": "custom/NMauto"}},
+      {"name": "official", "model": {"primary": "easyclaw/deepseek.deepseek-v4-flash"}},
+      {"name": "no-model"}
+    ]
+  }
+}"#,
+        )
+        .expect("seed config");
+
+        let updated = build_openclaw_config(&file_detection(path), &desired()).expect("build");
+        let root: Value = serde_json::from_slice(&updated).expect("json");
+        // 指向自定义 Provider 的 primary 改为受管 provider/模型。
+        assert_eq!(
+            root.pointer("/agents/list/0/model/primary"),
+            Some(&Value::String("蒙云智算/glm-test".to_owned()))
+        );
+        // 官方 easyclaw 的 Agent 配置不动。
+        assert_eq!(
+            root.pointer("/agents/list/1/model/primary"),
+            Some(&Value::String(
+                "easyclaw/deepseek.deepseek-v4-flash".to_owned()
+            ))
+        );
+        assert_eq!(root.pointer("/agents/list/2/model"), None);
+        assert_eq!(
+            root.pointer("/agents/defaults/model/primary"),
+            Some(&Value::String("蒙云智算/glm-test".to_owned()))
+        );
     }
 
     #[test]
@@ -972,5 +1340,122 @@ mod tests {
             root.pointer("/models/primary/model"),
             Some(&Value::String("glm-next".to_owned()))
         );
+    }
+
+    fn file_detection(path: std::path::PathBuf) -> AgentDetection {
+        AgentDetection {
+            id: "easyclaw",
+            display_name: "EasyClaw",
+            installation: None,
+            config_path: Some(path),
+            runtime_data_dir: None,
+            install_status: AgentInstallStatus::Installed,
+            config_health: AgentConfigHealth::Healthy,
+            write_supported: true,
+            needs_restart: true,
+            message: None,
+            custom_install_path: None,
+            using_custom_install_path: false,
+        }
+    }
+
+    fn seed_sessions(path: &std::path::Path) {
+        fs::create_dir_all(path.parent().expect("sessions parent")).expect("sessions dir");
+        fs::write(
+            path,
+            br#"{
+  "agent:main:thread:a": {"sessionId": "a", "model": "NMauto", "updatedAt": 1},
+  "agent:main:thread:b": {"sessionId": "b", "model": "NMauto"},
+  "agent:main:thread:c": {"sessionId": "c"}
+}"#,
+        )
+        .expect("seed sessions");
+    }
+
+    #[test]
+    fn session_model_update_rewrites_recorded_session_models() {
+        let temp = tempfile::tempdir().expect("temp");
+        let config = temp.path().join("easyclaw.json");
+        fs::write(&config, b"{}").expect("seed config");
+        let sessions = temp.path().join("agents/main/sessions/sessions.json");
+        seed_sessions(&sessions);
+
+        let updates = build_session_model_updates(&file_detection(config), "deepseek-v4-flash")
+            .expect("update");
+        let change = updates
+            .iter()
+            .find(|change| change.path == sessions)
+            .expect("sessions change");
+        fs::write(&change.path, &change.new_content).expect("apply");
+
+        let updated: Value =
+            serde_json::from_slice(&fs::read(&change.path).expect("read")).expect("json");
+        let values = updated.as_object().expect("object");
+        assert_eq!(values["agent:main:thread:a"]["model"], "deepseek-v4-flash");
+        assert_eq!(values["agent:main:thread:b"]["model"], "deepseek-v4-flash");
+        // 没有 model 字段的会话本来就走默认模型，保持原样不写入。
+        assert!(values["agent:main:thread:c"].get("model").is_none());
+    }
+
+    #[test]
+    fn session_model_update_is_empty_without_sessions_state() {
+        let temp = tempfile::tempdir().expect("temp");
+        let config = temp.path().join("easyclaw.json");
+        fs::write(&config, b"{}").expect("seed config");
+        let updates = build_session_model_updates(&file_detection(config), "m").expect("ok");
+        assert!(updates.is_empty());
+    }
+
+    #[test]
+    fn session_model_update_rewrites_bare_thread_model_ids_only() {
+        let temp = tempfile::tempdir().expect("temp");
+        let config = temp.path().join("easyclaw.json");
+        fs::write(&config, b"{}").expect("seed config");
+        let thread = temp
+            .path()
+            .join("agents/main/sessions/thread-a-topic-b.jsonl");
+        fs::create_dir_all(thread.parent().expect("thread parent")).expect("thread dir");
+        fs::write(
+            &thread,
+            concat!(
+                r#"{"type":"message","model":"NMauto","content":"hi"}"#, "\n",
+                r#"{"type":"message","model":"easyclaw/deepseek.deepseek-v4-flash","content":"hi"}"#, "\n",
+                r#"{"type":"message","model":"GLM-5.2","content":"hi"}"#, "\n",
+                r#"{"type":"message", "model": "NMauto", "content":"pretty"}"#, "\n"
+            ),
+        )
+        .expect("seed thread");
+
+        let updates = build_session_model_updates(&file_detection(config), "deepseek-v4-flash")
+            .expect("update");
+        let change = updates
+            .iter()
+            .find(|change| change.path == thread)
+            .expect("thread change");
+        let patched = String::from_utf8(change.new_content.clone()).expect("utf8");
+        // 裸 id 全部改为新模型（含 pretty 形式），已有目标值与带前缀的官方 id 不动。
+        assert!(patched.contains(r#""model":"deepseek-v4-flash""#));
+        assert!(patched.contains(r#""model": "deepseek-v4-flash""#));
+        assert!(patched.contains(r#""model":"easyclaw/deepseek.deepseek-v4-flash""#));
+        assert_eq!(patched.matches("deepseek-v4-flash").count(), 4);
+        assert!(!patched.contains("NMauto"));
+    }
+
+    #[test]
+    fn easyclaw_sidecar_updates_target_the_sessions_state() {
+        let temp = tempfile::tempdir().expect("temp");
+        let config = temp.path().join("easyclaw.json");
+        fs::write(&config, b"{}").expect("seed config");
+        let sessions = temp.path().join("agents/main/sessions/sessions.json");
+        seed_sessions(&sessions);
+
+        let updates = EasyClawAdapter
+            .build_sidecar_updates(&file_detection(config), &desired())
+            .expect("sidecars");
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].path, sessions);
+
+        let updated: Value = serde_json::from_slice(&updates[0].new_content).expect("json");
+        assert_eq!(updated["agent:main:thread:a"]["model"], "glm-test");
     }
 }

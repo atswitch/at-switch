@@ -109,8 +109,10 @@ const mockAgentDisplayNames = {
   codex: "Codex",
   dumate: "百度搭子",
   hermes: "Hermes Agent",
+  aionclaw: "AionClaw",
   ima: "ima",
   trae: "TRAE",
+  easyclaw: "EasyClaw",
 } as const;
 
 const mockSnapshotTemplate: AppSnapshot = {
@@ -377,6 +379,19 @@ const realSnapshotData: AppSnapshot = {
       detectedVersion: "26.825.51511",
       installPath: "/Applications/Codex.app",
       configPath: "/Users/example/.codex/config.toml",
+      needsRestart: true,
+      automaticRestartSupported: true,
+    },
+    {
+      id: "zcode",
+      displayName: "ZCode",
+      installStatus: "installed",
+      runtimeStatus: "not_running",
+      configHealth: "healthy",
+      adapterVerified: true,
+      detectedVersion: "1.0.0",
+      installPath: "/Applications/ZCode.app",
+      configPath: "/Users/example/.zcode/v2/provider_config.json",
       needsRestart: true,
       automaticRestartSupported: true,
     },

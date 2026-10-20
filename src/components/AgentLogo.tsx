@@ -1,14 +1,17 @@
 import { Bot } from "lucide-react";
 import clsx from "clsx";
 import autoclawIcon from "../assets/agents/autoclaw.png";
+import aionclawIcon from "../assets/agents/aionclaw.png";
 import codebuddyIcon from "../assets/agents/codebuddy.png";
 import codexIcon from "../assets/agents/codex.png";
 import dumateIcon from "../assets/agents/dumate.png";
 import hermesIcon from "../assets/agents/hermes.png";
+import easyclawIcon from "../assets/agents/easyclaw.png";
 import imaIcon from "../assets/agents/ima.png";
 import qclawIcon from "../assets/agents/qclaw.png";
 import traeIcon from "../assets/agents/trae.svg";
 import workbuddyIcon from "../assets/agents/workbuddy.png";
+import zcodeIcon from "../assets/agents/zcode.png";
 
 const agentLogos: Partial<Record<string, string>> = {
   workbuddy: workbuddyIcon,
@@ -18,8 +21,11 @@ const agentLogos: Partial<Record<string, string>> = {
   codex: codexIcon,
   dumate: dumateIcon,
   hermes: hermesIcon,
+  easyclaw: easyclawIcon,
+  aionclaw: aionclawIcon,
   ima: imaIcon,
   trae: traeIcon,
+  zcode: zcodeIcon,
 };
 
 interface AgentLogoProps {
