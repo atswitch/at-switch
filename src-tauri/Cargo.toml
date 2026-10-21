@@ -1,6 +1,6 @@
 [package]
 name = "at-switch"
-version = "3.17.6"
+version = "3.18.0"
 description = "Local-first provider, model and proxy configuration manager for AI agents."
 authors = ["AT-Switch Contributors"]
 edition = "2021"
@@ -34,6 +34,7 @@ rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
 rusty-leveldb = "4.0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml = "0.9"
 sha2 = "0.10"
 tauri = { version = "2.12.1", features = ["tray-icon"] }
 tauri-plugin-autostart = "2"

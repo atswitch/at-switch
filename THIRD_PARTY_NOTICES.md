@@ -26,6 +26,7 @@ the asset's source category and distribution basis.
 | AutoClaw | `src/assets/agents/autoclaw.png` | Official macOS application icon | Maintainer-confirmed permission |
 | OpenAI Codex | `src/assets/agents/codex.png` | Official application icon | Maintainer-confirmed permission |
 | Baidu DuMate | `src/assets/agents/dumate.png` | Official macOS application icon | Compatibility identification; upstream trademark terms apply |
+| Hermes Agent | `src/assets/agents/hermes.png` | Official website icon | Compatibility identification; upstream trademark terms apply |
 | EasyClaw | `src/assets/agents/easyclaw.png` | Official macOS application icon | Compatibility identification; upstream trademark terms apply |
 | AionClaw | `src/assets/agents/aionclaw.png` | Official macOS application icon | Maintainer-confirmed permission |
 | Tencent ima | `src/assets/agents/ima.png` | Official website favicon | Compatibility identification; upstream trademark terms apply |

@@ -2,6 +2,7 @@ mod aionclaw;
 mod codebuddy;
 mod codex;
 mod dumate;
+mod hermes;
 mod ima;
 mod ima_adapter;
 mod ima_local;
@@ -43,6 +44,7 @@ use self::{
     codebuddy::CodeBuddyAdapter,
     codex::CodexAdapter,
     dumate::DuMateAdapter,
+    hermes::HermesAdapter,
     ima_adapter::ImaAdapter,
     lifecycle::RestartOutcome,
     locator::{normalized_path_string, DiscoveryContext, Installation, InstallationKind},
@@ -375,8 +377,9 @@ impl Default for AgentRegistry {
                 Box::new(TraeAdapter::unified()),
                 Box::new(EasyClawAdapter),
                 Box::new(ZCodeAdapter),
-                // AionClaw 最新接入，渲染在切换器列表末尾。
                 Box::new(AionClawAdapter),
+                // Hermes 最新接入，渲染在切换器列表末尾。
+                Box::new(HermesAdapter),
             ],
             context: DiscoveryContext::native(),
         }
@@ -1055,6 +1058,15 @@ impl AgentService {
                 return Err(error);
             }
         };
+        // Hermes 的 config.yaml 只落 key_env 指针，凭据本体必须写进同目录的
+        // .env 受管行；与配置写入共用同一个事务窗口，这里失败同样回滚配置。
+        if draft.agent_id == "hermes" {
+            if let Err(error) = hermes::ensure_env_api_key(&detection, desired.credential) {
+                let _ = self.transaction.restore_backup(&result.backup_path);
+                self.cleanup_new_local_token(&local_token_metadata);
+                return Err(error);
+            }
+        }
         // 伴生状态（会话激活模型等）与主配置共用同一个事务窗口：任一失败
         // 或后续 verify 失败，全部一起回滚。
         let mut sidecar_backups = Vec::new();
@@ -2297,7 +2309,8 @@ mod tests {
                 "trae",
                 "easyclaw",
                 "zcode",
-                "aionclaw"
+                "aionclaw",
+                "hermes"
             ]
         );
     }
@@ -2325,9 +2338,17 @@ mod tests {
             fs::create_dir_all(executable.parent().expect("parent")).expect("app directory");
             fs::write(executable, b"test executable").expect("executable");
         }
+        let home = temp.path().join("home");
+        // Hermes 通过命令行安装被发现，同时需要已初始化的配置文件。
+        let hermes_bin = home.join(".local/bin/hermes.exe");
+        fs::create_dir_all(hermes_bin.parent().expect("hermes bin parent")).expect("hermes bin");
+        fs::write(&hermes_bin, b"test executable").expect("hermes executable");
+        fs::create_dir_all(home.join(".hermes")).expect("Hermes config directory");
+        fs::write(home.join(".hermes/config.yaml"), b"model: m\nprovider: p\n")
+            .expect("Hermes config");
         let registry = AgentRegistry {
             context: DiscoveryContext {
-                home: temp.path().join("home"),
+                home,
                 application_data_dir: temp.path().join("Roaming"),
                 application_dirs: Vec::new(),
                 path_entries: Vec::new(),
@@ -2340,7 +2361,7 @@ mod tests {
         };
 
         let detections = registry.detections();
-        assert_eq!(detections.len(), 11);
+        assert_eq!(detections.len(), 12);
         assert_eq!(
             detections
                 .iter()
@@ -2388,6 +2409,7 @@ mod tests {
             ("dumate", "DuMate.exe"),
             ("easyclaw", "EasyClaw.exe"),
             ("aionclaw", "AionClaw.exe"),
+            ("hermes", "Hermes.exe"),
             ("ima", "ima.copilot.exe"),
             ("trae", "Trae CN.exe"),
             ("zcode", "ZCode.exe"),
@@ -2439,6 +2461,7 @@ mod tests {
             ("dumate", "DuMate.app"),
             ("easyclaw", "easyclaw.app"),
             ("aionclaw", "AionClaw.app"),
+            ("hermes", "Hermes.app"),
             ("ima", "ima.copilot.app"),
             ("trae", "Trae CN.app"),
             ("zcode", "ZCode.app"),

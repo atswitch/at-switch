@@ -5,6 +5,7 @@ import aionclawIcon from "../assets/agents/aionclaw.png";
 import codebuddyIcon from "../assets/agents/codebuddy.png";
 import codexIcon from "../assets/agents/codex.png";
 import dumateIcon from "../assets/agents/dumate.png";
+import hermesIcon from "../assets/agents/hermes.png";
 import easyclawIcon from "../assets/agents/easyclaw.png";
 import imaIcon from "../assets/agents/ima.png";
 import qclawIcon from "../assets/agents/qclaw.png";
@@ -19,6 +20,7 @@ const agentLogos: Partial<Record<string, string>> = {
   autoclaw: autoclawIcon,
   codex: codexIcon,
   dumate: dumateIcon,
+  hermes: hermesIcon,
   easyclaw: easyclawIcon,
   aionclaw: aionclawIcon,
   ima: imaIcon,

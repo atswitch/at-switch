@@ -11,6 +11,7 @@
 | `autoclaw.png` | AutoClaw macOS 官方应用 `icon.icns` |
 | `codex.png` | OpenAI 官方 ChatGPT/Codex 应用图标 |
 | `dumate.png` | 百度搭子（DuMate）macOS 官方应用 `icon.icns` |
+| `hermes.png` | Hermes Agent 官网图标 |
 | `easyclaw.png` | EasyClaw 桌面应用 `ai.easyclawcn.desktop` 官方图标 |
 | `aionclaw.png` | AionClaw macOS 官方应用 `icon.icns` |
 | `ima.png` | 腾讯 ima 官方网站公开 `favicon.svg`，转换为 128×128 PNG |
