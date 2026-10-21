@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v3.18.0] - 2026-10-21
+
 ### Added
 - Hermes Agent integration ported from the Hermes delivery line: managed Provider and default model in `$HERMES_HOME/config.yaml`, `~/.hermes/config.yaml`, or the Hermes Agent CN Desktop data home `%LOCALAPPDATA%\Hermes Agent CN Desktop\data\hermes-home\` (YAML, serde_yaml), Direct limited to OpenAI Chat Completions with Proxy conversion for other protocols, and ConfigTransaction baseline, encrypted backup and rollback. The desktop installation is discovered first so pause/restart targets the desktop app; the API key is referenced via the `HERMES_AT_SWITCH_API_KEY` environment variable instead of plain text, and automatically upserted into the `.env` next to the managed config on every switch (preserving the user's other entries) so verification no longer fails on a missing credential file.
 
