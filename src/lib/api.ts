@@ -113,6 +113,7 @@ const mockAgentDisplayNames = {
   ima: "ima",
   trae: "TRAE",
   easyclaw: "EasyClaw",
+  openclaw: "OpenClaw",
 } as const;
 
 const mockSnapshotTemplate: AppSnapshot = {

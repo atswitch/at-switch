@@ -26,6 +26,9 @@ export const SWITCHABLE_AGENT_IDS = [
   // Hermes Agent 更新 $HERMES_HOME/config.yaml 或 ~/.hermes/config.yaml 中的受管
   // Provider 与默认模型；Direct 仅支持 OpenAI Chat Completions。
   "hermes",
+  // OpenClaw 本体（openclaw.ai）直接读写 ~/.openclaw/openclaw.json，复用 OpenClaw
+  // 系共享写内核（models.providers + agents.defaults.model.primary）；Direct 支持全部三种协议。
+  "openclaw",
 ] as const;
 
 export function isSwitchableAgent(agent: AgentSummary): boolean {

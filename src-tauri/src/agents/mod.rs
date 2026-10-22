@@ -9,6 +9,7 @@ mod ima_local;
 mod lifecycle;
 mod locator;
 mod openclaw;
+mod openclaw_native;
 mod service_adapter;
 #[cfg(test)]
 mod service_adapter_tests;
@@ -49,6 +50,7 @@ use self::{
     lifecycle::RestartOutcome,
     locator::{normalized_path_string, DiscoveryContext, Installation, InstallationKind},
     openclaw::{AionClawAdapter, AutoClawAdapter, EasyClawAdapter, QClawAdapter},
+    openclaw_native::OpenClawAdapter,
     trae::TraeAdapter,
     workbuddy::WorkBuddyAdapter,
     zcode::ZCodeAdapter,
@@ -378,8 +380,9 @@ impl Default for AgentRegistry {
                 Box::new(EasyClawAdapter),
                 Box::new(ZCodeAdapter),
                 Box::new(AionClawAdapter),
-                // Hermes 最新接入，渲染在切换器列表末尾。
                 Box::new(HermesAdapter),
+                // OpenClaw 本体最新接入，渲染在切换器列表末尾。
+                Box::new(OpenClawAdapter),
             ],
             context: DiscoveryContext::native(),
         }
@@ -2310,7 +2313,8 @@ mod tests {
                 "easyclaw",
                 "zcode",
                 "aionclaw",
-                "hermes"
+                "hermes",
+                "openclaw"
             ]
         );
     }

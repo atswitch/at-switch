@@ -83,6 +83,7 @@
 | **腾讯 ima** | macOS / Windows | 当前实现，验收范围见下文 | 公网 OpenAI Chat Completions | 连接本机已登录账号，同步 ima 账号模型设置与两个入口的本地选择 |
 | **TRAE** | macOS / Windows | 当前实现，验收范围见下文 | OpenAI Chat / Responses / Anthropic Messages | 版本限定的 Trae 原生模型服务，无表单操作；模型请求直连 Provider |
 | **ZCode** | macOS / Windows | 当前实现，验收范围见下文 | OpenAI Chat / Responses / Anthropic Messages | 写入 ZCode 个人 Provider 配置 `~/.zcode/v2/provider_config.json`，并同步任务表与本地存储中的选中模型；需重启生效 |
+| **OpenClaw** | macOS / Windows | 当前实现，验收范围见下文 | OpenAI Chat / Responses / Anthropic Messages | 直接读写 `~/.openclaw/openclaw.json`（复用 OpenClaw 系共享写内核），并同步会话模型；需重启生效 |
 
 ### ZCode 使用说明
 

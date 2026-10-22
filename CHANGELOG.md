@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- OpenClaw itself (openclaw.ai, `ai.openclaw.mac` desktop app plus the `~/.openclaw/bin/openclaw` CLI) as a switchable agent. The authoritative config is `~/.openclaw/openclaw.json` with no indirection, so the adapter reuses the shared OpenClaw write kernel (`models.providers` + `agents.defaults.model.primary`): Direct passthrough for OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages with Proxy conversion, session model sidecar updates, and ConfigTransaction baseline, encrypted backup and rollback. Strict JSON only — JSON5 comments are rejected with a stable `openclaw_config_unparseable` error.
+
 ## [v3.18.0] - 2026-10-21
 
 ### Added

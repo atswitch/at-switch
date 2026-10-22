@@ -29,7 +29,10 @@ const AUTOCLAW_CONFIG_ID: &str = "at-switch-managed";
 /// 线程转录里只改写**裸 id**（不含 `/`，用户自建/受管端点的模型，如
 /// `NMauto`）；官方模型带 provider 前缀（`easyclaw/deepseek.deepseek-v4-flash`）
 /// 的 id 保持原样。
-fn build_session_model_updates(
+///
+/// 该内核供 OpenClaw 系全部适配器（QClaw/AutoClaw/EasyClaw/AionClaw 及
+/// `openclaw_native.rs` 的 OpenClaw 本体）共用。
+pub(super) fn build_session_model_updates(
     detection: &AgentDetection,
     model_id: &str,
 ) -> AppResult<Vec<FileChange>> {
@@ -450,7 +453,10 @@ impl AgentAdapter for AionClawAdapter {
     }
 }
 
-fn openclaw_source_protocol(mode: AgentBindingMode, upstream: ApiProtocol) -> ApiProtocol {
+pub(super) fn openclaw_source_protocol(
+    mode: AgentBindingMode,
+    upstream: ApiProtocol,
+) -> ApiProtocol {
     match mode {
         AgentBindingMode::Direct => upstream,
         AgentBindingMode::Proxy => ApiProtocol::OpenaiChatCompletions,
@@ -502,7 +508,7 @@ fn qclaw_runtime_config_path(state_dir: &std::path::Path) -> Option<PathBuf> {
         })
 }
 
-fn probe_openclaw(path: &PathBuf) -> AppResult<()> {
+pub(super) fn probe_openclaw(path: &PathBuf) -> AppResult<()> {
     let value: Value = serde_json::from_slice(&fs::read(path)?).map_err(|_| {
         CommandError::new(
             "agent_config_unparseable",
@@ -747,7 +753,7 @@ fn serialize_json_object(root: Map<String, Value>, message: &str) -> AppResult<V
         })
 }
 
-fn build_openclaw_config(
+pub(super) fn build_openclaw_config(
     detection: &AgentDetection,
     desired: &DesiredAgentBinding<'_>,
 ) -> AppResult<Vec<u8>> {
@@ -826,7 +832,7 @@ fn build_openclaw_config(
         })
 }
 
-fn build_native_openclaw_config(
+pub(super) fn build_native_openclaw_config(
     detection: &AgentDetection,
     baseline: &BaselineSnapshot,
 ) -> AppResult<Vec<u8>> {
@@ -890,7 +896,7 @@ fn build_native_openclaw_config(
         })
 }
 
-fn verify_openclaw_config(
+pub(super) fn verify_openclaw_config(
     detection: &AgentDetection,
     desired: &DesiredAgentBinding<'_>,
 ) -> AppResult<()> {
