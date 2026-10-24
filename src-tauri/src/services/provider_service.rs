@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::{
     domain::{
         ApiProtocol, AppResult, CommandError, ModelDraft, ModelSummary, ProviderDraft,
-        ProviderSummary, VerificationStatus,
+        ProviderSummary, RemoteModelSummary, VerificationStatus,
     },
     infrastructure::{Database, SecretStore, SecretValue},
 };
@@ -443,14 +443,14 @@ impl ProviderService {
         Ok(self.database.get_provider(&summary.id)?.summary)
     }
 
-    /// 拉取上游 `GET {base}/models` 的模型 ID 列表（OpenAI 兼容格式），
+    /// 拉取上游 `GET {base}/models` 的模型摘要（OpenAI 兼容格式），
     /// 供"获取模型列表"选择器使用；不落库、不改任何验证状态。
     pub async fn list_remote_models(
         &self,
         base_url: &str,
         protocol: ApiProtocol,
         api_key: &str,
-    ) -> AppResult<Vec<String>> {
+    ) -> AppResult<Vec<RemoteModelSummary>> {
         let url = endpoint_url(base_url, "models")?;
         let request = self.http.get(url);
         let request = match protocol {
@@ -471,15 +471,33 @@ impl ProviderService {
             )
         })?;
         let empty = Vec::new();
-        let mut models: Vec<String> = value
+        let data = value
             .get("data")
             .and_then(Value::as_array)
-            .unwrap_or(&empty)
-            .iter()
-            .filter_map(|item| item.get("id").and_then(Value::as_str).map(str::to_owned))
-            .collect();
-        models.sort();
-        models.dedup();
+            .unwrap_or(&empty);
+        let mut seen = HashSet::new();
+        let mut models: Vec<RemoteModelSummary> = Vec::new();
+        for item in data {
+            let Some(id) = item.get("id").and_then(Value::as_str).map(str::to_owned) else {
+                continue;
+            };
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            let owned_by = item
+                .get("owned_by")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let context_window = ["context_window", "context_length", "max_context_window"]
+                .iter()
+                .find_map(|key| item.get(key).and_then(Value::as_u64));
+            models.push(RemoteModelSummary {
+                id,
+                owned_by,
+                context_window,
+            });
+        }
+        models.sort_by(|left, right| left.id.cmp(&right.id));
         if models.is_empty() {
             return Err(
                 CommandError::new("provider_models_empty", "Provider 未返回任何模型")
@@ -1521,7 +1539,10 @@ mod tests {
             )
             .await
             .expect("model list");
-        assert_eq!(models, vec!["glm-5", "glm-5.2"]);
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "glm-5");
+        assert_eq!(models[0].owned_by.as_deref(), Some("system"));
+        assert_eq!(models[1].id, "glm-5.2");
         server.await.expect("mock server task");
     }
 

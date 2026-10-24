@@ -6,7 +6,8 @@ use tauri_plugin_autostart::ManagerExt;
 use crate::{
     domain::{
         AgentBindingDraft, AgentSummary, ApiProtocol, AppResult, AppSettings, AppSnapshot,
-        CommandError, ProviderDraft, ProviderSummary, ProxyStatus, SettingsPatch,
+        CommandError, ProviderDraft, ProviderSummary, ProxyStatus, RemoteModelSummary,
+        SettingsPatch,
     },
     AppState,
 };
@@ -109,7 +110,7 @@ pub async fn save_provider_verified(
     state.providers.save_verified(draft).await
 }
 
-/// 拉取上游 GET {base}/models 的模型 ID 列表（不落库）。
+/// 拉取上游 GET {base}/models 的模型摘要（不落库）。
 /// API Key 未填时，编辑场景回退到凭据库中的存量 Key。
 #[tauri::command]
 pub async fn fetch_provider_models(
@@ -118,7 +119,7 @@ pub async fn fetch_provider_models(
     protocol: ApiProtocol,
     api_key: Option<String>,
     provider_id: Option<String>,
-) -> AppResult<Vec<String>> {
+) -> AppResult<Vec<RemoteModelSummary>> {
     let api_key = match api_key {
         Some(key) if !key.trim().is_empty() => key,
         _ => {

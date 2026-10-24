@@ -38,6 +38,12 @@ export interface ModelSummary {
   verificationStatus: VerificationStatus;
 }
 
+export interface RemoteModelSummary {
+  id: string;
+  ownedBy?: string;
+  contextWindow?: number;
+}
+
 export interface ProviderSummary {
   id: string;
   name: string;

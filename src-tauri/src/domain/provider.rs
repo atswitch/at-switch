@@ -180,6 +180,15 @@ impl VerificationStatus {
     }
 }
 
+/// 上游 `GET {base}/models` 返回的单个模型摘要（获取模型列表选择器用）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteModelSummary {
+    pub id: String,
+    pub owned_by: Option<String>,
+    pub context_window: Option<u64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelDraft {

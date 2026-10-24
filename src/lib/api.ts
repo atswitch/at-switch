@@ -7,6 +7,7 @@ import type {
   ProviderDraft,
   ProviderSummary,
   ProxyStatus,
+  RemoteModelSummary,
 } from "../types";
 import { supportsDirectBinding, usesServiceModelSettings } from "./agentCapabilities";
 
@@ -581,14 +582,14 @@ async function invokeMock<T>(
         };
       }
       return [
-        "glm-5",
-        "glm-5.1",
-        "glm-5.2",
-        "glm-5.3",
-        "glm-5.3-flash",
-        "kimi-k2.5",
-        "kimi-k3",
-        "minimax-m3",
+        { id: "glm-5", ownedBy: "system", contextWindow: 200000 },
+        { id: "glm-5.1", ownedBy: "system", contextWindow: 200000 },
+        { id: "glm-5.2", ownedBy: "system", contextWindow: 1000000 },
+        { id: "glm-5.3", ownedBy: "system", contextWindow: 1000000 },
+        { id: "glm-5.3-flash", ownedBy: "system", contextWindow: 1000000 },
+        { id: "kimi-k2.5", ownedBy: "system" },
+        { id: "kimi-k3", ownedBy: "system", contextWindow: 1000000 },
+        { id: "minimax-m3", ownedBy: "system" },
       ] as T;
     }
     case "save_provider": {
@@ -849,7 +850,7 @@ export const api = {
     protocol: ApiProtocol,
     options?: { apiKey?: string; providerId?: string },
   ) =>
-    invoke<string[]>("fetch_provider_models", {
+    invoke<RemoteModelSummary[]>("fetch_provider_models", {
       baseUrl,
       protocol,
       apiKey: options?.apiKey,

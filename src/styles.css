@@ -4234,6 +4234,11 @@ textarea:focus-visible {
   background: rgba(0, 0, 0, 0.05);
 }
 
+.remote-model-picker__meta {
+  margin-left: auto;
+  color: var(--ink-soft, #6b7280);
+}
+
 .remote-model-picker__footer {
   display: flex;
   align-items: center;
