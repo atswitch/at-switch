@@ -575,6 +575,7 @@ export function ProviderForm({
           <span>{text("模型能力", "Capabilities")}</span>
           <span>{text("操作", "Actions")}</span>
         </div>
+        <div className="model-editor-list">
         {models.map((model, index) => {
           const capabilityLabel =
             model.outputModality === "image"
@@ -749,6 +750,7 @@ export function ProviderForm({
             </div>
           );
         })}
+        </div>
       </fieldset>
       {modelPickerOpen ? (
         <div
@@ -797,33 +799,53 @@ export function ProviderForm({
             <div className="remote-model-picker__list">
               {remoteModels
                 .filter((model) => model.id.includes(modelPickerQuery.trim()))
-                .map((model) => (
-                  <label
-                    key={model.id}
-                    className="remote-model-picker__item"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedRemoteModels.includes(model.id)}
-                      onChange={() => toggleRemoteModel(model.id)}
-                      aria-label={model.id}
-                    />
-                    <span>{model.id}</span>
-                    <small className="remote-model-picker__meta">
-                      {[
-                        model.contextWindow
-                          ? text(
-                              `${Math.round(model.contextWindow / 1000)}K 上下文`,
-                              `${Math.round(model.contextWindow / 1000)}K context`,
-                            )
-                          : undefined,
-                        model.ownedBy,
-                      ]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </small>
-                  </label>
-                ))}
+                .map((model) => {
+                  const presetModel = currentPreset?.models.find(
+                    (presetModel) => presetModel.modelId === model.id,
+                  );
+                  const modelName = presetModel
+                    ? presetModelDisplayName(presetModel, language)
+                    : model.id;
+                  return (
+                    <label
+                      key={model.id}
+                      className="remote-model-picker__item"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedRemoteModels.includes(model.id)}
+                        onChange={() => toggleRemoteModel(model.id)}
+                        aria-label={model.id}
+                      />
+                      <span className="remote-model-picker__model">
+                        <span className="remote-model-picker__id">
+                          {model.id}
+                        </span>
+                        {modelName !== model.id ? (
+                          <span className="remote-model-picker__name">
+                            {modelName}
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="remote-model-picker__cap">
+                        {text("文本", "Text")}
+                      </span>
+                      <small className="remote-model-picker__meta">
+                        {[
+                          model.contextWindow
+                            ? text(
+                                `${Math.round(model.contextWindow / 1000)}K 上下文`,
+                                `${Math.round(model.contextWindow / 1000)}K context`,
+                              )
+                            : undefined,
+                          model.ownedBy,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </small>
+                    </label>
+                  );
+                })}
             </div>
             <div className="remote-model-picker__footer">
               <small>

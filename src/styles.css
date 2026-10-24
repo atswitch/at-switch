@@ -4239,6 +4239,39 @@ textarea:focus-visible {
   color: var(--ink-soft, #6b7280);
 }
 
+.remote-model-picker__model {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.remote-model-picker__id {
+  font-weight: 600;
+}
+
+.remote-model-picker__name {
+  font-size: 12px;
+  color: var(--ink-soft, #6b7280);
+}
+
+.remote-model-picker__cap {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border: 1px solid var(--line, rgba(0, 0, 0, 0.12));
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--ink-soft, #6b7280);
+}
+
+.model-editor-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 340px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
 .remote-model-picker__footer {
   display: flex;
   align-items: center;
