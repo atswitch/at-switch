@@ -140,7 +140,7 @@ describe("ProviderForm", () => {
       "NMauto",
       "deepseek-v4-flash",
       "GLM-5.2",
-      "doubao-seedream-5.0-lite",
+      "doubao-seedream-5.0-pro",
     ]);
     expect(screen.getByText("模型 ID")).toBeInTheDocument();
     expect(screen.getByText("模型名称")).toBeInTheDocument();
@@ -169,7 +169,7 @@ describe("ProviderForm", () => {
           expect.objectContaining({ modelId: "NMauto" }),
           expect.objectContaining({ modelId: "deepseek-v4-flash" }),
           expect.objectContaining({ modelId: "GLM-5.2" }),
-          expect.objectContaining({ modelId: "doubao-seedream-5.0-lite" }),
+          expect.objectContaining({ modelId: "doubao-seedream-5.0-pro" }),
         ]),
       }),
     );
