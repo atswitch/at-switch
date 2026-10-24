@@ -1,6 +1,7 @@
 import type {
   AgentBindingDraft,
   AgentSummary,
+  ApiProtocol,
   AppSettings,
   AppSnapshot,
   ProviderDraft,
@@ -555,6 +556,41 @@ async function invokeMock<T>(
       }
       return structuredClone(agent) as T;
     }
+    case "fetch_provider_models": {
+      const apiKey = args?.apiKey as string | undefined;
+      const providerId = args?.providerId as string | undefined;
+      const hasKey =
+        Boolean(apiKey) ||
+        (providerId
+          ? mockSnapshot.providers.find((item) => item.id === providerId)
+              ?.hasApiKey
+          : false);
+      if (!hasKey) {
+        throw {
+          code: "secret_missing",
+          message: "请先填写 API Key",
+          recovery: "在供应商表单中填写 API Key 后再获取模型列表。",
+        };
+      }
+      const baseUrl = (args?.baseUrl as string) ?? "";
+      if (baseUrl.includes("invalid") || apiKey === "invalid-key") {
+        throw {
+          code: "provider_connection_failed",
+          message:
+            "openai-chat-completions 协议验证失败：连接被拒绝（mock 获取模型列表失败）",
+        };
+      }
+      return [
+        "glm-5",
+        "glm-5.1",
+        "glm-5.2",
+        "glm-5.3",
+        "glm-5.3-flash",
+        "kimi-k2.5",
+        "kimi-k3",
+        "minimax-m3",
+      ] as T;
+    }
     case "save_provider": {
       const draft = args?.draft as ProviderDraft;
       const provider = mockSaveProvider(draft);
@@ -808,6 +844,17 @@ export const api = {
     invoke<ProviderSummary>("test_provider", { providerId, modelId }),
   testProviderDraft: (draft: ProviderDraft) =>
     invoke<void>("test_provider_draft", { draft }),
+  fetchProviderModels: (
+    baseUrl: string,
+    protocol: ApiProtocol,
+    options?: { apiKey?: string; providerId?: string },
+  ) =>
+    invoke<string[]>("fetch_provider_models", {
+      baseUrl,
+      protocol,
+      apiKey: options?.apiKey,
+      providerId: options?.providerId,
+    }),
   applyAgentBinding: (draft: AgentBindingDraft, confirmAccountConnection?: boolean) =>
     invoke<AgentSummary>("apply_agent_binding", { draft, confirmAccountConnection }),
   restoreAgentNative: (agentId: string, confirmAccountConnection?: boolean) =>

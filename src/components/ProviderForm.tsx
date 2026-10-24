@@ -18,6 +18,7 @@ import type {
   ProviderSummary,
 } from "../types";
 import { protocolLabels } from "../lib/format";
+import { api } from "../lib/api";
 import { ProviderLogo } from "./ProviderLogo";
 import {
   presetModelDisplayName,
@@ -183,6 +184,14 @@ export function ProviderForm({
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const comboboxRef = useRef<HTMLDivElement>(null);
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [modelPickerLoading, setModelPickerLoading] = useState(false);
+  const [modelPickerError, setModelPickerError] = useState<string>();
+  const [remoteModels, setRemoteModels] = useState<string[]>([]);
+  const [selectedRemoteModels, setSelectedRemoteModels] = useState<string[]>(
+    [],
+  );
+  const [modelPickerQuery, setModelPickerQuery] = useState("");
 
   useEffect(() => {
     const handleDocumentClick = (event: MouseEvent) => {
@@ -205,6 +214,63 @@ export function ProviderForm({
     baseUrl.trim().length > 0 &&
     (initialProvider?.hasApiKey || apiKey.trim().length > 0) &&
     models.some((model) => model.modelId.trim().length > 0);
+  const canFetchModels =
+    baseUrl.trim().length > 0 &&
+    (initialProvider?.hasApiKey || apiKey.trim().length > 0) &&
+    !modelPickerLoading &&
+    !busy;
+
+  const openModelPicker = async () => {
+    setModelPickerError(undefined);
+    setModelPickerLoading(true);
+    try {
+      const list = await api.fetchProviderModels(baseUrl.trim(), protocol, {
+        apiKey: apiKeyDirty ? apiKey : undefined,
+        providerId: initialProvider?.id,
+      });
+      setRemoteModels(list);
+      setSelectedRemoteModels(
+        list.filter((id) => models.some((model) => model.modelId === id)),
+      );
+      setModelPickerQuery("");
+      setModelPickerOpen(true);
+    } catch (error) {
+      const message = (error as { message?: string }).message;
+      setModelPickerError(
+        message ??
+          text("获取模型列表失败", "Failed to fetch the model list"),
+      );
+    } finally {
+      setModelPickerLoading(false);
+    }
+  };
+
+  const toggleRemoteModel = (id: string) => {
+    setSelectedRemoteModels((current) =>
+      current.includes(id)
+        ? current.filter((item) => item !== id)
+        : [...current, id],
+    );
+  };
+
+  const applySelectedModels = () => {
+    setModels((current) => {
+      const existing = new Set(current.map((model) => model.modelId));
+      const additions = selectedRemoteModels
+        .filter((id) => !existing.has(id))
+        .map((id) =>
+          createModelRow({
+            modelId: id,
+            displayName: id,
+            outputModality: "text",
+            supportsStreaming: true,
+            supportsTools: true,
+          }),
+        );
+      return [...current, ...additions];
+    });
+    setModelPickerOpen(false);
+  };
 
   useEffect(() => {
     if (!initialProvider?.hasApiKey || !loadMaskedApiKey) return;
@@ -652,16 +718,108 @@ export function ProviderForm({
             </div>
           );
         })}
-        <button
-          type="button"
-          className="text-button"
-          onClick={() =>
-            setModels((current) => [...current, createModelRow()])
-          }
-        >
-          <Plus size={15} /> {text("添加模型", "Add model")}
-        </button>
+        <div className="provider-form__model-actions">
+          <button
+            type="button"
+            className="text-button"
+            onClick={() =>
+              setModels((current) => [...current, createModelRow()])
+            }
+          >
+            <Plus size={15} /> {text("添加模型", "Add model")}
+          </button>
+          <button
+            type="button"
+            className="text-button"
+            disabled={!canFetchModels}
+            onClick={openModelPicker}
+          >
+            {modelPickerLoading
+              ? text("正在获取模型列表…", "Fetching models…")
+              : text("获取模型列表", "Fetch model list")}
+          </button>
+        </div>
+        {modelPickerError ? (
+          <p className="remote-model-picker__error" role="alert">
+            {modelPickerError}
+          </p>
+        ) : null}
       </fieldset>
+      {modelPickerOpen ? (
+        <div
+          className="remote-model-picker"
+          role="dialog"
+          aria-modal="true"
+          aria-label={text("选择模型", "Select models")}
+        >
+          <div className="remote-model-picker__panel">
+            <div className="remote-model-picker__header">
+              <h3>{text("选择模型", "Select models")}</h3>
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => setModelPickerOpen(false)}
+              >
+                {text("取消", "Cancel")}
+              </button>
+            </div>
+            <input
+              className="remote-model-picker__search"
+              value={modelPickerQuery}
+              onChange={(event) => setModelPickerQuery(event.target.value)}
+              placeholder={text("搜索模型…", "Search models…")}
+            />
+            <div className="remote-model-picker__actions">
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => setSelectedRemoteModels(remoteModels)}
+              >
+                {text("全选", "Select all")}
+              </button>
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => setSelectedRemoteModels([])}
+              >
+                {text("全不选", "Select none")}
+              </button>
+            </div>
+            <div className="remote-model-picker__list">
+              {remoteModels
+                .filter((id) => id.includes(modelPickerQuery.trim()))
+                .map((id) => (
+                  <label
+                    key={id}
+                    className="remote-model-picker__item"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedRemoteModels.includes(id)}
+                      onChange={() => toggleRemoteModel(id)}
+                    />
+                    <span>{id}</span>
+                  </label>
+                ))}
+            </div>
+            <div className="remote-model-picker__footer">
+              <small>
+                {text(
+                  `已选 ${selectedRemoteModels.length} / 共 ${remoteModels.length}`,
+                  `${selectedRemoteModels.length} of ${remoteModels.length} selected`,
+                )}
+              </small>
+              <button
+                type="button"
+                className="button button--primary"
+                onClick={applySelectedModels}
+              >
+                {text("应用", "Apply")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <details
         className="advanced-options"

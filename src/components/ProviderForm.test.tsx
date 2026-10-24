@@ -410,4 +410,38 @@ describe("ProviderForm", () => {
       expect.objectContaining({ defaultModelId: "model-a-v2" }),
     );
   });
+
+  it("fetches remote models and applies the selected ones to the list", async () => {
+    const user = userEvent.setup();
+    render(
+      <ProviderForm
+        initialProvider={provider}
+        onSubmit={vi.fn()}
+        busy={false}
+      />,
+    );
+
+    // 未编辑 Key 时表单不会传明文（走存量凭据），mock 环境无存量 → 先填 Key。
+    await user.type(
+      screen.getByPlaceholderText("保存到系统凭据库；请求时发送给上游"),
+      "sk-test-key",
+    );
+    await user.click(screen.getByRole("button", { name: "获取模型列表" }));
+    expect(
+      await screen.findByRole("dialog", { name: "选择模型" }),
+    ).toBeInTheDocument();
+
+    const checkbox = screen.getByRole("checkbox", { name: "glm-5" });
+    expect(checkbox).not.toBeChecked();
+    await user.click(checkbox);
+    await user.click(screen.getByRole("button", { name: "应用" }));
+
+    expect(
+      screen.queryByRole("dialog", { name: "选择模型" }),
+    ).not.toBeInTheDocument();
+    const modelIds = screen
+      .getAllByPlaceholderText("模型 ID")
+      .map((input) => input.getAttribute("value"));
+    expect(modelIds).toContain("glm-5");
+  });
 });

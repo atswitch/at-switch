@@ -5,8 +5,8 @@ use tauri_plugin_autostart::ManagerExt;
 
 use crate::{
     domain::{
-        AgentBindingDraft, AgentSummary, AppResult, AppSettings, AppSnapshot, CommandError,
-        ProviderDraft, ProviderSummary, ProxyStatus, SettingsPatch,
+        AgentBindingDraft, AgentSummary, ApiProtocol, AppResult, AppSettings, AppSnapshot,
+        CommandError, ProviderDraft, ProviderSummary, ProxyStatus, SettingsPatch,
     },
     AppState,
 };
@@ -107,6 +107,32 @@ pub async fn save_provider_verified(
     draft: ProviderDraft,
 ) -> AppResult<ProviderSummary> {
     state.providers.save_verified(draft).await
+}
+
+/// 拉取上游 GET {base}/models 的模型 ID 列表（不落库）。
+/// API Key 未填时，编辑场景回退到凭据库中的存量 Key。
+#[tauri::command]
+pub async fn fetch_provider_models(
+    state: State<'_, AppState>,
+    base_url: String,
+    protocol: ApiProtocol,
+    api_key: Option<String>,
+    provider_id: Option<String>,
+) -> AppResult<Vec<String>> {
+    let api_key = match api_key {
+        Some(key) if !key.trim().is_empty() => key,
+        _ => {
+            let provider_id = provider_id.ok_or_else(|| {
+                CommandError::new("secret_missing", "请先填写 API Key")
+                    .with_recovery("在供应商表单中填写 API Key 后再获取模型列表。")
+            })?;
+            state.providers.reveal_api_key(&provider_id)?
+        }
+    };
+    state
+        .providers
+        .list_remote_models(&base_url, protocol, &api_key)
+        .await
 }
 
 #[tauri::command]

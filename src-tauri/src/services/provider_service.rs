@@ -443,6 +443,52 @@ impl ProviderService {
         Ok(self.database.get_provider(&summary.id)?.summary)
     }
 
+    /// 拉取上游 `GET {base}/models` 的模型 ID 列表（OpenAI 兼容格式），
+    /// 供"获取模型列表"选择器使用；不落库、不改任何验证状态。
+    pub async fn list_remote_models(
+        &self,
+        base_url: &str,
+        protocol: ApiProtocol,
+        api_key: &str,
+    ) -> AppResult<Vec<String>> {
+        let url = endpoint_url(base_url, "models")?;
+        let request = self.http.get(url);
+        let request = match protocol {
+            ApiProtocol::AnthropicMessages => request
+                .header("x-api-key", api_key)
+                .header("anthropic-version", "2023-06-01"),
+            _ => request.bearer_auth(api_key),
+        };
+        let response = request.send().await.map_err(classify_network_error)?;
+        if !response.status().is_success() {
+            return Err(safe_http_error(response.status()));
+        }
+        let value: Value = response.json().await.map_err(|error| {
+            log::warn!("provider model list returned invalid JSON: {error}");
+            CommandError::new(
+                "provider_response_invalid",
+                "Provider 返回内容不是有效的模型列表 JSON",
+            )
+        })?;
+        let empty = Vec::new();
+        let mut models: Vec<String> = value
+            .get("data")
+            .and_then(Value::as_array)
+            .unwrap_or(&empty)
+            .iter()
+            .filter_map(|item| item.get("id").and_then(Value::as_str).map(str::to_owned))
+            .collect();
+        models.sort();
+        models.dedup();
+        if models.is_empty() {
+            return Err(
+                CommandError::new("provider_models_empty", "Provider 未返回任何模型")
+                    .with_recovery("确认 Base URL 指向兼容接口（如 https://api.example.com/v1）。"),
+            );
+        }
+        Ok(models)
+    }
+
     async fn perform_test_request(
         &self,
         protocol: ApiProtocol,
@@ -1437,6 +1483,82 @@ mod tests {
             service.list().expect("providers").is_empty(),
             "failed connection must not persist the provider"
         );
+    }
+
+    #[tokio::test]
+    async fn list_remote_models_parses_sorts_and_deduplicates_ids() {
+        let database = Arc::new(Database::in_memory().expect("database"));
+        let service = ProviderService::new(database, Arc::new(MemorySecretStore::default()))
+            .expect("service");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("local mock listener");
+        let addr = listener.local_addr().expect("mock addr");
+        let server = tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut buffer = [0u8; 2048];
+                let _ = socket.read(&mut buffer).await;
+                let body = r#"{"object":"list","data":[
+                    {"id":"glm-5.2","owned_by":"system"},
+                    {"id":"glm-5","owned_by":"system"},
+                    {"id":"glm-5.2","owned_by":"system"}
+                ]}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+
+        let models = service
+            .list_remote_models(
+                &format!("http://{addr}/v1"),
+                ApiProtocol::OpenaiChatCompletions,
+                "secret",
+            )
+            .await
+            .expect("model list");
+        assert_eq!(models, vec!["glm-5", "glm-5.2"]);
+        server.await.expect("mock server task");
+    }
+
+    #[tokio::test]
+    async fn list_remote_models_rejects_an_empty_model_list() {
+        let database = Arc::new(Database::in_memory().expect("database"));
+        let service = ProviderService::new(database, Arc::new(MemorySecretStore::default()))
+            .expect("service");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("local mock listener");
+        let addr = listener.local_addr().expect("mock addr");
+        let server = tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut buffer = [0u8; 2048];
+                let _ = socket.read(&mut buffer).await;
+                let body = r#"{"object":"list","data":[]}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+
+        let error = service
+            .list_remote_models(
+                &format!("http://{addr}/v1"),
+                ApiProtocol::OpenaiChatCompletions,
+                "secret",
+            )
+            .await
+            .expect_err("empty list must be an error");
+        assert_eq!(error.code, "provider_models_empty");
+        server.await.expect("mock server task");
     }
 
     #[test]
