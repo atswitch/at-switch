@@ -582,14 +582,24 @@ async function invokeMock<T>(
         };
       }
       return [
-        { id: "glm-5", ownedBy: "system", contextWindow: 200000 },
-        { id: "glm-5.1", ownedBy: "system", contextWindow: 200000 },
-        { id: "glm-5.2", ownedBy: "system", contextWindow: 1000000 },
-        { id: "glm-5.3", ownedBy: "system", contextWindow: 1000000 },
-        { id: "glm-5.3-flash", ownedBy: "system", contextWindow: 1000000 },
-        { id: "kimi-k2.5", ownedBy: "system" },
-        { id: "kimi-k3", ownedBy: "system", contextWindow: 1000000 },
-        { id: "minimax-m3", ownedBy: "system" },
+        {
+          id: "glm-5",
+          ownedBy: "system",
+          contextWindow: 200000,
+          outputModality: "text",
+        },
+        {
+          id: "glm-5.1",
+          ownedBy: "system",
+          contextWindow: 200000,
+          outputModality: "text",
+        },
+        {
+          id: "doubao-seedream-5.0-pro",
+          ownedBy: "system",
+          outputModality: "image",
+        },
+        { id: "kimi-k3", ownedBy: "system", outputModality: "text" },
       ] as T;
     }
     case "save_provider": {

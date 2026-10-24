@@ -135,6 +135,17 @@ pub enum ModelOutputModality {
 }
 
 impl ModelOutputModality {
+    /// /models 接口的 `type` 字段（CHAT/IMAGE/AUDIO/VIDEO）映射；
+    /// 未知值按文本处理。
+    pub fn from_remote_type(value: &str) -> Self {
+        match value.trim().to_ascii_uppercase().as_str() {
+            "IMAGE" => Self::Image,
+            "AUDIO" => Self::Audio,
+            "VIDEO" => Self::Video,
+            _ => Self::Text,
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Text => "text",
@@ -187,6 +198,9 @@ pub struct RemoteModelSummary {
     pub id: String,
     pub owned_by: Option<String>,
     pub context_window: Option<u64>,
+    /// /models 接口不返回能力字段，按模型 ID 关键词启发式识别
+    /// （seedream/dall-e/flux 等判定为生图），其余默认文本。
+    pub output_modality: ModelOutputModality,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

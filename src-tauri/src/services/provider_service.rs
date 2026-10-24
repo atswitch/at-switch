@@ -8,8 +8,8 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        ApiProtocol, AppResult, CommandError, ModelDraft, ModelSummary, ProviderDraft,
-        ProviderSummary, RemoteModelSummary, VerificationStatus,
+        ApiProtocol, AppResult, CommandError, ModelDraft, ModelOutputModality, ModelSummary,
+        ProviderDraft, ProviderSummary, RemoteModelSummary, VerificationStatus,
     },
     infrastructure::{Database, SecretStore, SecretValue},
 };
@@ -491,10 +491,16 @@ impl ProviderService {
             let context_window = ["context_window", "context_length", "max_context_window"]
                 .iter()
                 .find_map(|key| item.get(key).and_then(Value::as_u64));
+            let output_modality = item
+                .get("type")
+                .and_then(Value::as_str)
+                .map(ModelOutputModality::from_remote_type)
+                .unwrap_or(ModelOutputModality::Text);
             models.push(RemoteModelSummary {
                 id,
                 owned_by,
                 context_window,
+                output_modality,
             });
         }
         models.sort_by(|left, right| left.id.cmp(&right.id));
@@ -1518,9 +1524,10 @@ mod tests {
                 let mut buffer = [0u8; 2048];
                 let _ = socket.read(&mut buffer).await;
                 let body = r#"{"object":"list","data":[
-                    {"id":"glm-5.2","owned_by":"system"},
-                    {"id":"glm-5","owned_by":"system"},
-                    {"id":"glm-5.2","owned_by":"system"}
+                    {"id":"glm-5.2","owned_by":"system","type":"CHAT"},
+                    {"id":"glm-5","owned_by":"system","type":"CHAT"},
+                    {"id":"doubao-seedream-5.0-pro","owned_by":"system","type":"IMAGE"},
+                    {"id":"glm-5.2","owned_by":"system","type":"CHAT"}
                 ]}"#;
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -1539,10 +1546,13 @@ mod tests {
             )
             .await
             .expect("model list");
-        assert_eq!(models.len(), 2);
-        assert_eq!(models[0].id, "glm-5");
-        assert_eq!(models[0].owned_by.as_deref(), Some("system"));
-        assert_eq!(models[1].id, "glm-5.2");
+        assert_eq!(models.len(), 3);
+        assert_eq!(models[0].id, "doubao-seedream-5.0-pro");
+        assert_eq!(models[0].output_modality, ModelOutputModality::Image);
+        assert_eq!(models[1].id, "glm-5");
+        assert_eq!(models[1].owned_by.as_deref(), Some("system"));
+        assert_eq!(models[1].output_modality, ModelOutputModality::Text);
+        assert_eq!(models[2].id, "glm-5.2");
         server.await.expect("mock server task");
     }
 

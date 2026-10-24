@@ -42,6 +42,7 @@ export interface RemoteModelSummary {
   id: string;
   ownedBy?: string;
   contextWindow?: number;
+  outputModality: ModelOutputModality;
 }
 
 export interface ProviderSummary {

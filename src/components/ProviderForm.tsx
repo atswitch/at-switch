@@ -275,20 +275,31 @@ export function ProviderForm({
     );
   };
 
+  const remoteCapabilityLabel = (modality: ModelOutputModality) =>
+    modality === "image"
+      ? text("生图", "Image generation")
+      : modality === "audio"
+        ? text("语音", "Audio")
+        : modality === "video"
+          ? text("视频", "Video")
+          : text("文本", "Text");
+
   const applySelectedModels = () => {
     setModels((current) => {
       const existing = new Set(current.map((model) => model.modelId));
       const additions = selectedRemoteModels
         .filter((id) => !existing.has(id))
-        .map((id) =>
-          createModelRow({
+        .map((id) => {
+          const remote = remoteModels.find((model) => model.id === id);
+          const modality = remote?.outputModality ?? "text";
+          return createModelRow({
             modelId: id,
             displayName: id,
-            outputModality: "text",
-            supportsStreaming: true,
-            supportsTools: true,
-          }),
-        );
+            outputModality: modality,
+            supportsStreaming: modality === "text",
+            supportsTools: modality === "text",
+          });
+        });
       return [...current, ...additions];
     });
     setModelPickerOpen(false);
@@ -846,7 +857,7 @@ export function ProviderForm({
                         </span>
                       ) : null}
                       <span className="remote-model-picker__cap">
-                        {text("文本", "Text")}
+                        {remoteCapabilityLabel(model.outputModality)}
                       </span>
                       <small className="remote-model-picker__meta">
                         {[
