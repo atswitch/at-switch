@@ -9,8 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v3.18.2] - 2026-10-24
+
 ### Changed
 - Saving a provider now runs a connection test with the draft values before persisting. Text-model drafts with an unreachable endpoint, wrong key, or broken protocol are rejected with the real connection error (per-protocol detail) instead of being saved silently. Drafts without text models pass straight through; editing a provider without a new API key falls back to the stored credential for the check.
+- When the save-time connection test passes and the tested text model declares no streaming/tool capabilities, it is marked Verified immediately, so saving once is enough to switch.
+
+### Added
+- 获取模型列表 in the provider form: fetch the upstream `GET {base}/models` list (OpenAI-compatible `type` field mapped to 文本/生图/语音/视频), pick models from a searchable dialog, and merge the selection into the model rows. The Mongyun preset now suggests `doubao-seedream-5.0-pro`.
 
 ## [v3.18.0] - 2026-10-21
 
