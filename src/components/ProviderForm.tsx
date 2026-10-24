@@ -731,7 +731,7 @@ export function ProviderForm({
         disabled={!valid || busy}
       >
         {busy
-          ? text("安全保存中…", "Saving securely…")
+          ? text("正在连接测试并保存…", "Testing connection and saving…")
           : text("保存模型供应商", "Save provider")}
       </button>
     </form>

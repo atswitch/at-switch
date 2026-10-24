@@ -376,6 +376,57 @@ describe("AT-Switch desktop shell", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("saves through the verified path and marks the default text model verified", async () => {
+    const provider = await api.saveProviderVerified({
+      name: "直连已验证",
+      kind: "custom" as const,
+      protocol: "openai_chat_completions" as const,
+      baseUrl: "https://api.example.test/v1",
+      apiKey: "sk-test-key",
+      defaultModelId: "glm-ok",
+      models: [
+        {
+          modelId: "glm-ok",
+          displayName: "GLM OK",
+          outputModality: "text" as const,
+          supportsStreaming: true,
+          supportsTools: true,
+        },
+      ],
+    });
+    expect(provider.verifiedModelId).toBe("glm-ok");
+    expect(provider.models[0]?.verificationStatus).toBe("verified");
+  });
+
+  it("does not save providers whose verified save fails the connection test", async () => {
+    await expect(
+      api.saveProviderVerified({
+        name: "坏连接已验证路径",
+        kind: "custom" as const,
+        protocol: "openai_chat_completions" as const,
+        baseUrl: "https://api.example.test/v1",
+        apiKey: "invalid-key",
+        defaultModelId: "glm-bad",
+        models: [
+          {
+            modelId: "glm-bad",
+            displayName: "GLM Bad",
+            outputModality: "text" as const,
+            supportsStreaming: true,
+            supportsTools: true,
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: "provider_connection_failed" });
+
+    const snapshot = await api.bootstrap();
+    expect(
+      snapshot.providers.find(
+        (provider) => provider.name === "坏连接已验证路径",
+      ),
+    ).toBeUndefined();
+  });
+
   it("does not show warning checkbox for plain HTTP addresses", async () => {
     const user = userEvent.setup();
     render(<App />);

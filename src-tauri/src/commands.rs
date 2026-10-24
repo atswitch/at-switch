@@ -100,6 +100,15 @@ pub async fn test_provider_draft(
     state.providers.test_draft(&draft).await
 }
 
+/// 连接测试通过后保存，并把刚测试过的默认文本模型直接标记为已验证。
+#[tauri::command]
+pub async fn save_provider_verified(
+    state: State<'_, AppState>,
+    draft: ProviderDraft,
+) -> AppResult<ProviderSummary> {
+    state.providers.save_verified(draft).await
+}
+
 #[tauri::command]
 pub async fn apply_agent_binding(
     state: State<'_, AppState>,

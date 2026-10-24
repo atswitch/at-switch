@@ -279,28 +279,23 @@ function AppContent() {
   const saveProvider = async (draft: ProviderDraft) => {
     setSavingProvider(true);
     try {
-      // 保存前用草稿值做连接测试：文本模型连接失败时阻断保存，
-      // 并把真实连接错误（凭据/协议/endpoint）展示给用户。
-      try {
-        await api.testProviderDraft(draft);
-      } catch (error) {
-        notify(
-          "bad",
-          text("保存失败：连接测试未通过", "Save failed: connection test failed"),
-          describeCommandError(error, language),
-        );
-        return;
-      }
-      await api.saveProvider(draft);
+      // 保存即验证：先用草稿值做真实连接测试（不落库），失败时阻断保存并
+      // 展示真实连接错误；通过后落库并把默认文本模型直接标记为已验证。
+      const saved = await api.saveProviderVerified(draft);
       setProviderModal(false);
       await loadSnapshot(true);
       notify(
         "good",
         text("模型供应商已安全保存", "Provider saved securely"),
-        text(
-          "保存前已完成连接测试；各文本模型首次切换前仍需通过连接测试。",
-          "The connection was verified before saving. Text models still need to pass a connection test before their first switch.",
-        ),
+        saved.verifiedModelId
+          ? text(
+              "连接测试已通过，默认文本模型已验证、可直接切换；其他文本模型切换前仍需单独测试。",
+              "The connection passed and the default text model is verified and ready to switch. Other text models still need individual tests.",
+            )
+          : text(
+              "连接测试已通过；当前供应商没有需要验证的文本模型。",
+              "The connection passed; this provider has no text models to verify.",
+            ),
       );
     } catch (error) {
       notify(

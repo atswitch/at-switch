@@ -426,6 +426,98 @@ export function getActiveMockSnapshot(): AppSnapshot {
 
 let mockSnapshot = structuredClone(getActiveMockSnapshot());
 
+// save_provider 与 save_provider_verified 共用的落库逻辑（仅 mock 环境执行）。
+function mockSaveProvider(draft: ProviderDraft): ProviderSummary {
+  const matchingProviders = draft.id
+    ? []
+    : mockSnapshot.providers.filter((provider) =>
+        sameProviderIdentity(provider, draft),
+      );
+  const existing = draft.id
+    ? mockSnapshot.providers.find((item) => item.id === draft.id)
+    : matchingProviders[0];
+  const id = existing?.id ?? draft.id ?? crypto.randomUUID();
+  const previousProviders = draft.id
+    ? existing
+      ? [existing]
+      : []
+    : matchingProviders;
+  const draftModels = draft.id
+    ? draft.models
+    : mergeModelDrafts(previousProviders, draft.models);
+  const connectionChanged = Boolean(
+    existing &&
+      (existing.kind !== draft.kind ||
+        existing.protocol !== draft.protocol ||
+        normalizedProviderUrl(existing.baseUrl) !==
+          normalizedProviderUrl(draft.baseUrl) ||
+        draft.apiKey),
+  );
+  const models = draftModels.map((model) => {
+    const previous = previousProviders
+      .flatMap((provider) => provider.models)
+      .find((item) => item.modelId === model.modelId);
+    const capabilitiesUnchanged =
+      previous?.outputModality === model.outputModality &&
+      previous?.supportsStreaming === model.supportsStreaming &&
+      previous?.supportsTools === model.supportsTools;
+    return {
+      id: `${id}:${model.modelId}`,
+      providerId: id,
+      modelId: model.modelId,
+      displayName: model.displayName,
+      outputModality: model.outputModality,
+      supportsStreaming: model.supportsStreaming,
+      supportsTools: model.supportsTools,
+      source: "custom" as const,
+      verificationStatus:
+        previous && !connectionChanged && capabilitiesUnchanged
+          ? previous.verificationStatus
+          : previous && previous.verificationStatus !== "draft_unverified"
+            ? ("stale" as const)
+            : ("draft_unverified" as const),
+    };
+  });
+  const verificationStatus = aggregateVerificationStatus(models);
+  const provider: ProviderSummary = {
+    id,
+    name: draft.name,
+    kind: draft.kind,
+    protocol: draft.protocol,
+    baseUrl: draft.baseUrl,
+    isRecommended: false,
+    isEnabled: true,
+    hasApiKey: Boolean(draft.apiKey) || Boolean(existing?.hasApiKey),
+    maskedApiKey: draft.apiKey
+      ? maskApiKey(draft.apiKey)
+      : existing?.maskedApiKey,
+    verificationStatus,
+    verifiedModelId: models.find(
+      (model) =>
+        model.outputModality === "text" &&
+        model.verificationStatus === "verified",
+    )?.modelId,
+    defaultModelId: existing?.defaultModelId ?? draft.defaultModelId,
+    models,
+  };
+  if (!draft.id && matchingProviders.length > 1) {
+    const duplicateIds = new Set(
+      matchingProviders.slice(1).map((provider) => provider.id),
+    );
+    mockSnapshot.providers = mockSnapshot.providers.filter(
+      (provider) => !duplicateIds.has(provider.id),
+    );
+    duplicateIds.forEach((duplicateId) =>
+      mockProviderApiKeys.delete(duplicateId),
+    );
+  }
+  const index = mockSnapshot.providers.findIndex((item) => item.id === id);
+  if (draft.apiKey) mockProviderApiKeys.set(id, draft.apiKey);
+  if (index >= 0) mockSnapshot.providers[index] = provider;
+  else mockSnapshot.providers.push(provider);
+  return provider;
+}
+
 async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (!isTauri()) {
     return invokeMock<T>(command, args);
@@ -465,93 +557,43 @@ async function invokeMock<T>(
     }
     case "save_provider": {
       const draft = args?.draft as ProviderDraft;
-      const matchingProviders = draft.id
-        ? []
-        : mockSnapshot.providers.filter((provider) =>
-            sameProviderIdentity(provider, draft),
-          );
-      const existing = draft.id
-        ? mockSnapshot.providers.find((item) => item.id === draft.id)
-        : matchingProviders[0];
-      const id = existing?.id ?? draft.id ?? crypto.randomUUID();
-      const previousProviders = draft.id
-        ? existing
-          ? [existing]
-          : []
-        : matchingProviders;
-      const draftModels = draft.id
-        ? draft.models
-        : mergeModelDrafts(previousProviders, draft.models);
-      const connectionChanged = Boolean(
-        existing &&
-          (existing.kind !== draft.kind ||
-            existing.protocol !== draft.protocol ||
-            normalizedProviderUrl(existing.baseUrl) !==
-              normalizedProviderUrl(draft.baseUrl) ||
-            draft.apiKey),
-      );
-      const models = draftModels.map((model) => {
-        const previous = previousProviders
-          .flatMap((provider) => provider.models)
-          .find((item) => item.modelId === model.modelId);
-        const capabilitiesUnchanged =
-          previous?.outputModality === model.outputModality &&
-          previous?.supportsStreaming === model.supportsStreaming &&
-          previous?.supportsTools === model.supportsTools;
-        return {
-          id: `${id}:${model.modelId}`,
-          providerId: id,
-          modelId: model.modelId,
-          displayName: model.displayName,
-          outputModality: model.outputModality,
-          supportsStreaming: model.supportsStreaming,
-          supportsTools: model.supportsTools,
-          source: "custom" as const,
-          verificationStatus:
-            previous && !connectionChanged && capabilitiesUnchanged
-              ? previous.verificationStatus
-              : previous && previous.verificationStatus !== "draft_unverified"
-                ? ("stale" as const)
-                : ("draft_unverified" as const),
+      const provider = mockSaveProvider(draft);
+      return structuredClone(provider) as T;
+    }
+    case "save_provider_verified": {
+      const draft = args?.draft as ProviderDraft;
+      const hasKey =
+        Boolean(draft.apiKey) ||
+        (draft.id
+          ? mockSnapshot.providers.find((item) => item.id === draft.id)
+              ?.hasApiKey
+          : false);
+      if (!hasKey) {
+        throw {
+          code: "secret_missing",
+          message: "请先填写 API Key",
+          recovery: "在供应商表单中填写 API Key 后再保存。",
         };
-      });
-      const verificationStatus = aggregateVerificationStatus(models);
-      const provider: ProviderSummary = {
-        id,
-        name: draft.name,
-        kind: draft.kind,
-        protocol: draft.protocol,
-        baseUrl: draft.baseUrl,
-        isRecommended: false,
-        isEnabled: true,
-        hasApiKey: Boolean(draft.apiKey) || Boolean(existing?.hasApiKey),
-        maskedApiKey: draft.apiKey
-          ? maskApiKey(draft.apiKey)
-          : existing?.maskedApiKey,
-        verificationStatus,
-        verifiedModelId: models.find(
-          (model) =>
-            model.outputModality === "text" &&
-            model.verificationStatus === "verified",
-        )?.modelId,
-        defaultModelId: existing?.defaultModelId ?? draft.defaultModelId,
-        models,
-      };
-      if (!draft.id && matchingProviders.length > 1) {
-        const duplicateIds = new Set(
-          matchingProviders.slice(1).map((provider) => provider.id),
-        );
-        mockSnapshot.providers = mockSnapshot.providers.filter(
-          (provider) => !duplicateIds.has(provider.id),
-        );
-        duplicateIds.forEach((duplicateId) =>
-          mockProviderApiKeys.delete(duplicateId),
-        );
       }
-      const index = mockSnapshot.providers.findIndex((item) => item.id === id);
-      if (draft.apiKey) mockProviderApiKeys.set(id, draft.apiKey);
-      if (index >= 0) mockSnapshot.providers[index] = provider;
-      else mockSnapshot.providers.push(provider);
+      if (draft.apiKey === "invalid-key" || draft.baseUrl.includes("invalid")) {
+        throw {
+          code: "provider_connection_failed",
+          message:
+            "openai-chat-completions 协议验证失败：连接被拒绝（mock 连接测试失败）",
+        };
+      }
+      const provider = mockSaveProvider(draft);
+      // 真实后端在保存后把刚测试过的默认文本模型标记为已验证。
+      const verifiedModel = provider.models.find(
+        (model) => model.outputModality === "text",
+      );
+      if (verifiedModel) {
+        verifiedModel.verificationStatus = "verified";
+        provider.verificationStatus = aggregateVerificationStatus(
+          provider.models,
+        );
+        provider.verifiedModelId = verifiedModel.modelId;
+      }
       return structuredClone(provider) as T;
     }
     case "delete_provider": {
@@ -750,6 +792,8 @@ export const api = {
     invoke<AgentSummary>("set_agent_install_path", { agentId, path }),
   saveProvider: (draft: ProviderDraft) =>
     invoke<ProviderSummary>("save_provider", { draft }),
+  saveProviderVerified: (draft: ProviderDraft) =>
+    invoke<ProviderSummary>("save_provider_verified", { draft }),
   deleteProvider: (providerId: string) =>
     invoke<void>("delete_provider", { providerId }),
   getProviderApiKeyMask: (providerId: string) =>

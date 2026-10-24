@@ -10,9 +10,9 @@ use std::sync::Arc;
 use agents::AgentService;
 use commands::{
     apply_agent_binding, bootstrap, delete_provider, get_provider_api_key_mask, refresh_snapshot,
-    restore_agent_native, reveal_provider_api_key, save_provider, set_agent_install_path,
-    start_proxy, stop_proxy, test_provider, test_provider_draft, update_proxy_port,
-    update_settings,
+    restore_agent_native, reveal_provider_api_key, save_provider, save_provider_verified,
+    set_agent_install_path, start_proxy, stop_proxy, test_provider, test_provider_draft,
+    update_proxy_port, update_settings,
 };
 use domain::{AppResult, CommandError};
 use infrastructure::{Database, NativeSecretStore, SecretStore};
@@ -87,6 +87,7 @@ pub fn run() {
             refresh_snapshot,
             set_agent_install_path,
             save_provider,
+            save_provider_verified,
             delete_provider,
             get_provider_api_key_mask,
             reveal_provider_api_key,

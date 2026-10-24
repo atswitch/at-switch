@@ -368,6 +368,46 @@ impl ProviderService {
         Ok(())
     }
 
+    /// 保存并立即把刚通过连接测试的默认文本模型标记为 Verified（带指纹），
+    /// 让"保存完成 = 可切换"，省去保存后再手动跑一次连接测试。
+    /// 草稿连接测试失败时不落库；没有文本模型时只保存、不做标记。
+    pub async fn save_verified(&self, draft: ProviderDraft) -> AppResult<ProviderSummary> {
+        self.test_draft(&draft).await?;
+        let summary = self.save(draft)?;
+        let capabilities = summary.protocol_capabilities();
+        let model = summary
+            .default_model_id
+            .as_deref()
+            .and_then(|model_id| {
+                summary.models.iter().find(|model| {
+                    model.model_id == model_id && model.output_modality.requires_verification()
+                })
+            })
+            .or_else(|| {
+                summary
+                    .models
+                    .iter()
+                    .find(|model| model.output_modality.requires_verification())
+            });
+        let Some(model) = model else {
+            return Ok(summary);
+        };
+        let stored = self.database.get_provider(&summary.id)?;
+        let fingerprint = model_verification_fingerprint(
+            &summary.base_url,
+            capabilities.supported(),
+            &model.model_id,
+            stored.api_key_revision,
+        );
+        self.database.mark_model_verification(
+            &summary.id,
+            &model.model_id,
+            VerificationStatus::Verified,
+            Some(&fingerprint),
+        )?;
+        Ok(self.database.get_provider(&summary.id)?.summary)
+    }
+
     async fn perform_test_request(
         &self,
         protocol: ApiProtocol,
@@ -1262,6 +1302,69 @@ mod tests {
             error.message.contains("协议验证失败"),
             "stored key path must reach the connectivity check: {}",
             error.message
+        );
+    }
+
+    #[tokio::test]
+    async fn save_verified_marks_the_tested_text_model_verified() {
+        let database = Arc::new(Database::in_memory().expect("database"));
+        let service = ProviderService::new(database, Arc::new(MemorySecretStore::default()))
+            .expect("service");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("local mock listener");
+        let addr = listener.local_addr().expect("mock addr");
+        let server = tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut buffer = [0u8; 2048];
+                let _ = socket.read(&mut buffer).await;
+                let body = r#"{"choices":[{"message":{"content":"AT-Switch ready"}}]}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+
+        let mut verified_draft = draft(&format!("http://{addr}/v1"));
+        verified_draft.models[0].supports_streaming = false;
+        verified_draft.models[0].supports_tools = false;
+
+        let saved = service
+            .save_verified(verified_draft)
+            .await
+            .expect("save verified");
+        assert_eq!(
+            saved.models[0].verification_status,
+            VerificationStatus::Verified
+        );
+        assert_eq!(saved.verified_model_id.as_deref(), Some("model"));
+        server.await.expect("mock server task");
+    }
+
+    #[tokio::test]
+    async fn save_verified_does_not_persist_when_the_connection_test_fails() {
+        let database = Arc::new(Database::in_memory().expect("database"));
+        let service = ProviderService::new(database, Arc::new(MemorySecretStore::default()))
+            .expect("service");
+        // 端口 1 直接拒绝连接，保证用例不依赖外网。
+        let failing = draft("http://127.0.0.1:1/v1");
+
+        let error = service
+            .save_verified(failing)
+            .await
+            .expect_err("unreachable endpoint must block saving");
+        assert!(
+            error.message.contains("协议验证失败"),
+            "real connection error must be surfaced: {}",
+            error.message
+        );
+        assert!(
+            service.list().expect("providers").is_empty(),
+            "failed connection must not persist the provider"
         );
     }
 
