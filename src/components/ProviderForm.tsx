@@ -220,6 +220,23 @@ export function ProviderForm({
     (initialProvider?.hasApiKey || apiKey.trim().length > 0) &&
     !modelPickerLoading &&
     !busy;
+  const modelListRef = useRef<HTMLDivElement>(null);
+
+  // 新行加在列表末尾：滚动容器到底并聚焦新行的模型 ID 输入框。
+  const revealModelRow = (rowNumber: number) => {
+    requestAnimationFrame(() => {
+      const container = modelListRef.current;
+      if (container) container.scrollTop = container.scrollHeight;
+      container
+        ?.querySelector<HTMLInputElement>(
+          `input[aria-label="${text(
+            `第 ${rowNumber} 个模型 ID`,
+            `Model ID ${rowNumber}`,
+          )}"]`,
+        )
+        ?.focus();
+    });
+  };
 
   const openModelPicker = async () => {
     setModelPickerError(undefined);
@@ -275,6 +292,7 @@ export function ProviderForm({
       return [...current, ...additions];
     });
     setModelPickerOpen(false);
+    revealModelRow(models.length + 1);
   };
 
   useEffect(() => {
@@ -536,9 +554,10 @@ export function ProviderForm({
           <button
             type="button"
             className="text-button"
-            onClick={() =>
-              setModels((current) => [...current, createModelRow()])
-            }
+            onClick={() => {
+              setModels((current) => [...current, createModelRow()]);
+              revealModelRow(models.length + 1);
+            }}
           >
             <Plus size={15} /> {text("添加模型", "Add model")}
           </button>
@@ -575,7 +594,7 @@ export function ProviderForm({
           <span>{text("模型能力", "Capabilities")}</span>
           <span>{text("操作", "Actions")}</span>
         </div>
-        <div className="model-editor-list">
+        <div className="model-editor-list" ref={modelListRef}>
         {models.map((model, index) => {
           const capabilityLabel =
             model.outputModality === "image"
@@ -813,20 +832,19 @@ export function ProviderForm({
                     >
                       <input
                         type="checkbox"
+                        className="remote-model-picker__checkbox"
                         checked={selectedRemoteModels.includes(model.id)}
                         onChange={() => toggleRemoteModel(model.id)}
                         aria-label={model.id}
                       />
-                      <span className="remote-model-picker__model">
-                        <span className="remote-model-picker__id">
-                          {model.id}
-                        </span>
-                        {modelName !== model.id ? (
-                          <span className="remote-model-picker__name">
-                            {modelName}
-                          </span>
-                        ) : null}
+                      <span className="remote-model-picker__id">
+                        {model.id}
                       </span>
+                      {modelName !== model.id ? (
+                        <span className="remote-model-picker__name">
+                          {modelName}
+                        </span>
+                      ) : null}
                       <span className="remote-model-picker__cap">
                         {text("文本", "Text")}
                       </span>
@@ -834,8 +852,8 @@ export function ProviderForm({
                         {[
                           model.contextWindow
                             ? text(
-                                `${Math.round(model.contextWindow / 1000)}K 上下文`,
-                                `${Math.round(model.contextWindow / 1000)}K context`,
+                                `${Math.round(model.contextWindow / 1000)}K`,
+                                `${Math.round(model.contextWindow / 1000)}K`,
                               )
                             : undefined,
                           model.ownedBy,

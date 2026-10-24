@@ -4224,9 +4224,9 @@ textarea:focus-visible {
 .remote-model-picker__item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border-radius: 6px;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
   cursor: pointer;
 }
 
@@ -4234,22 +4234,23 @@ textarea:focus-visible {
   background: rgba(0, 0, 0, 0.05);
 }
 
-.remote-model-picker__meta {
-  margin-left: auto;
-  color: var(--ink-soft, #6b7280);
-}
-
-.remote-model-picker__model {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
+.remote-model-picker__checkbox {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: #2f6bff;
 }
 
 .remote-model-picker__id {
-  font-weight: 600;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .remote-model-picker__name {
+  flex-shrink: 0;
   font-size: 12px;
   color: var(--ink-soft, #6b7280);
 }
@@ -4260,6 +4261,12 @@ textarea:focus-visible {
   border: 1px solid var(--line, rgba(0, 0, 0, 0.12));
   border-radius: 999px;
   font-size: 12px;
+  color: var(--ink-soft, #6b7280);
+}
+
+.remote-model-picker__meta {
+  margin-left: auto;
+  flex-shrink: 0;
   color: var(--ink-soft, #6b7280);
 }
 
