@@ -376,7 +376,7 @@ describe("AT-Switch desktop shell", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("saves through the verified path and marks the default text model verified", async () => {
+  it("marks a plain-text model verified when the save connection test passes", async () => {
     const provider = await api.saveProviderVerified({
       name: "直连已验证",
       kind: "custom" as const,
@@ -389,13 +389,35 @@ describe("AT-Switch desktop shell", () => {
           modelId: "glm-ok",
           displayName: "GLM OK",
           outputModality: "text" as const,
-          supportsStreaming: true,
-          supportsTools: true,
+          supportsStreaming: false,
+          supportsTools: false,
         },
       ],
     });
     expect(provider.verifiedModelId).toBe("glm-ok");
     expect(provider.models[0]?.verificationStatus).toBe("verified");
+  });
+
+  it("leaves capability models for per-model tests after a checked save", async () => {
+    const provider = await api.saveProviderVerified({
+      name: "能力待验证",
+      kind: "custom" as const,
+      protocol: "openai_chat_completions" as const,
+      baseUrl: "https://api.example.test/v1",
+      apiKey: "sk-test-key",
+      defaultModelId: "glm-full",
+      models: [
+        {
+          modelId: "glm-full",
+          displayName: "GLM Full",
+          outputModality: "text" as const,
+          supportsStreaming: true,
+          supportsTools: true,
+        },
+      ],
+    });
+    expect(provider.verifiedModelId).toBeUndefined();
+    expect(provider.models[0]?.verificationStatus).toBe("draft_unverified");
   });
 
   it("does not save providers whose verified save fails the connection test", async () => {

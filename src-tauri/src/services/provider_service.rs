@@ -320,32 +320,10 @@ impl ProviderService {
     /// 明文；编辑场景草稿未带新 Key 时回退到凭据库中的存量 Key。没有文本模型
     /// 的草稿（生图/语音/视频）无需验证，直接通过。
     pub async fn test_draft(&self, draft: &ProviderDraft) -> AppResult<()> {
-        let api_key = match draft.api_key.as_deref() {
-            Some(key) if !key.trim().is_empty() => key.to_owned(),
-            _ => {
-                let provider_id = draft.id.as_deref().ok_or_else(|| {
-                    CommandError::new("secret_missing", "请先填写 API Key")
-                        .with_recovery("在供应商表单中填写 API Key 后再保存。")
-                })?;
-                self.provider_api_key(provider_id)?.expose().to_owned()
-            }
-        };
+        let api_key = self.draft_api_key(draft)?;
         let capabilities =
             crate::domain::ProviderProtocolCapabilities::for_provider(draft.kind, draft.protocol);
-        let model = draft
-            .default_model_id
-            .as_deref()
-            .and_then(|model_id| {
-                draft.models.iter().find(|model| {
-                    model.model_id == model_id && model.output_modality.requires_verification()
-                })
-            })
-            .or_else(|| {
-                draft
-                    .models
-                    .iter()
-                    .find(|model| model.output_modality.requires_verification())
-            });
+        let model = Self::draft_text_model(draft);
         let Some(model) = model else {
             return Ok(());
         };
@@ -368,11 +346,64 @@ impl ProviderService {
         Ok(())
     }
 
-    /// 保存并立即把刚通过连接测试的默认文本模型标记为 Verified（带指纹），
-    /// 让"保存完成 = 可切换"，省去保存后再手动跑一次连接测试。
-    /// 草稿连接测试失败时不落库；没有文本模型时只保存、不做标记。
+    fn draft_api_key(&self, draft: &ProviderDraft) -> AppResult<String> {
+        match draft.api_key.as_deref() {
+            Some(key) if !key.trim().is_empty() => Ok(key.to_owned()),
+            _ => {
+                let provider_id = draft.id.as_deref().ok_or_else(|| {
+                    CommandError::new("secret_missing", "请先填写 API Key")
+                        .with_recovery("在供应商表单中填写 API Key 后再保存。")
+                })?;
+                Ok(self.provider_api_key(provider_id)?.expose().to_owned())
+            }
+        }
+    }
+
+    /// 草稿中用于连接测试的文本模型：默认模型优先，否则取第一个文本模型。
+    fn draft_text_model(draft: &ProviderDraft) -> Option<&ModelDraft> {
+        draft
+            .default_model_id
+            .as_deref()
+            .and_then(|model_id| {
+                draft.models.iter().find(|model| {
+                    model.model_id == model_id && model.output_modality.requires_verification()
+                })
+            })
+            .or_else(|| {
+                draft
+                    .models
+                    .iter()
+                    .find(|model| model.output_modality.requires_verification())
+            })
+    }
+
+    /// 保存门禁：只做每协议一次的文本连通性检查（不测流式/工具、不写任何
+    /// 验证状态）。能力验证（流式/工具）保留在供应商页的逐模型连接测试，
+    /// 两者语义分离：保存管连接，测试管能力。
+    async fn check_draft_connectivity(&self, draft: &ProviderDraft) -> AppResult<()> {
+        let api_key = self.draft_api_key(draft)?;
+        let capabilities =
+            crate::domain::ProviderProtocolCapabilities::for_provider(draft.kind, draft.protocol);
+        let Some(model) = Self::draft_text_model(draft) else {
+            return Ok(());
+        };
+        for protocol in capabilities.supported() {
+            if let Err(mut error) = self
+                .perform_text_request(*protocol, &draft.base_url, &model.model_id, &api_key)
+                .await
+            {
+                error.message = format!("{} 协议验证失败：{}", protocol.as_str(), error.message);
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    /// 连接检查通过后保存。只有当被测文本模型声明了完整能力（无流式/工具）
+    /// ——即本次文本请求已经是全量验证——才直接标记 Verified；否则保持
+    /// draft_unverified，由供应商页的逐模型连接测试补齐能力验证。
     pub async fn save_verified(&self, draft: ProviderDraft) -> AppResult<ProviderSummary> {
-        self.test_draft(&draft).await?;
+        self.check_draft_connectivity(&draft).await?;
         let summary = self.save(draft)?;
         let capabilities = summary.protocol_capabilities();
         let model = summary
@@ -392,6 +423,10 @@ impl ProviderService {
         let Some(model) = model else {
             return Ok(summary);
         };
+        if model.supports_streaming || model.supports_tools {
+            // 能力未全量验证：不标记 Verified，避免夸大验证语义。
+            return Ok(summary);
+        }
         let stored = self.database.get_provider(&summary.id)?;
         let fingerprint = model_verification_fingerprint(
             &summary.base_url,
@@ -1342,6 +1377,42 @@ mod tests {
             VerificationStatus::Verified
         );
         assert_eq!(saved.verified_model_id.as_deref(), Some("model"));
+        server.await.expect("mock server task");
+    }
+
+    #[tokio::test]
+    async fn save_verified_leaves_capability_models_for_per_model_tests() {
+        let database = Arc::new(Database::in_memory().expect("database"));
+        let service = ProviderService::new(database, Arc::new(MemorySecretStore::default()))
+            .expect("service");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("local mock listener");
+        let addr = listener.local_addr().expect("mock addr");
+        let server = tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut buffer = [0u8; 2048];
+                let _ = socket.read(&mut buffer).await;
+                let body = r#"{"choices":[{"message":{"content":"AT-Switch ready"}}]}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+
+        // 声明了流式/工具能力：保存门禁只验证文本连通性，
+        // 模型保持 draft_unverified，能力验证交给逐模型连接测试。
+        let capability_draft = draft(&format!("http://{addr}/v1"));
+        let saved = service.save_verified(capability_draft).await.expect("save");
+        assert_eq!(
+            saved.models[0].verification_status,
+            VerificationStatus::DraftUnverified
+        );
+        assert!(saved.verified_model_id.is_none());
         server.await.expect("mock server task");
     }
 

@@ -583,9 +583,13 @@ async function invokeMock<T>(
         };
       }
       const provider = mockSaveProvider(draft);
-      // 真实后端在保存后把刚测试过的默认文本模型标记为已验证。
+      // 真实后端：保存只验证连接；仅当文本模型不声明流式/工具（文本请求
+      // 即全量验证）时才直接标记 Verified，否则留给逐模型连接测试。
       const verifiedModel = provider.models.find(
-        (model) => model.outputModality === "text",
+        (model) =>
+          model.outputModality === "text" &&
+          !model.supportsStreaming &&
+          !model.supportsTools,
       );
       if (verifiedModel) {
         verifiedModel.verificationStatus = "verified";

@@ -289,13 +289,18 @@ function AppContent() {
         text("模型供应商已安全保存", "Provider saved securely"),
         saved.verifiedModelId
           ? text(
-              "连接测试已通过，默认文本模型已验证、可直接切换；其他文本模型切换前仍需单独测试。",
-              "The connection passed and the default text model is verified and ready to switch. Other text models still need individual tests.",
+              "连接测试已通过，默认文本模型已验证、可直接切换。",
+              "The connection passed and the default text model is verified and ready to switch.",
             )
-          : text(
-              "连接测试已通过；当前供应商没有需要验证的文本模型。",
-              "The connection passed; this provider has no text models to verify.",
-            ),
+          : saved.models.some((model) => model.outputModality === "text")
+            ? text(
+                "连接已验证。文本模型声明了流式/工具能力，切换前请逐个完成连接测试。",
+                "The connection is verified. Text models with streaming or tool capabilities need individual connection tests before switching.",
+              )
+            : text(
+                "连接测试已通过；当前供应商没有需要验证的文本模型。",
+                "The connection passed; this provider has no text models to verify.",
+              ),
       );
     } catch (error) {
       notify(
