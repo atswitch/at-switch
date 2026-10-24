@@ -279,6 +279,18 @@ function AppContent() {
   const saveProvider = async (draft: ProviderDraft) => {
     setSavingProvider(true);
     try {
+      // 保存前用草稿值做连接测试：文本模型连接失败时阻断保存，
+      // 并把真实连接错误（凭据/协议/endpoint）展示给用户。
+      try {
+        await api.testProviderDraft(draft);
+      } catch (error) {
+        notify(
+          "bad",
+          text("保存失败：连接测试未通过", "Save failed: connection test failed"),
+          describeCommandError(error, language),
+        );
+        return;
+      }
       await api.saveProvider(draft);
       setProviderModal(false);
       await loadSnapshot(true);
@@ -286,8 +298,8 @@ function AppContent() {
         "good",
         text("模型供应商已安全保存", "Provider saved securely"),
         text(
-          "文本模型首次应用前需要完成连接测试；生图、语音和视频模型无需验证。",
-          "Text models require a connection test before first use. Image-generation, audio, and video models do not require verification.",
+          "保存前已完成连接测试；各文本模型首次切换前仍需通过连接测试。",
+          "The connection was verified before saving. Text models still need to pass a connection test before their first switch.",
         ),
       );
     } catch (error) {

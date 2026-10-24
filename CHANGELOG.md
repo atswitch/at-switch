@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Saving a provider now runs a connection test with the draft values before persisting. Text-model drafts with an unreachable endpoint, wrong key, or broken protocol are rejected with the real connection error (per-protocol detail) instead of being saved silently. Drafts without text models pass straight through; editing a provider without a new API key falls back to the stored credential for the check.
+
 ## [v3.18.0] - 2026-10-21
 
 ### Added

@@ -324,6 +324,58 @@ describe("AT-Switch desktop shell", () => {
     ).toHaveLength(0);
   });
 
+  it("rejects provider drafts whose connection test fails without saving them", async () => {
+    const draft = {
+      name: "坏连接",
+      kind: "custom" as const,
+      protocol: "openai_chat_completions" as const,
+      baseUrl: "https://api.example.test/v1",
+      apiKey: "invalid-key",
+      defaultModelId: "glm-x",
+      models: [
+        {
+          modelId: "glm-x",
+          displayName: "GLM-X",
+          outputModality: "text" as const,
+          supportsStreaming: true,
+          supportsTools: true,
+        },
+      ],
+    };
+
+    await expect(api.testProviderDraft(draft)).rejects.toMatchObject({
+      code: "provider_connection_failed",
+    });
+
+    // 测试未通过时不落库（App.saveProvider 在测试失败分支直接返回）。
+    const snapshot = await api.bootstrap();
+    expect(
+      snapshot.providers.find((provider) => provider.name === "坏连接"),
+    ).toBeUndefined();
+  });
+
+  it("passes provider drafts without text models straight through", async () => {
+    await expect(
+      api.testProviderDraft({
+        name: "生图供应商",
+        kind: "custom" as const,
+        protocol: "openai_chat_completions" as const,
+        baseUrl: "https://api.example.test/v1",
+        apiKey: "sk-test-key",
+        defaultModelId: "image-x",
+        models: [
+          {
+            modelId: "image-x",
+            displayName: "Image X",
+            outputModality: "image" as const,
+            supportsStreaming: false,
+            supportsTools: false,
+          },
+        ],
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("does not show warning checkbox for plain HTTP addresses", async () => {
     const user = userEvent.setup();
     render(<App />);

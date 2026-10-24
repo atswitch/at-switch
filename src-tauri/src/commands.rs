@@ -91,6 +91,15 @@ pub async fn test_provider(
         .await
 }
 
+/// 保存前用草稿值做连接测试（不落库）；失败时给出真实连接错误，阻止保存。
+#[tauri::command]
+pub async fn test_provider_draft(
+    state: State<'_, AppState>,
+    draft: ProviderDraft,
+) -> AppResult<()> {
+    state.providers.test_draft(&draft).await
+}
+
 #[tauri::command]
 pub async fn apply_agent_binding(
     state: State<'_, AppState>,

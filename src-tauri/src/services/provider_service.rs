@@ -314,6 +314,60 @@ impl ProviderService {
         }
     }
 
+    /// 保存前用草稿值直接做连接测试，不落库、不改任何验证状态。
+    ///
+    /// 与 `test()` 的差异：数据来自 ProviderDraft（未保存），API Key 取草稿
+    /// 明文；编辑场景草稿未带新 Key 时回退到凭据库中的存量 Key。没有文本模型
+    /// 的草稿（生图/语音/视频）无需验证，直接通过。
+    pub async fn test_draft(&self, draft: &ProviderDraft) -> AppResult<()> {
+        let api_key = match draft.api_key.as_deref() {
+            Some(key) if !key.trim().is_empty() => key.to_owned(),
+            _ => {
+                let provider_id = draft.id.as_deref().ok_or_else(|| {
+                    CommandError::new("secret_missing", "请先填写 API Key")
+                        .with_recovery("在供应商表单中填写 API Key 后再保存。")
+                })?;
+                self.provider_api_key(provider_id)?.expose().to_owned()
+            }
+        };
+        let capabilities =
+            crate::domain::ProviderProtocolCapabilities::for_provider(draft.kind, draft.protocol);
+        let model = draft
+            .default_model_id
+            .as_deref()
+            .and_then(|model_id| {
+                draft.models.iter().find(|model| {
+                    model.model_id == model_id && model.output_modality.requires_verification()
+                })
+            })
+            .or_else(|| {
+                draft
+                    .models
+                    .iter()
+                    .find(|model| model.output_modality.requires_verification())
+            });
+        let Some(model) = model else {
+            return Ok(());
+        };
+        for protocol in capabilities.supported() {
+            if let Err(mut error) = self
+                .perform_test_request(
+                    *protocol,
+                    &draft.base_url,
+                    &model.model_id,
+                    model.supports_streaming,
+                    model.supports_tools,
+                    &api_key,
+                )
+                .await
+            {
+                error.message = format!("{} 协议验证失败：{}", protocol.as_str(), error.message);
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
     async fn perform_test_request(
         &self,
         protocol: ApiProtocol,
@@ -1134,6 +1188,80 @@ mod tests {
                 .models[0]
                 .verification_status,
             VerificationStatus::DraftUnverified
+        );
+    }
+
+    #[tokio::test]
+    async fn draft_test_passes_without_text_models() {
+        let database = Arc::new(Database::in_memory().expect("database"));
+        let service = ProviderService::new(database, Arc::new(MemorySecretStore::default()))
+            .expect("service");
+        let mut image_draft = draft("https://media.example.test/v1");
+        image_draft.models[0].output_modality = ModelOutputModality::Image;
+        image_draft.models[0].supports_streaming = false;
+        image_draft.models[0].supports_tools = false;
+
+        service
+            .test_draft(&image_draft)
+            .await
+            .expect("image-only draft must not be tested");
+    }
+
+    #[tokio::test]
+    async fn draft_test_requires_a_key_for_new_providers() {
+        let database = Arc::new(Database::in_memory().expect("database"));
+        let service = ProviderService::new(database, Arc::new(MemorySecretStore::default()))
+            .expect("service");
+        let mut keyless = draft("https://api.example.test/v1");
+        keyless.api_key = None;
+
+        let error = service
+            .test_draft(&keyless)
+            .await
+            .expect_err("new draft without key must be rejected");
+        assert_eq!(error.code, "secret_missing");
+    }
+
+    #[tokio::test]
+    async fn draft_test_reports_connection_failures_before_save() {
+        let database = Arc::new(Database::in_memory().expect("database"));
+        let service = ProviderService::new(database, Arc::new(MemorySecretStore::default()))
+            .expect("service");
+        // 端口 1 直接拒绝连接，保证用例不依赖外网。
+        let unreachable = draft("http://127.0.0.1:1/v1");
+
+        let error = service
+            .test_draft(&unreachable)
+            .await
+            .expect_err("unreachable endpoint must fail the draft test");
+        assert!(
+            error.message.contains("协议验证失败"),
+            "real connection error must be surfaced: {}",
+            error.message
+        );
+    }
+
+    #[tokio::test]
+    async fn draft_test_falls_back_to_the_stored_key_when_editing() {
+        let database = Arc::new(Database::in_memory().expect("database"));
+        let service = ProviderService::new(database, Arc::new(MemorySecretStore::default()))
+            .expect("service");
+        let saved = service
+            .save(draft("https://api.example.test/v1"))
+            .expect("save");
+        let mut edit = draft("http://127.0.0.1:1/v1");
+        edit.id = Some(saved.id);
+        edit.api_key = None;
+
+        // 编辑未带新 Key 时回退凭据库存量 Key，连接失败依旧要暴露真实错误。
+        let error = service
+            .test_draft(&edit)
+            .await
+            .expect_err("unreachable endpoint must fail");
+        assert!(
+            error.message.contains("协议验证失败"),
+            "stored key path must reach the connectivity check: {}",
+            error.message
         );
     }
 

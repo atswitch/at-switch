@@ -615,6 +615,38 @@ async function invokeMock<T>(
       provider.verifiedModelId = model.modelId;
       return structuredClone(provider) as T;
     }
+    case "test_provider_draft": {
+      const draft = args?.draft as {
+        id?: string;
+        apiKey?: string;
+        baseUrl: string;
+        models: Array<{ outputModality: string }>;
+      };
+      const hasKey =
+        Boolean(draft.apiKey) ||
+        (draft.id
+          ? mockSnapshot.providers.find((item) => item.id === draft.id)
+              ?.hasApiKey
+          : false);
+      if (!hasKey) {
+        throw {
+          code: "secret_missing",
+          message: "请先填写 API Key",
+          recovery: "在供应商表单中填写 API Key 后再保存。",
+        };
+      }
+      if (!draft.models.some((model) => model.outputModality === "text")) {
+        return undefined as T;
+      }
+      if (draft.apiKey === "invalid-key" || draft.baseUrl.includes("invalid")) {
+        throw {
+          code: "provider_connection_failed",
+          message:
+            "openai-chat-completions 协议验证失败：连接被拒绝（mock 连接测试失败）",
+        };
+      }
+      return undefined as T;
+    }
     case "start_proxy":
       mockSnapshot.proxy = {
         ...mockSnapshot.proxy,
@@ -726,6 +758,8 @@ export const api = {
     invoke<string>("reveal_provider_api_key", { providerId }),
   testProvider: (providerId: string, modelId?: string) =>
     invoke<ProviderSummary>("test_provider", { providerId, modelId }),
+  testProviderDraft: (draft: ProviderDraft) =>
+    invoke<void>("test_provider_draft", { draft }),
   applyAgentBinding: (draft: AgentBindingDraft, confirmAccountConnection?: boolean) =>
     invoke<AgentSummary>("apply_agent_binding", { draft, confirmAccountConnection }),
   restoreAgentNative: (agentId: string, confirmAccountConnection?: boolean) =>
