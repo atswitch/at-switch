@@ -4221,7 +4221,9 @@ textarea:focus-visible {
   border-radius: 8px;
 }
 
-.remote-model-picker__item {
+/* 弹窗渲染在 .provider-form 内部，需要更高优先级压过
+   `.provider-form label { display: grid }` 与 `.provider-form input { width: 100% }`。 */
+.provider-form .remote-model-picker__item {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -4230,32 +4232,34 @@ textarea:focus-visible {
   cursor: pointer;
 }
 
-.remote-model-picker__item:hover {
+.provider-form .remote-model-picker__item:hover {
   background: rgba(0, 0, 0, 0.05);
 }
 
-.remote-model-picker__checkbox {
+.provider-form .remote-model-picker__checkbox {
   width: 15px;
   height: 15px;
+  min-height: 15px;
   margin: 0;
+  padding: 0;
   flex-shrink: 0;
   accent-color: #2f6bff;
 }
 
-.remote-model-picker__id {
+.provider-form .remote-model-picker__id {
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.remote-model-picker__name {
+.provider-form .remote-model-picker__name {
   flex-shrink: 0;
   font-size: 12px;
   color: var(--ink-soft, #6b7280);
 }
 
-.remote-model-picker__cap {
+.provider-form .remote-model-picker__cap {
   flex-shrink: 0;
   padding: 2px 8px;
   border: 1px solid var(--line, rgba(0, 0, 0, 0.12));
@@ -4264,7 +4268,7 @@ textarea:focus-visible {
   color: var(--ink-soft, #6b7280);
 }
 
-.remote-model-picker__meta {
+.provider-form .remote-model-picker__meta {
   margin-left: auto;
   flex-shrink: 0;
   color: var(--ink-soft, #6b7280);
