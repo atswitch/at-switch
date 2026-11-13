@@ -80,8 +80,10 @@ jobs:
       - name: Package macOS dmg
         env:
           AT_SWITCH_API_BASE: ${{ vars.AT_SWITCH_API_BASE || 'http://120.48.4.189/atswitch' }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-        run: npm run tauri:build -- --target universal-apple-darwin --bundles app,dmg
+        # Workflow artifacts are test packages, not updater releases; skip signed updater bundles.
+        run: |
+          printf '[bundle]\ncreateUpdaterArtifacts = false\n' > ci-no-updater.toml
+          npm run tauri:build -- --target universal-apple-darwin --bundles app,dmg --config "$PWD/ci-no-updater.toml"
 
       - name: Collect artifacts
         run: |
@@ -138,8 +140,11 @@ jobs:
       - name: Package Windows installer
         env:
           AT_SWITCH_API_BASE: ${{ vars.AT_SWITCH_API_BASE || 'http://120.48.4.189/atswitch' }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-        run: npm run tauri:build -- --target x86_64-pc-windows-msvc --bundles nsis
+        # Workflow artifacts are test packages, not updater releases; skip signed updater bundles.
+        run: |
+          Set-Content -Path ci-no-updater.toml -Value '[bundle]', 'createUpdaterArtifacts = false'
+          $cfg = Join-Path (Get-Location) 'ci-no-updater.toml'
+          npm run tauri:build -- --target x86_64-pc-windows-msvc --bundles nsis --config $cfg
 
       - name: Collect artifacts
         shell: pwsh
