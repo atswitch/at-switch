@@ -38,7 +38,7 @@ jobs:
   build-macos:
     name: macOS universal (dmg)
     if: ${{ inputs.platform == 'macos' || inputs.platform == 'both' || inputs.platform == '' }}
-    runs-on: macos-14
+    runs-on: macos-15
 
     steps:
       - uses: actions/checkout@v4
@@ -78,6 +78,9 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Package macOS dmg
+        env:
+          AT_SWITCH_API_BASE: ${{ vars.AT_SWITCH_API_BASE || 'http://120.48.4.189/atswitch' }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: npm run tauri:build -- --target universal-apple-darwin --bundles app,dmg
 
       - name: Collect artifacts
@@ -133,6 +136,9 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Package Windows installer
+        env:
+          AT_SWITCH_API_BASE: ${{ vars.AT_SWITCH_API_BASE || 'http://120.48.4.189/atswitch' }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: npm run tauri:build -- --target x86_64-pc-windows-msvc --bundles nsis
 
       - name: Collect artifacts
