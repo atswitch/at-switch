@@ -1,5 +1,6 @@
 import {
   Check,
+  ChevronDown,
   Cloud,
   FolderOpen,
   KeyRound,
@@ -12,7 +13,7 @@ import {
   Trash2,
 } from "lucide-react";
 import clsx from "clsx";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useLanguage } from "../i18n";
 import { ProviderLogo } from "../components/ProviderLogo";
 import {
@@ -268,157 +269,20 @@ export function SwitchboardPage({
           </div>
         )}
 
-        {providersWithModels.flatMap((provider) => {
-          return provider.models.map((model) => {
-            const configured =
-              agent.providerId === provider.id &&
-              agent.modelId === model.modelId &&
-              agent.configHealth === "healthy";
-            const requiresVerification = modelRequiresVerification(model);
-            const directCompatible = supportsDirectBinding(agent.id, provider);
-            const active =
-              agentReady &&
-              configured &&
-              !agent.activationRequired &&
-              agent.mode === "direct";
-            const key = `${provider.id}:${model.modelId}`;
-            const switching = switchingKey === key;
-            const canSwitch =
-              agentReady &&
-              provider.hasApiKey &&
-              directCompatible &&
-              !switchingKey;
-
-            return (
-              <article
-                className={clsx("model-row", active && "is-active")}
-                key={key}
-              >
-                <ProviderMark provider={provider} />
-
-                <div className="model-row__identity">
-                  <div className="model-row__title">
-                    <strong>{model.displayName}</strong>
-                    <span>{provider.name}</span>
-                  </div>
-                  <div className="model-row__meta">
-                    <button
-                      className="model-row__endpoint"
-                      type="button"
-                      onClick={() => onEditProvider(provider)}
-                      title={
-                        provider.baseUrl ||
-                        text("尚未填写 Endpoint", "Endpoint not provided")
-                      }
-                    >
-                      {provider.baseUrl ||
-                        text("尚未填写 Endpoint", "Endpoint not provided")}
-                    </button>
-                    <span className="model-row__model-id">{model.modelId}</span>
-                  </div>
-                </div>
-
-                <div className="model-row__status">
-                  {!directCompatible && (
-                    <span className="verification-copy">
-                      {text("直连需要", "Direct mode requires")} {" "}
-                      {directBindingRequirement(agent.id, language)}
-                    </span>
-                  )}
-                </div>
-
-                <div className="model-row__actions">
-                  {requiresVerification && (
-                    <button
-                      type="button"
-                      className="row-icon-button"
-                      aria-label={text(
-                        `测试 ${provider.name}`,
-                        `Test ${provider.name}`,
-                      )}
-                      title={text(
-                        `使用 ${model.displayName} 验证模型供应商的普通响应、流式输出与工具调用能力`,
-                        `Use ${model.displayName} to validate normal responses, streaming, and tool calls`,
-                      )}
-                      onClick={() => onTestProvider(provider.id, model.modelId)}
-                      disabled={testingId === key}
-                    >
-                      <Radio
-                        size={16}
-                        className={
-                          testingId === key ? "is-pulsing" : undefined
-                        }
-                      />
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="row-icon-button"
-                    aria-label={text(
-                      `编辑 ${provider.name}`,
-                      `Edit ${provider.name}`,
-                    )}
-                    title={text("编辑模型供应商", "Edit provider")}
-                    onClick={() => onEditProvider(provider)}
-                  >
-                    <Pencil size={16} />
-                  </button>
-                  {onDeleteModel && (
-                    <button
-                      type="button"
-                      className="row-icon-button row-icon-button--danger"
-                      aria-label={text(
-                        `删除 ${model.displayName}`,
-                        `Delete ${model.displayName}`,
-                      )}
-                      title={text("删除模型", "Delete model")}
-                      onClick={() => onDeleteModel(provider, model)}
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  )}
-                  {active ? (
-                    <span className="current-button">
-                      <Check size={15} />
-                      {text("使用中", "In use")}
-                    </span>
-                  ) : (
-                    <button
-                      type="button"
-                      className="switch-button"
-                      disabled={!canSwitch}
-                      title={
-                        !provider.hasApiKey
-                          ? text(
-                              "请先编辑模型供应商并保存 API Key",
-                              "Edit the model provider and save an API key first",
-                            )
-                          : !directCompatible
-                          ? directBindingUnavailableReason(agent.id, language)
-                          : !agentReady
-                            ? text(
-                                "智能体尚不可配置",
-                                "Agent is not configurable",
-                              )
-                            : undefined
-                      }
-                      onClick={() => onSwitchModel(provider, model)}
-                    >
-                      {switching ? (
-                        <>
-                          <LoaderCircle className="is-spinning" size={15} />
-                          {text("切换中", "Switching")}
-                        </>
-                      ) : (
-                        text("切换", "Switch")
-                      )}
-                    </button>
-                  )}
-                </div>
-              </article>
-            );
-          });
-        })}
+        {providersWithModels.map((provider) => (
+          <ProviderGroup
+            key={provider.id}
+            agent={agent}
+            provider={provider}
+            agentReady={agentReady}
+            testingId={testingId}
+            switchingKey={switchingKey}
+            onEditProvider={onEditProvider}
+            onDeleteModel={onDeleteModel}
+            onTestProvider={onTestProvider}
+            onSwitchModel={onSwitchModel}
+          />
+        ))}
 
         <button
           type="button"
@@ -459,6 +323,230 @@ export function SwitchboardPage({
         <b>{usesCloudModelSettings(agent.id) ? "IMA ACCOUNT" : serviceModelSettings ? "NATIVE SERVICE" : "LOCAL FIRST"}</b>
       </footer>
     </div>
+  );
+}
+
+/**
+ * 供应商分组卡片：头部可点击折叠/展开。
+ * 折叠时显示该供应商「当前使用中」的模型（无则在用第一个模型）。
+ */
+function ProviderGroup({
+  agent,
+  provider,
+  agentReady,
+  testingId,
+  switchingKey,
+  onEditProvider,
+  onDeleteModel,
+  onTestProvider,
+  onSwitchModel,
+}: {
+  agent: AgentSummary;
+  provider: ProviderSummary;
+  agentReady: boolean;
+  testingId?: string;
+  switchingKey?: string;
+  onEditProvider: (provider: ProviderSummary) => void;
+  onDeleteModel?: (provider: ProviderSummary, model: ModelSummary) => void;
+  onTestProvider: (providerId: string, modelId: string) => void;
+  onSwitchModel: (provider: ProviderSummary, model: ModelSummary) => void;
+}) {
+  const { language, text } = useLanguage();
+  // 默认折叠：分组头只显示当前使用中的模型，点击展开完整列表
+  const [collapsed, setCollapsed] = useState(true);
+
+  const activeModel = provider.models.find(
+    (model) =>
+      agent.providerId === provider.id &&
+      agent.modelId === model.modelId &&
+      agent.configHealth === "healthy" &&
+      !agent.activationRequired &&
+      agent.mode === "direct",
+  );
+  const currentModel = activeModel ?? provider.models[0];
+
+  return (
+    <section className={clsx("model-group", collapsed && "is-collapsed")}>
+      <button
+        type="button"
+        className="model-group__header"
+        aria-expanded={!collapsed}
+        onClick={() => setCollapsed((value) => !value)}
+      >
+        <ProviderMark provider={provider} />
+        <span className="model-group__name">{provider.name}</span>
+        <span className="model-group__count">
+          {text(`${provider.models.length} 个模型`, `${provider.models.length} models`)}
+        </span>
+        {collapsed && currentModel && (
+          <span className="model-group__current">
+            {activeModel ? (
+              <>
+                <Check size={13} />
+                {text("当前", "Current")}：
+              </>
+            ) : null}
+            {currentModel.displayName}
+          </span>
+        )}
+        <ChevronDown
+          size={17}
+          className={clsx("model-group__chevron", collapsed && "is-collapsed")}
+          aria-hidden="true"
+        />
+      </button>
+
+      {!collapsed &&
+        provider.models.map((model) => {
+          const configured =
+            agent.providerId === provider.id &&
+            agent.modelId === model.modelId &&
+            agent.configHealth === "healthy";
+          const requiresVerification = modelRequiresVerification(model);
+          const directCompatible = supportsDirectBinding(agent.id, provider);
+          const active =
+            agentReady &&
+            configured &&
+            !agent.activationRequired &&
+            agent.mode === "direct";
+          const key = `${provider.id}:${model.modelId}`;
+          const switching = switchingKey === key;
+          const canSwitch =
+            agentReady &&
+            provider.hasApiKey &&
+            directCompatible &&
+            !switchingKey;
+
+          return (
+            <article
+              className={clsx("model-row", active && "is-active")}
+              key={key}
+            >
+              <ProviderMark provider={provider} />
+
+              <div className="model-row__identity">
+                <div className="model-row__title">
+                  <strong>{model.displayName}</strong>
+                  <span>{provider.name}</span>
+                </div>
+                <div className="model-row__meta">
+                  <button
+                    className="model-row__endpoint"
+                    type="button"
+                    onClick={() => onEditProvider(provider)}
+                    title={
+                      provider.baseUrl ||
+                      text("尚未填写 Endpoint", "Endpoint not provided")
+                    }
+                  >
+                    {provider.baseUrl ||
+                      text("尚未填写 Endpoint", "Endpoint not provided")}
+                  </button>
+                  <span className="model-row__model-id">{model.modelId}</span>
+                </div>
+              </div>
+
+              <div className="model-row__status">
+                {!directCompatible && (
+                  <span className="verification-copy">
+                    {text("直连需要", "Direct mode requires")}{" "}
+                    {directBindingRequirement(agent.id, language)}
+                  </span>
+                )}
+              </div>
+
+              <div className="model-row__actions">
+                {requiresVerification && (
+                  <button
+                    type="button"
+                    className="row-icon-button"
+                    aria-label={text(
+                      `测试 ${provider.name}`,
+                      `Test ${provider.name}`,
+                    )}
+                    title={text(
+                      `使用 ${model.displayName} 验证模型供应商的普通响应、流式输出与工具调用能力`,
+                      `Use ${model.displayName} to validate normal responses, streaming, and tool calls`,
+                    )}
+                    onClick={() => onTestProvider(provider.id, model.modelId)}
+                    disabled={testingId === key}
+                  >
+                    <Radio
+                      size={16}
+                      className={
+                        testingId === key ? "is-pulsing" : undefined
+                      }
+                    />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="row-icon-button"
+                  aria-label={text(
+                    `编辑 ${provider.name}`,
+                    `Edit ${provider.name}`,
+                  )}
+                  title={text("编辑模型供应商", "Edit provider")}
+                  onClick={() => onEditProvider(provider)}
+                >
+                  <Pencil size={16} />
+                </button>
+                {onDeleteModel && (
+                  <button
+                    type="button"
+                    className="row-icon-button row-icon-button--danger"
+                    aria-label={text(
+                      `删除 ${model.displayName}`,
+                      `Delete ${model.displayName}`,
+                    )}
+                    title={text("删除模型", "Delete model")}
+                    onClick={() => onDeleteModel(provider, model)}
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                )}
+                {active ? (
+                  <span className="current-button">
+                    <Check size={15} />
+                    {text("使用中", "In use")}
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className="switch-button"
+                    disabled={!canSwitch}
+                    title={
+                      !provider.hasApiKey
+                        ? text(
+                            "请先编辑模型供应商并保存 API Key",
+                            "Edit the model provider and save an API key first",
+                          )
+                        : !directCompatible
+                        ? directBindingUnavailableReason(agent.id, language)
+                        : !agentReady
+                          ? text(
+                              "智能体尚不可配置",
+                              "Agent is not configurable",
+                            )
+                          : undefined
+                    }
+                    onClick={() => onSwitchModel(provider, model)}
+                  >
+                    {switching ? (
+                      <>
+                        <LoaderCircle className="is-spinning" size={15} />
+                        {text("切换中", "Switching")}
+                      </>
+                    ) : (
+                      text("切换", "Switch")
+                    )}
+                  </button>
+                )}
+              </div>
+            </article>
+          );
+        })}
+    </section>
   );
 }
 

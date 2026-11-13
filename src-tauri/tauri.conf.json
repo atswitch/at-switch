@@ -4,9 +4,9 @@
   "version": "3.18.0",
   "identifier": "com.atswitch.desktop",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "bash scripts/build-with-account-env.sh npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "bash scripts/build-with-account-env.sh npm run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -30,6 +30,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "category": "DeveloperTool",
     "copyright": "Copyright © 2026 AT-Switch Contributors",
     "shortDescription": "AI Agent provider and model switchboard",
@@ -53,6 +54,15 @@
     "windows": {
       "webviewInstallMode": {
         "type": "downloadBootstrapper"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIzRTg1Mzg2NjU1QkE5RTcKUldUbnFWdGxobFBvczJYQ0RjZWJKVWxHczNlVDA0TkJsaHkyWWJrMmZZK1IzcnhsZWtvWk9wUjAK",
+      "dangerousInsecureTransportProtocol": true,
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

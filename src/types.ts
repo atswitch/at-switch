@@ -138,6 +138,39 @@ export interface AppSnapshot {
   settings: AppSettings;
 }
 
+export type LoginMethod = "wechat" | "google";
+
+export interface AccountProfile {
+  userId: string;
+  username: string;
+  displayName: string;
+  email: string;
+  providerType: LoginMethod | string;
+}
+
+export interface AccountStatus {
+  /** 服务端地址是否已在打包期注入；false 时会员入口显示「会员服务未配置」。 */
+  configured: boolean;
+  loggedIn: boolean;
+  /** 校验网络失败时保持登录态并标记离线（不影响本地功能）。 */
+  offline: boolean;
+  frozen?: boolean;
+  profile?: AccountProfile;
+}
+
+export interface LoginStart {
+  method: LoginMethod;
+  loginState: string;
+  qrUrl?: string;
+}
+
+export interface LoginPoll {
+  status: "pending" | "success" | "expired" | "error";
+  profile?: AccountProfile;
+  errorCode?: string;
+  message?: string;
+}
+
 export interface ProviderDraft {
   id?: string;
   name: string;

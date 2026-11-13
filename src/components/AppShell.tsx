@@ -2,9 +2,9 @@ import {
   ArrowLeft,
   Bot,
   Boxes,
+  CircleUserRound,
   Globe,
   RefreshCw,
-  Settings,
 } from "lucide-react";
 import clsx from "clsx";
 import { useLanguage } from "../i18n";
@@ -22,6 +22,11 @@ interface AppShellProps {
   onSelectAgent: (agentId: string) => void;
   onRefresh: () => void;
   onToggleLanguage?: (language: AppLanguage) => void;
+  /** 会员入口（PRD：首页右上角会员名称，未登录显示「未登录 / 点击登录」）。 */
+  memberLabel: string;
+  /** 有新版本时在会员入口显示提醒红点。 */
+  updateBadge?: boolean;
+  onOpenMemberCenter: () => void;
   children: React.ReactNode;
 }
 
@@ -35,6 +40,9 @@ export function AppShell({
   onSelectAgent,
   onRefresh,
   onToggleLanguage,
+  memberLabel,
+  updateBadge,
+  onOpenMemberCenter,
   children,
 }: AppShellProps) {
   const { language, setLanguage, text } = useLanguage();
@@ -56,12 +64,7 @@ export function AppShell({
       tooltip: text("管理模型供应商与大模型", "Manage model providers & LLMs"),
       icon: Boxes,
     },
-    {
-      id: "settings",
-      label: text("高级设置", "Advanced settings"),
-      tooltip: text("打开高级设置", "Open advanced settings"),
-      icon: Settings,
-    },
+    // 首页不再保留「设置」入口（PRD 功能 2：整体迁入会员中心）。
   ];
 
   return (
@@ -132,30 +135,42 @@ export function AppShell({
                 </button>
               );
             })}
-          </nav>
+            <button
+              type="button"
+              className={clsx("toolbar-icon-button", "member-entry")}
+              onClick={onOpenMemberCenter}
+              aria-label={memberLabel}
+              title={memberLabel}
+            >
+              <CircleUserRound size={25} strokeWidth={1.8} />
+              {updateBadge && <i className="member-entry__dot" aria-hidden="true" />}
+            </button>
 
-          <button
-            type="button"
-            className="standalone-language-switch"
-            onClick={() => {
-              const nextLanguage = language === "zh-CN" ? "en" : "zh-CN";
-              setLanguage(nextLanguage);
-              onToggleLanguage?.(nextLanguage);
-            }}
-            aria-label={
-              language === "zh-CN"
-                ? "切换界面语言为 English"
-                : "Switch language to 简体中文"
-            }
-            title={
-              language === "zh-CN"
-                ? "切换界面语言为 English"
-                : "Switch language to 简体中文"
-            }
-          >
-            <Globe size={14} />
-            <span>{language === "zh-CN" ? "中文" : "EN"}</span>
-          </button>
+            <span className="toolbar-divider" aria-hidden="true" />
+
+            {/* 语言切换：并入同一胶囊，纯图标与其他工具按钮等高 */}
+            <button
+              type="button"
+              className="toolbar-icon-button toolbar-language"
+              onClick={() => {
+                const nextLanguage = language === "zh-CN" ? "en" : "zh-CN";
+                setLanguage(nextLanguage);
+                onToggleLanguage?.(nextLanguage);
+              }}
+              aria-label={
+                language === "zh-CN"
+                  ? "切换界面语言为 English"
+                  : "Switch language to 简体中文"
+              }
+              title={
+                language === "zh-CN"
+                  ? "切换界面语言为 English"
+                  : "Switch language to 简体中文"
+              }
+            >
+              <Globe size={25} strokeWidth={1.8} />
+            </button>
+          </nav>
         </div>
       </header>
 

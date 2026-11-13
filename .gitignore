@@ -48,3 +48,4 @@ build-log.txt
 
 # Agent Instruction Files
 AGENTS.md
+.updater/

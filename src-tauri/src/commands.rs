@@ -3,6 +3,11 @@ use std::sync::Arc;
 use tauri::{AppHandle, State};
 use tauri_plugin_autostart::ManagerExt;
 
+pub use crate::account::commands::{
+    account_get_status, account_login_poll, account_login_start, account_logout,
+    spawn_periodic_check, spawn_usage_reporter, submit_feedback,
+};
+pub use crate::account::update::{check_update, install_update, relaunch_app};
 use crate::{
     domain::{
         AgentBindingDraft, AgentSummary, AppResult, AppSettings, AppSnapshot, CommandError,
@@ -10,6 +15,63 @@ use crate::{
     },
     AppState,
 };
+
+/// 供应商变更 / 模型切换的遥测与元数据上报钩子（遥测匿名可报，元数据同步需登录）。
+fn record_provider_change(
+    state: &AppState,
+    event: &str,
+    target_id: &str,
+    provider_id: &str,
+    model_id: &str,
+) {
+    let Some(account) = state.account.clone() else {
+        return;
+    };
+    let providers = state.providers.list().unwrap_or_default();
+    let summary = providers.iter().find(|p| p.id == provider_id);
+    let provider_name = summary.map(|p| p.name.as_str()).unwrap_or("");
+    let model_detail = summary
+        .map(|p| {
+            p.models
+                .iter()
+                .map(|m| m.model_id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+    let user_id = account.session.load().map(|tokens| tokens.profile.user_id);
+    account
+        .telemetry
+        .record_event(crate::account::telemetry::Event {
+            event,
+            app_version: env!("CARGO_PKG_VERSION"),
+            target_id,
+            model_id,
+            provider_name,
+            model_detail: &model_detail,
+            proxy_mode: "",
+            result: "success",
+            user_id: user_id.as_deref(),
+        });
+    if event != "agent_switch" {
+        account.spawn_provider_sync(providers);
+    }
+}
+
+/// 业务失败统一上报（智能体未找到、切换未生效、验证失败、代理启动失败等）。
+fn record_command_failure(state: &AppState, context: &str, error: &CommandError) {
+    let Some(account) = state.account.clone() else {
+        return;
+    };
+    let user_id = account.session.load().map(|tokens| tokens.profile.user_id);
+    account.telemetry.record_error(crate::account::telemetry::ErrorEvent {
+        error_code: &error.code,
+        message: &error.message,
+        app_version: env!("CARGO_PKG_VERSION"),
+        context_tag: context,
+        user_id: user_id.as_deref(),
+    });
+}
 
 #[tauri::command]
 pub async fn bootstrap(state: State<'_, AppState>) -> AppResult<AppSnapshot> {
@@ -38,7 +100,8 @@ pub async fn delete_provider(state: State<'_, AppState>, provider_id: String) ->
     let affected = state
         .agents
         .delete_provider_with_service_restore(&provider_id, &delete)
-        .await?;
+        .await
+        .inspect_err(|error| record_command_failure(&state, "delete_provider", error))?;
     for agent_id in affected {
         if let Err(error) = state
             .agents
@@ -52,6 +115,7 @@ pub async fn delete_provider(state: State<'_, AppState>, provider_id: String) ->
             );
         }
     }
+    record_provider_change(&state, "provider_delete", &provider_id, &provider_id, "");
     Ok(())
 }
 
@@ -60,7 +124,9 @@ pub fn save_provider(
     state: State<'_, AppState>,
     draft: ProviderDraft,
 ) -> AppResult<ProviderSummary> {
-    state.providers.save(draft)
+    let saved = state.providers.save(draft)?;
+    record_provider_change(&state, "provider_save", &saved.id, &saved.id, "");
+    Ok(saved)
 }
 
 #[tauri::command]
@@ -89,6 +155,7 @@ pub async fn test_provider(
         .providers
         .test(&provider_id, model_id.as_deref())
         .await
+        .inspect_err(|error| record_command_failure(&state, "provider_test", error))
 }
 
 #[tauri::command]
@@ -97,10 +164,35 @@ pub async fn apply_agent_binding(
     draft: AgentBindingDraft,
     confirm_account_connection: Option<bool>,
 ) -> AppResult<AgentSummary> {
-    state
+    let model_id = draft.model_id.clone();
+    let provider_id = draft.provider_id.clone();
+    let agent_id = draft.agent_id.clone();
+    let summary = state
         .agents
         .apply_authorized(draft, confirm_account_connection.unwrap_or(false))
         .await
+        .inspect_err(|error| record_command_failure(&state, "apply_binding", error))?;
+    // 切换未生效检测：回读结果与请求不一致或配置健康度异常。
+    let effective = summary.model_id.as_deref() == Some(model_id.as_str())
+        && matches!(
+            summary.config_health,
+            crate::domain::AgentConfigHealth::Healthy
+        );
+    if !effective {
+        record_command_failure(
+            &state,
+            "model_not_effective",
+            &CommandError::new(
+                "model_not_effective",
+                format!(
+                    "agent={} requested_model={} applied_model={:?} health={:?}",
+                    agent_id, model_id, summary.model_id, summary.config_health
+                ),
+            ),
+        );
+    }
+    record_provider_change(&state, "agent_switch", &summary.id, &provider_id, &model_id);
+    Ok(summary)
 }
 
 #[tauri::command]
@@ -113,6 +205,7 @@ pub async fn restore_agent_native(
         .agents
         .restore_native_authorized(&agent_id, confirm_account_connection.unwrap_or(false))
         .await
+        .inspect_err(|error| record_command_failure(&state, "restore_native", error))
 }
 
 #[tauri::command]
@@ -121,12 +214,41 @@ pub async fn start_proxy(state: State<'_, AppState>) -> AppResult<ProxyStatus> {
     // listener. The listener only starts after this explicit user command.
     state.agents.restore_proxy_routes().await?;
     let port = state.database.proxy_port()?;
-    state.proxy.start(port).await
+    let status = state.proxy.start(port).await.inspect_err(
+        |error| record_command_failure(&state, "proxy_start", error),
+    )?;
+    record_proxy_event(&state, "proxy_start", port, _proxy_running(&status));
+    Ok(status)
 }
 
 #[tauri::command]
 pub async fn stop_proxy(state: State<'_, AppState>) -> AppResult<ProxyStatus> {
-    state.proxy.stop().await
+    let status = state.proxy.stop().await?;
+    record_proxy_event(&state, "proxy_stop", status.port, _proxy_running(&status));
+    Ok(status)
+}
+
+fn record_proxy_event(state: &AppState, event: &str, port: u16, running: bool) {
+    let Some(account) = state.account.clone() else {
+        return;
+    };
+    let user_id = account.session.load().map(|tokens| tokens.profile.user_id);
+    account.telemetry.record_event(crate::account::telemetry::Event {
+        event,
+        app_version: env!("CARGO_PKG_VERSION"),
+        target_id: &port.to_string(),
+        model_id: "",
+        provider_name: "",
+        model_detail: "",
+        proxy_mode: if running { "proxy" } else { "stopped" },
+        result: "success",
+        user_id: user_id.as_deref(),
+    });
+}
+
+#[allow(dead_code)]
+fn _proxy_running(status: &ProxyStatus) -> bool {
+    matches!(status.status, crate::domain::ProxyRuntimeStatus::Running)
 }
 
 #[tauri::command]
@@ -193,14 +315,96 @@ pub fn update_settings(
 
 async fn snapshot(state: &AppState) -> AppResult<AppSnapshot> {
     state.agents.restore_proxy_routes().await?;
+    let agents = state.agents.scan()?;
+    let proxy_status = state.proxy.status().await;
+    // 使用明细（匿名上报，不登录也统计）：智能体 + 模型 + 代理模式；内容变化才上报。
+    record_usage_snapshot(state, &agents, &proxy_status);
     Ok(AppSnapshot {
         app_version: env!("CARGO_PKG_VERSION").to_owned(),
         platform: std::env::consts::OS.to_owned(),
         providers: state.providers.list()?,
-        agents: state.agents.scan()?,
-        proxy: state.proxy.status().await,
+        agents,
+        proxy: proxy_status,
         settings: state.database.settings()?,
     })
+}
+
+/// 使用明细：每个「已配置绑定」的智能体一条事件（agent + model + 代理模式）。
+/// 以全部绑定内容做签名去重，避免刷新按钮反复上报。
+pub(crate) fn record_usage_snapshot(
+    state: &AppState,
+    agents: &[AgentSummary],
+    proxy_status: &ProxyStatus,
+) {
+    let Some(account) = state.account.clone() else {
+        return;
+    };
+    let mut bound: Vec<String> = agents
+        .iter()
+        .filter(|agent| agent.provider_id.is_some() && agent.model_id.is_some())
+        .map(|agent| {
+            format!(
+                "{}|{}|{}|{}|{}",
+                agent.id,
+                agent.model_id.as_deref().unwrap_or(""),
+                agent.provider_name.as_deref().unwrap_or(""),
+                agent.mode.as_deref().unwrap_or("direct"),
+                agent.config_health.as_str(),
+            )
+        })
+        .collect();
+    bound.sort();
+    let signature = format!(
+        "{:?}|{}|{}",
+        bound,
+        _proxy_running(proxy_status),
+        proxy_status.port
+    );
+    let mut last = state.usage_signature.lock().expect("usage guard poisoned");
+    if *last == Some(signature.clone()) {
+        return;
+    }
+    *last = Some(signature);
+    println!("[usage] snapshot: bound agents = {}", bound.len());
+    let user_id = account.session.load().map(|tokens| tokens.profile.user_id);
+    for line in &bound {
+        let mut parts = line.splitn(5, '|');
+        let agent_id = parts.next().unwrap_or("");
+        let model_id = parts.next().unwrap_or("");
+        let _provider_name = parts.next().unwrap_or("");
+        let mode = parts.next().unwrap_or("direct");
+        let health = parts.next().unwrap_or("healthy");
+        account.telemetry.record_event(crate::account::telemetry::Event {
+            event: "usage_snapshot",
+            app_version: env!("CARGO_PKG_VERSION"),
+            target_id: agent_id,
+            model_id,
+            provider_name: _provider_name,
+            model_detail: "",
+            proxy_mode: mode,
+            result: health,
+            user_id: user_id.as_deref(),
+        });
+    }
+    // 代理运行状态单独一条（未绑定智能体也可见）。
+    account.telemetry.record_event(crate::account::telemetry::Event {
+        event: "proxy_status",
+        app_version: env!("CARGO_PKG_VERSION"),
+        target_id: &proxy_status.port.to_string(),
+        model_id: "",
+        provider_name: "",
+        model_detail: "",
+        proxy_mode: if matches!(
+            proxy_status.status,
+            crate::domain::ProxyRuntimeStatus::Running
+        ) {
+            "proxy"
+        } else {
+            "stopped"
+        },
+        result: "success",
+        user_id: user_id.as_deref(),
+    });
 }
 
 fn set_autostart(app: &AppHandle, enabled: bool) -> AppResult<()> {

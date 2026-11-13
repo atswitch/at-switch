@@ -196,14 +196,19 @@ describe("AT-Switch desktop shell", () => {
     expect(
       within(toolbar).getByRole("button", { name: "模型供应商与大模型" }),
     ).toHaveAttribute("title", "管理模型供应商与大模型");
+    // PRD 功能 2：首页不再保留设置入口，设置整体迁入会员中心。
     expect(
-      within(toolbar).getByRole("button", { name: "高级设置" }),
-    ).toHaveAttribute("title", "打开高级设置");
+      within(toolbar).queryByRole("button", { name: "高级设置" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "未登录 / 点击登录" }),
+    ).toBeInTheDocument();
     expect(
       within(toolbar).queryByRole("button", { name: "新增模型供应商" }),
     ).not.toBeInTheDocument();
 
-    await user.click(within(toolbar).getByRole("button", { name: "高级设置" }));
+    await user.click(screen.getByRole("button", { name: "未登录 / 点击登录" }));
+    await user.click(await screen.findByRole("button", { name: /^设置/ }));
     await user.click(screen.getByRole("button", { name: "切换界面语言为 English" }));
     expect(window.localStorage.getItem("at-switch-language")).toBe("en");
 
@@ -249,14 +254,65 @@ describe("AT-Switch desktop shell", () => {
       screen.getByRole("button", { name: "New model provider" }),
     ).toHaveClass("provider-create-action");
     await user.click(
-      screen.getByRole("button", { name: "Advanced settings" }),
+      screen.getByRole("button", { name: "Not signed in / Click to sign in" }),
     );
+    await user.click(await screen.findByRole("button", { name: /^Settings/ }));
     await user.click(screen.getByRole("button", { name: "Switch language to 简体中文" }));
     await screen.findByRole("heading", { name: "高级设置" });
     await waitFor(() => {
       expect(window.localStorage.getItem("at-switch-language")).toBe("zh-CN");
     });
   });
+
+  it(
+    "member center supports login entry, settings migration and confirmed sign-out",
+    async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "WorkBuddy" });
+
+    // 未登录：下拉菜单显示未登录入口，点击弹出登录弹窗（微信 / 谷歌）。
+    await user.click(screen.getByRole("button", { name: "未登录 / 点击登录" }));
+    const loginHeader = await screen.findByText("未登录 · 点击登录");
+    expect(loginHeader).toBeInTheDocument();
+    await user.click(loginHeader.closest("button")!);
+    expect(
+      await screen.findByRole("button", { name: "微信扫码登录" }),
+    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: /谷歌账号登录/ })).toBeEnabled();
+
+    // 未登录时菜单不显示退出登录；设置可打开原设置页。
+    await user.click(screen.getByRole("button", { name: "关闭" }));
+    await user.click(screen.getByRole("button", { name: "未登录 / 点击登录" }));
+    expect(screen.queryByText("退出登录")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^设置/ }));
+    expect(
+      await screen.findByRole("heading", { name: "高级设置" }),
+    ).toBeInTheDocument();
+
+    // 登录：顶栏图标打开菜单 → 菜单头点击 → 登录弹窗 → 微信 mock 登录成功。
+    await user.click(await screen.findByRole("button", { name: "未登录 / 点击登录" }));
+    await user.click(await screen.findByText("未登录 · 点击登录"));
+    await user.click(await screen.findByRole("button", { name: "微信扫码登录" }));
+    // mock 轮询含 2s 真实延时，放宽等待窗口；按钮为纯图标，用 title 定位。
+    await screen.findByTitle("预览用户", {}, { timeout: 6000 });
+    await user.click(screen.getByTitle("预览用户"));
+    await user.click(screen.getByRole("button", { name: "退出登录" }));
+    expect(
+      await screen.findByText(
+        "退出后回到未登录态；本机已有的供应商与模型配置不会被清空。",
+      ),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "确认退出" }));
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: "退出登录" }),
+      ).not.toBeInTheDocument();
+    });
+    },
+    20000,
+  );
 
   it("returns through page history from the top-left back button", async () => {
     const user = userEvent.setup();
@@ -486,7 +542,8 @@ describe("AT-Switch desktop shell", () => {
       screen.queryByRole("button", { name: "本地代理" }),
     ).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "高级设置" }));
+    await user.click(screen.getByRole("button", { name: "未登录 / 点击登录" }));
+    await user.click(await screen.findByRole("button", { name: /^设置/ }));
     expect(
       await screen.findByRole("heading", { name: "高级设置" }),
     ).toBeInTheDocument();

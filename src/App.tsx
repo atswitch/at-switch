@@ -1,4 +1,7 @@
 import { AlertTriangle, CheckCircle2, LoaderCircle } from "lucide-react";
+import { FeedbackDialog, LoginDialog, MemberMenu, UpdateToast } from "./components/MemberCenterModal";
+import type { UpdateState } from "./components/MemberCenterModal";
+import type { AccountStatus, LoginMethod, LoginPoll } from "./types";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "./components/AppShell";
 import { AgentBindingForm } from "./components/AgentBindingForm";
@@ -112,6 +115,18 @@ function AppContent() {
   }>();
   const [deletingModelBusy, setDeletingModelBusy] = useState(false);
 
+  // 会员中心（PRD 第三章）：下拉菜单 + 登录弹窗，状态加载、登录轮询、退出。
+  const [memberOpen, setMemberOpen] = useState(false);
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [accountStatus, setAccountStatus] = useState<AccountStatus>();
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [qrUrl, setQrUrl] = useState<string | null>(null);
+  const [pendingLogoutConfirm, setPendingLogoutConfirm] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const activeLogin = useRef<{ method: LoginMethod; loginState: string } | null>(null);
+  const [updateState, setUpdateState] = useState<UpdateState>({ kind: "idle" });
+
   const totalModelsCount = useMemo(() => {
     if (!snapshot) return 0;
     return snapshot.providers.reduce((sum, p) => sum + p.models.length, 0);
@@ -166,6 +181,156 @@ function AppContent() {
   useEffect(() => {
     languageRef.current = language;
   }, [language]);
+
+  const loadAccountStatus = useCallback(async () => {
+    try {
+      setAccountStatus(await api.getAccountStatus());
+    } catch {
+      setAccountStatus({
+        configured: false,
+        loggedIn: false,
+        offline: true,
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadAccountStatus();
+    // 每 15 分钟校验一次登录态（冻结闭环，PRD 功能 5）。
+    const timer = window.setInterval(() => void loadAccountStatus(), 15 * 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, [loadAccountStatus]);
+
+  const startLogin = useCallback(
+    async (method: LoginMethod) => {
+      if (loginBusy) return;
+      setLoginBusy(true);
+      setLoginError(null);
+      setQrUrl(null);
+      try {
+        const started = await api.startLogin(method);
+        activeLogin.current = { method, loginState: started.loginState };
+        if (method === "wechat") setQrUrl(started.qrUrl ?? null);
+        for (let attempt = 0; attempt < 150; attempt += 1) {
+          await new Promise((resolve) => window.setTimeout(resolve, 2000));
+          if (activeLogin.current?.loginState !== started.loginState) return; // 已取消
+          const poll: LoginPoll = await api.pollLogin(method, started.loginState);
+          if (poll.status === "success" && poll.profile) {
+            activeLogin.current = null;
+            setQrUrl(null);
+            setLoginOpen(false);
+            await loadAccountStatus();
+            return;
+          }
+          if (poll.status === "expired") {
+            setLoginError(text("二维码已过期", "QR code expired"));
+            activeLogin.current = null;
+            return;
+          }
+          if (poll.status === "error") {
+            setLoginError(poll.message ?? text("登录失败", "Sign-in failed"));
+            activeLogin.current = null;
+            return;
+          }
+        }
+        setLoginError(text("登录超时，请重试", "Sign-in timed out"));
+        activeLogin.current = null;
+      } catch (error) {
+        setLoginError((error as Error).message || text("登录失败", "Sign-in failed"));
+        activeLogin.current = null;
+      } finally {
+        setLoginBusy(false);
+      }
+    },
+    [loginBusy, loadAccountStatus, text],
+  );
+
+  const cancelLogin = useCallback(() => {
+    activeLogin.current = null;
+    setQrUrl(null);
+    setLoginError(null);
+    setLoginBusy(false);
+  }, []);
+
+  const handleLogout = useCallback(async () => {
+    await api.logoutAccount().catch(() => undefined);
+    setPendingLogoutConfirm(false);
+    await loadAccountStatus();
+  }, [loadAccountStatus]);
+
+  // 自动更新（PRD 功能 3）：启动时静默检查（发现新版挂提醒标识）；
+  // 打开会员中心自动校验，非最新自动开始下载；更新过程不阻断其他功能。
+  const startUpdateInstall = useCallback(async () => {
+    setUpdateState((current) =>
+      current.kind === "available" ? { kind: "downloading", percent: 0 } : current,
+    );
+    try {
+      await api.installUpdate();
+      setUpdateState({ kind: "relaunch" });
+    } catch (error) {
+      setUpdateState({ kind: "error", message: (error as Error).message });
+    }
+  }, []);
+  const startUpdateInstallRef = useRef(startUpdateInstall);
+  startUpdateInstallRef.current = startUpdateInstall;
+
+  const runUpdateCheck = useCallback(
+    async (autoDownload: boolean) => {
+      setUpdateState({ kind: "checking" });
+      try {
+        const check = await api.checkUpdate();
+        if (!check.available) {
+          setUpdateState({ kind: "uptodate" });
+          return;
+        }
+        setUpdateState({ kind: "available", version: check.version ?? "" });
+        if (autoDownload) startUpdateInstallRef.current();
+      } catch (error) {
+        setUpdateState({ kind: "error", message: (error as Error).message });
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    void runUpdateCheck(false);
+    // 每 6 小时静默复查一次新版本。
+    const timer = window.setInterval(() => void runUpdateCheck(false), 6 * 3600_000);
+    return () => window.clearInterval(timer);
+  }, [runUpdateCheck]);
+
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    let unlisten: (() => void) | undefined;
+    void (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const unprogress = await listen<{ downloaded: number; total?: number }>(
+        "update://progress",
+        (event) => {
+          const { downloaded, total } = event.payload;
+          const percent = total ? Math.round((downloaded / total) * 100) : 0;
+          setUpdateState({ kind: "downloading", percent });
+        },
+      );
+      const unready = await listen("update://ready", () => {
+        setUpdateState({ kind: "installing" });
+      });
+      unlisten = () => {
+        unprogress();
+        unready();
+      };
+    })();
+    return () => unlisten?.();
+  }, []);
+
+  const memberLabel = useMemo(() => {
+    if (accountStatus?.loggedIn) {
+      return (
+        accountStatus.profile?.displayName || accountStatus.profile?.username || "AT"
+      );
+    }
+    return text("未登录 / 点击登录", "Not signed in / Click to sign in");
+  }, [accountStatus, text]);
 
   const navigateTo = useCallback((nextPage: PageId) => {
     setPage((currentPage) => {
@@ -750,6 +915,26 @@ function AppContent() {
         onToggleLanguage={(nextLanguage) =>
           void updateSettings({ language: nextLanguage })
         }
+        memberLabel={memberLabel}
+        updateBadge={
+          updateState.kind === "available" ||
+          updateState.kind === "downloading" ||
+          updateState.kind === "installing" ||
+          updateState.kind === "relaunch"
+        }
+        onOpenMemberCenter={() => {
+          setMemberOpen((open) => !open);
+          void loadAccountStatus();
+          // PRD：打开会员中心自动校验版本；非最新自动开始下载。
+          setUpdateState((current) => {
+            if (current.kind === "idle" || current.kind === "uptodate" || current.kind === "error") {
+              void runUpdateCheck(true);
+            } else if (current.kind === "available") {
+              startUpdateInstallRef.current();
+            }
+            return current;
+          });
+        }}
       >
         {page === "overview" && activeAgent && (
           <SwitchboardPage
@@ -838,6 +1023,84 @@ function AppContent() {
           />
         )}
       </AppShell>
+
+      <UpdateToast
+        state={updateState}
+        onClose={() => setUpdateState({ kind: "idle" })}
+        onInstall={() => void startUpdateInstall()}
+        onRelaunch={() => void api.relaunchApp()}
+        onRetry={() => void runUpdateCheck(false)}
+      />
+
+      <MemberMenu
+        open={memberOpen}
+        appVersion={snapshot.appVersion}
+        status={accountStatus}
+        updateState={updateState}
+        onCheckUpdate={() => void runUpdateCheck(false)}
+        onInstallUpdate={() => void startUpdateInstall()}
+        onRelaunch={() => void api.relaunchApp()}
+        onDismissUpdate={() => setUpdateState({ kind: "uptodate" })}
+        onClose={() => setMemberOpen(false)}
+        onOpenLogin={() => {
+          setMemberOpen(false);
+          setLoginError(null);
+          setLoginOpen(true);
+        }}
+        onOpenSettings={() => {
+          setMemberOpen(false);
+          navigateTo("settings");
+        }}
+        onOpenFeedback={() => {
+          setMemberOpen(false);
+          setFeedbackOpen(true);
+        }}
+        onOpenDocs={() =>
+          window.open("https://atswitch.io/docs", "_blank", "noopener")
+        }
+        onLogout={() => setPendingLogoutConfirm(true)}
+      />
+
+      <FeedbackDialog
+        open={feedbackOpen}
+        onClose={() => setFeedbackOpen(false)}
+      />
+
+      <LoginDialog
+        open={loginOpen}
+        busy={loginBusy}
+        error={loginError}
+        qrUrl={qrUrl}
+        onChoose={(method) => void startLogin(method)}
+        onRefreshQr={() => void startLogin("wechat")}
+        onCancel={cancelLogin}
+        onClose={() => {
+          cancelLogin();
+          setLoginOpen(false);
+        }}
+      />
+
+      <Modal
+        open={pendingLogoutConfirm}
+        title={text("退出会员", "Sign out")}
+        onClose={() => setPendingLogoutConfirm(false)}
+        footer={
+          <>
+            <button type="button" onClick={() => setPendingLogoutConfirm(false)}>
+              {text("取消", "Cancel")}
+            </button>
+            <button
+              type="button"
+              className="danger-button"
+              onClick={() => void handleLogout()}
+            >
+              {text("确认退出", "Sign out")}
+            </button>
+          </>
+        }
+      >
+        <p>{text("退出后回到未登录态；本机已有的供应商与模型配置不会被清空。", "You will return to the signed-out state. Local providers and models are kept.")}</p>
+      </Modal>
 
       <Modal
         open={Boolean(bindingTarget) && !pendingAgentAction}

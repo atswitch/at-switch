@@ -86,6 +86,8 @@ impl ImaClient {
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
+            // 直连语义：不继承系统代理（feature 统一引入后保持原行为）
+            .no_proxy()
             .build()
             .map_err(|_| network_error())?;
         Ok(Self {

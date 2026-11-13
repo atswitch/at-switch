@@ -47,6 +47,7 @@ url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 zeroize = "1"
 tauri-plugin-dialog = "2"
+tauri-plugin-updater = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

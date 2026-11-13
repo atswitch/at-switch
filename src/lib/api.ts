@@ -1,8 +1,12 @@
 import type {
+  AccountStatus,
   AgentBindingDraft,
   AgentSummary,
   AppSettings,
   AppSnapshot,
+  LoginMethod,
+  LoginStart,
+  LoginPoll,
   ProviderDraft,
   ProviderSummary,
   ProxyStatus,
@@ -425,6 +429,7 @@ export function getActiveMockSnapshot(): AppSnapshot {
 }
 
 let mockSnapshot = structuredClone(getActiveMockSnapshot());
+let mockAccountLoggedIn = false;
 
 async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (!isTauri()) {
@@ -692,6 +697,53 @@ async function invokeMock<T>(
         ...(args?.settings as Partial<AppSettings>),
       };
       return structuredClone(mockSnapshot.settings) as T;
+    case "account_get_status":
+      // 浏览器预览模拟：已配置；登录态随 mock 登录/退出流转。
+      return {
+        configured: true,
+        loggedIn: mockAccountLoggedIn,
+        offline: false,
+        frozen: false,
+        profile: mockAccountLoggedIn
+          ? {
+              userId: "mock-1",
+              username: "mock_user",
+              displayName: "预览用户",
+              email: "preview@atswitch.io",
+              providerType: "wechat",
+            }
+          : undefined,
+      } as T;
+    case "account_login_start":
+      return {
+        method: args?.method,
+        loginState: crypto.randomUUID(),
+        qrUrl: undefined,
+      } as T;
+    case "account_login_poll": {
+      mockAccountLoggedIn = true;
+      return {
+        status: "success",
+        profile: {
+          userId: "mock-1",
+          username: "mock_user",
+          displayName: "预览用户",
+          email: "preview@atswitch.io",
+          providerType: args?.method,
+        },
+      } as T;
+    }
+    case "account_logout":
+      mockAccountLoggedIn = false;
+      return undefined as T;
+    case "submit_feedback":
+      return undefined as T;
+    case "check_update":
+      return { currentVersion: "0.1.0-dev", available: false } as T;
+    case "install_update":
+      return undefined as T;
+    case "relaunch_app":
+      return undefined as T;
     default:
       throw new Error(`Mock command not implemented: ${command}`);
   }
@@ -701,6 +753,7 @@ export const api = {
   resetMock: () => {
     mockSnapshot = structuredClone(mockSnapshotTemplate);
     mockSnapshot.settings.language = "zh-CN";
+    mockAccountLoggedIn = false;
   },
   bootstrap: () => invoke<AppSnapshot>("bootstrap"),
   refresh: () => invoke<AppSnapshot>("refresh_snapshot"),
@@ -736,4 +789,27 @@ export const api = {
     invoke<ProxyStatus>("update_proxy_port", { port }),
   updateSettings: (settings: Partial<AppSettings>) =>
     invoke<AppSettings>("update_settings", { settings }),
+  getAccountStatus: () => invoke<AccountStatus>("account_get_status"),
+  startLogin: (method: LoginMethod) =>
+    invoke<LoginStart>("account_login_start", { method }),
+  pollLogin: (method: LoginMethod, loginState: string) =>
+    invoke<LoginPoll>("account_login_poll", { method, loginState }),
+  logoutAccount: () => invoke<void>("account_logout"),
+  submitFeedback: (content: string, contact?: string) =>
+    invoke<void>("submit_feedback", { content, contact }),
+  checkUpdate: () => invoke<UpdateCheck>("check_update"),
+  installUpdate: () => invoke<void>("install_update"),
+  relaunchApp: () => invoke<void>("relaunch_app"),
 };
+
+export interface UpdateCheck {
+  currentVersion: string;
+  available: boolean;
+  version?: string;
+  notes?: string;
+}
+
+export interface UpdateProgress {
+  downloaded: number;
+  total?: number;
+}

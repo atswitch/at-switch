@@ -26,6 +26,8 @@ impl ProviderService {
             .connect_timeout(std::time::Duration::from_secs(10))
             .timeout(std::time::Duration::from_secs(45))
             .user_agent(format!("AT-Switch/{}", env!("CARGO_PKG_VERSION")))
+            // 直连语义：不继承系统代理（feature 统一引入后保持原行为）
+            .no_proxy()
             .build()
             .map_err(|error| {
                 log::error!("HTTP client initialization failed: {error}");
