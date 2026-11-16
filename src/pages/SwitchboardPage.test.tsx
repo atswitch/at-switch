@@ -1,8 +1,19 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentSummary, ProviderSummary } from "../types";
 import { SwitchboardPage } from "./SwitchboardPage";
+
+/**
+ * 供应商分组默认折叠（account 分支引入的交互）：需要断言模型行（article）
+ * 的测试先展开全部分组，再进行查询。
+ */
+const expandAllModelGroups = () => {
+  screen
+    .getAllByRole("button", { name: /个模型/ })
+    .filter((button) => button.getAttribute("aria-expanded") === "false")
+    .forEach((button) => fireEvent.click(button));
+};
 
 describe("SwitchboardPage", () => {
   it("labels Trae's headless connection as a native service", () => {
@@ -70,6 +81,7 @@ describe("SwitchboardPage", () => {
       onCreateProvider={vi.fn()} onEditProvider={vi.fn()} onTestProvider={vi.fn()}
       onSwitchModel={vi.fn()} onRestoreNative={onRestoreNative}
     />);
+    expandAllModelGroups();
     const rows = within(screen.getByLabelText("ima 模型列表")).getAllByRole("article");
     expect(within(rows[0]!).getByRole("button", { name: "切换" })).toBeEnabled();
     for (const row of rows.slice(1)) {
@@ -142,6 +154,7 @@ describe("SwitchboardPage", () => {
         onRestoreNative={vi.fn()}
       />,
     );
+    expandAllModelGroups();
 
     const rows = within(
       screen.getByLabelText("WorkBuddy 模型列表"),
@@ -374,6 +387,7 @@ describe("SwitchboardPage", () => {
         onRestoreNative={vi.fn()}
       />,
     );
+    expandAllModelGroups();
 
     const oldRow = screen.getByText("历史模型").closest("article");
     const newRow = screen.getByText("新增模型").closest("article");
@@ -436,6 +450,7 @@ describe("SwitchboardPage", () => {
         onRestoreNative={vi.fn()}
       />,
     );
+    expandAllModelGroups();
 
     const row = screen.getByText("生图模型").closest("article");
     expect(row).not.toBeNull();
@@ -497,6 +512,7 @@ describe("SwitchboardPage", () => {
         onRestoreNative={vi.fn()}
       />,
     );
+    expandAllModelGroups();
 
     const row = screen.getByText("无密钥生图模型").closest("article");
     expect(row).not.toBeNull();

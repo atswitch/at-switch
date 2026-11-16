@@ -10,8 +10,9 @@ pub use crate::account::commands::{
 pub use crate::account::update::{check_update, install_update, relaunch_app};
 use crate::{
     domain::{
-        AgentBindingDraft, AgentSummary, AppResult, AppSettings, AppSnapshot, CommandError,
-        ProviderDraft, ProviderSummary, ProxyStatus, SettingsPatch,
+        AgentBindingDraft, AgentSummary, ApiProtocol, AppResult, AppSettings, AppSnapshot,
+        CommandError, ProviderDraft, ProviderSummary, ProxyStatus, RemoteModelSummary,
+        SettingsPatch,
     },
     AppState,
 };
@@ -156,6 +157,50 @@ pub async fn test_provider(
         .test(&provider_id, model_id.as_deref())
         .await
         .inspect_err(|error| record_command_failure(&state, "provider_test", error))
+}
+
+/// 保存前用草稿值做连接测试（不落库）；失败时给出真实连接错误，阻止保存。
+#[tauri::command]
+pub async fn test_provider_draft(
+    state: State<'_, AppState>,
+    draft: ProviderDraft,
+) -> AppResult<()> {
+    state.providers.test_draft(&draft).await
+}
+
+/// 连接测试通过后保存，并把刚测试过的默认文本模型直接标记为已验证。
+#[tauri::command]
+pub async fn save_provider_verified(
+    state: State<'_, AppState>,
+    draft: ProviderDraft,
+) -> AppResult<ProviderSummary> {
+    state.providers.save_verified(draft).await
+}
+
+/// 拉取上游 GET {base}/models 的模型摘要（不落库）。
+/// API Key 未填时，编辑场景回退到凭据库中的存量 Key。
+#[tauri::command]
+pub async fn fetch_provider_models(
+    state: State<'_, AppState>,
+    base_url: String,
+    protocol: ApiProtocol,
+    api_key: Option<String>,
+    provider_id: Option<String>,
+) -> AppResult<Vec<RemoteModelSummary>> {
+    let api_key = match api_key {
+        Some(key) if !key.trim().is_empty() => key,
+        _ => {
+            let provider_id = provider_id.ok_or_else(|| {
+                CommandError::new("secret_missing", "请先填写 API Key")
+                    .with_recovery("在供应商表单中填写 API Key 后再获取模型列表。")
+            })?;
+            state.providers.reveal_api_key(&provider_id)?
+        }
+    };
+    state
+        .providers
+        .list_remote_models(&base_url, protocol, &api_key)
+        .await
 }
 
 #[tauri::command]

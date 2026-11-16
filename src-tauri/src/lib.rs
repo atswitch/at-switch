@@ -11,11 +11,11 @@ use std::sync::Arc;
 use agents::AgentService;
 use commands::{
     account_get_status, account_login_poll, account_login_start, account_logout,
-    apply_agent_binding, bootstrap, check_update, delete_provider, get_provider_api_key_mask,
-    install_update, refresh_snapshot, relaunch_app, restore_agent_native,
-    reveal_provider_api_key, save_provider, set_agent_install_path, spawn_periodic_check,
-    start_proxy, stop_proxy, submit_feedback, test_provider, update_proxy_port,
-    update_settings,
+    apply_agent_binding, bootstrap, check_update, delete_provider, fetch_provider_models,
+    get_provider_api_key_mask, install_update, refresh_snapshot, relaunch_app,
+    restore_agent_native, reveal_provider_api_key, save_provider, save_provider_verified,
+    set_agent_install_path, spawn_periodic_check, start_proxy, stop_proxy, submit_feedback,
+    test_provider, test_provider_draft, update_proxy_port, update_settings,
 };
 use domain::{AppResult, CommandError};
 use infrastructure::{Database, NativeSecretStore, SecretStore};
@@ -176,10 +176,13 @@ pub fn run() {
             refresh_snapshot,
             set_agent_install_path,
             save_provider,
+            save_provider_verified,
+            fetch_provider_models,
             delete_provider,
             get_provider_api_key_mask,
             reveal_provider_api_key,
             test_provider,
+            test_provider_draft,
             apply_agent_binding,
             restore_agent_native,
             start_proxy,

@@ -87,7 +87,7 @@ export const providerPresets: Record<ProviderPresetKind, ProviderPreset> = {
       textModel("NMauto", "NMauto"),
       textModel("deepseek-v4-flash", "DeepSeek V4 Flash"),
       textModel("GLM-5.2", "GLM-5.2"),
-      imageModel("doubao-seedream-5.0-lite", "Doubao Seedream 5.0 Lite"),
+      imageModel("doubao-seedream-5.0-pro", "Doubao Seedream 5.0 Pro"),
     ],
   },
   deepseek: {

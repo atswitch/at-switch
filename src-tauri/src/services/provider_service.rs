@@ -8,8 +8,8 @@ use uuid::Uuid;
 
 use crate::{
     domain::{
-        ApiProtocol, AppResult, CommandError, ModelDraft, ModelSummary, ProviderDraft,
-        ProviderSummary, VerificationStatus,
+        ApiProtocol, AppResult, CommandError, ModelDraft, ModelOutputModality, ModelSummary,
+        ProviderDraft, ProviderSummary, RemoteModelSummary, VerificationStatus,
     },
     infrastructure::{Database, SecretStore, SecretValue},
 };
@@ -314,6 +314,205 @@ impl ProviderService {
                 Err(error)
             }
         }
+    }
+
+    /// 保存前用草稿值直接做连接测试，不落库、不改任何验证状态。
+    ///
+    /// 与 `test()` 的差异：数据来自 ProviderDraft（未保存），API Key 取草稿
+    /// 明文；编辑场景草稿未带新 Key 时回退到凭据库中的存量 Key。没有文本模型
+    /// 的草稿（生图/语音/视频）无需验证，直接通过。
+    pub async fn test_draft(&self, draft: &ProviderDraft) -> AppResult<()> {
+        let api_key = self.draft_api_key(draft)?;
+        let capabilities =
+            crate::domain::ProviderProtocolCapabilities::for_provider(draft.kind, draft.protocol);
+        let model = Self::draft_text_model(draft);
+        let Some(model) = model else {
+            return Ok(());
+        };
+        for protocol in capabilities.supported() {
+            if let Err(mut error) = self
+                .perform_test_request(
+                    *protocol,
+                    &draft.base_url,
+                    &model.model_id,
+                    model.supports_streaming,
+                    model.supports_tools,
+                    &api_key,
+                )
+                .await
+            {
+                error.message = format!("{} 协议验证失败：{}", protocol.as_str(), error.message);
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    fn draft_api_key(&self, draft: &ProviderDraft) -> AppResult<String> {
+        match draft.api_key.as_deref() {
+            Some(key) if !key.trim().is_empty() => Ok(key.to_owned()),
+            _ => {
+                let provider_id = draft.id.as_deref().ok_or_else(|| {
+                    CommandError::new("secret_missing", "请先填写 API Key")
+                        .with_recovery("在供应商表单中填写 API Key 后再保存。")
+                })?;
+                Ok(self.provider_api_key(provider_id)?.expose().to_owned())
+            }
+        }
+    }
+
+    /// 草稿中用于连接测试的文本模型：默认模型优先，否则取第一个文本模型。
+    fn draft_text_model(draft: &ProviderDraft) -> Option<&ModelDraft> {
+        draft
+            .default_model_id
+            .as_deref()
+            .and_then(|model_id| {
+                draft.models.iter().find(|model| {
+                    model.model_id == model_id && model.output_modality.requires_verification()
+                })
+            })
+            .or_else(|| {
+                draft
+                    .models
+                    .iter()
+                    .find(|model| model.output_modality.requires_verification())
+            })
+    }
+
+    /// 保存门禁：只做每协议一次的文本连通性检查（不测流式/工具、不写任何
+    /// 验证状态）。能力验证（流式/工具）保留在供应商页的逐模型连接测试，
+    /// 两者语义分离：保存管连接，测试管能力。
+    async fn check_draft_connectivity(&self, draft: &ProviderDraft) -> AppResult<()> {
+        let api_key = self.draft_api_key(draft)?;
+        let capabilities =
+            crate::domain::ProviderProtocolCapabilities::for_provider(draft.kind, draft.protocol);
+        let Some(model) = Self::draft_text_model(draft) else {
+            return Ok(());
+        };
+        for protocol in capabilities.supported() {
+            if let Err(mut error) = self
+                .perform_text_request(*protocol, &draft.base_url, &model.model_id, &api_key)
+                .await
+            {
+                error.message = format!("{} 协议验证失败：{}", protocol.as_str(), error.message);
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    /// 连接检查通过后保存。只有当被测文本模型声明了完整能力（无流式/工具）
+    /// ——即本次文本请求已经是全量验证——才直接标记 Verified；否则保持
+    /// draft_unverified，由供应商页的逐模型连接测试补齐能力验证。
+    pub async fn save_verified(&self, draft: ProviderDraft) -> AppResult<ProviderSummary> {
+        self.check_draft_connectivity(&draft).await?;
+        let summary = self.save(draft)?;
+        let capabilities = summary.protocol_capabilities();
+        let model = summary
+            .default_model_id
+            .as_deref()
+            .and_then(|model_id| {
+                summary.models.iter().find(|model| {
+                    model.model_id == model_id && model.output_modality.requires_verification()
+                })
+            })
+            .or_else(|| {
+                summary
+                    .models
+                    .iter()
+                    .find(|model| model.output_modality.requires_verification())
+            });
+        let Some(model) = model else {
+            return Ok(summary);
+        };
+        if model.supports_streaming || model.supports_tools {
+            // 能力未全量验证：不标记 Verified，避免夸大验证语义。
+            return Ok(summary);
+        }
+        let stored = self.database.get_provider(&summary.id)?;
+        let fingerprint = model_verification_fingerprint(
+            &summary.base_url,
+            capabilities.supported(),
+            &model.model_id,
+            stored.api_key_revision,
+        );
+        self.database.mark_model_verification(
+            &summary.id,
+            &model.model_id,
+            VerificationStatus::Verified,
+            Some(&fingerprint),
+        )?;
+        Ok(self.database.get_provider(&summary.id)?.summary)
+    }
+
+    /// 拉取上游 `GET {base}/models` 的模型摘要（OpenAI 兼容格式），
+    /// 供"获取模型列表"选择器使用；不落库、不改任何验证状态。
+    pub async fn list_remote_models(
+        &self,
+        base_url: &str,
+        protocol: ApiProtocol,
+        api_key: &str,
+    ) -> AppResult<Vec<RemoteModelSummary>> {
+        let url = endpoint_url(base_url, "models")?;
+        let request = self.http.get(url);
+        let request = match protocol {
+            ApiProtocol::AnthropicMessages => request
+                .header("x-api-key", api_key)
+                .header("anthropic-version", "2023-06-01"),
+            _ => request.bearer_auth(api_key),
+        };
+        let response = request.send().await.map_err(classify_network_error)?;
+        if !response.status().is_success() {
+            return Err(safe_http_error(response.status()));
+        }
+        let value: Value = response.json().await.map_err(|error| {
+            log::warn!("provider model list returned invalid JSON: {error}");
+            CommandError::new(
+                "provider_response_invalid",
+                "Provider 返回内容不是有效的模型列表 JSON",
+            )
+        })?;
+        let empty = Vec::new();
+        let data = value
+            .get("data")
+            .and_then(Value::as_array)
+            .unwrap_or(&empty);
+        let mut seen = HashSet::new();
+        let mut models: Vec<RemoteModelSummary> = Vec::new();
+        for item in data {
+            let Some(id) = item.get("id").and_then(Value::as_str).map(str::to_owned) else {
+                continue;
+            };
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            let owned_by = item
+                .get("owned_by")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let context_window = ["context_window", "context_length", "max_context_window"]
+                .iter()
+                .find_map(|key| item.get(key).and_then(Value::as_u64));
+            let output_modality = item
+                .get("type")
+                .and_then(Value::as_str)
+                .map(ModelOutputModality::from_remote_type)
+                .unwrap_or(ModelOutputModality::Text);
+            models.push(RemoteModelSummary {
+                id,
+                owned_by,
+                context_window,
+                output_modality,
+            });
+        }
+        models.sort_by(|left, right| left.id.cmp(&right.id));
+        if models.is_empty() {
+            return Err(
+                CommandError::new("provider_models_empty", "Provider 未返回任何模型")
+                    .with_recovery("确认 Base URL 指向兼容接口（如 https://api.example.com/v1）。"),
+            );
+        }
+        Ok(models)
     }
 
     async fn perform_test_request(
@@ -1137,6 +1336,262 @@ mod tests {
                 .verification_status,
             VerificationStatus::DraftUnverified
         );
+    }
+
+    #[tokio::test]
+    async fn draft_test_passes_without_text_models() {
+        let database = Arc::new(Database::in_memory().expect("database"));
+        let service = ProviderService::new(database, Arc::new(MemorySecretStore::default()))
+            .expect("service");
+        let mut image_draft = draft("https://media.example.test/v1");
+        image_draft.models[0].output_modality = ModelOutputModality::Image;
+        image_draft.models[0].supports_streaming = false;
+        image_draft.models[0].supports_tools = false;
+
+        service
+            .test_draft(&image_draft)
+            .await
+            .expect("image-only draft must not be tested");
+    }
+
+    #[tokio::test]
+    async fn draft_test_requires_a_key_for_new_providers() {
+        let database = Arc::new(Database::in_memory().expect("database"));
+        let service = ProviderService::new(database, Arc::new(MemorySecretStore::default()))
+            .expect("service");
+        let mut keyless = draft("https://api.example.test/v1");
+        keyless.api_key = None;
+
+        let error = service
+            .test_draft(&keyless)
+            .await
+            .expect_err("new draft without key must be rejected");
+        assert_eq!(error.code, "secret_missing");
+    }
+
+    #[tokio::test]
+    async fn draft_test_reports_connection_failures_before_save() {
+        let database = Arc::new(Database::in_memory().expect("database"));
+        let service = ProviderService::new(database, Arc::new(MemorySecretStore::default()))
+            .expect("service");
+        // 端口 1 直接拒绝连接，保证用例不依赖外网。
+        let unreachable = draft("http://127.0.0.1:1/v1");
+
+        let error = service
+            .test_draft(&unreachable)
+            .await
+            .expect_err("unreachable endpoint must fail the draft test");
+        assert!(
+            error.message.contains("协议验证失败"),
+            "real connection error must be surfaced: {}",
+            error.message
+        );
+    }
+
+    #[tokio::test]
+    async fn draft_test_falls_back_to_the_stored_key_when_editing() {
+        let database = Arc::new(Database::in_memory().expect("database"));
+        let service = ProviderService::new(database, Arc::new(MemorySecretStore::default()))
+            .expect("service");
+        let saved = service
+            .save(draft("https://api.example.test/v1"))
+            .expect("save");
+        let mut edit = draft("http://127.0.0.1:1/v1");
+        edit.id = Some(saved.id);
+        edit.api_key = None;
+
+        // 编辑未带新 Key 时回退凭据库存量 Key，连接失败依旧要暴露真实错误。
+        let error = service
+            .test_draft(&edit)
+            .await
+            .expect_err("unreachable endpoint must fail");
+        assert!(
+            error.message.contains("协议验证失败"),
+            "stored key path must reach the connectivity check: {}",
+            error.message
+        );
+    }
+
+    #[tokio::test]
+    async fn save_verified_marks_the_tested_text_model_verified() {
+        let database = Arc::new(Database::in_memory().expect("database"));
+        let service = ProviderService::new(database, Arc::new(MemorySecretStore::default()))
+            .expect("service");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("local mock listener");
+        let addr = listener.local_addr().expect("mock addr");
+        let server = tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut buffer = [0u8; 2048];
+                let _ = socket.read(&mut buffer).await;
+                let body = r#"{"choices":[{"message":{"content":"AT-Switch ready"}}]}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+
+        let mut verified_draft = draft(&format!("http://{addr}/v1"));
+        verified_draft.models[0].supports_streaming = false;
+        verified_draft.models[0].supports_tools = false;
+
+        let saved = service
+            .save_verified(verified_draft)
+            .await
+            .expect("save verified");
+        assert_eq!(
+            saved.models[0].verification_status,
+            VerificationStatus::Verified
+        );
+        assert_eq!(saved.verified_model_id.as_deref(), Some("model"));
+        server.await.expect("mock server task");
+    }
+
+    #[tokio::test]
+    async fn save_verified_leaves_capability_models_for_per_model_tests() {
+        let database = Arc::new(Database::in_memory().expect("database"));
+        let service = ProviderService::new(database, Arc::new(MemorySecretStore::default()))
+            .expect("service");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("local mock listener");
+        let addr = listener.local_addr().expect("mock addr");
+        let server = tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut buffer = [0u8; 2048];
+                let _ = socket.read(&mut buffer).await;
+                let body = r#"{"choices":[{"message":{"content":"AT-Switch ready"}}]}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+
+        // 声明了流式/工具能力：保存门禁只验证文本连通性，
+        // 模型保持 draft_unverified，能力验证交给逐模型连接测试。
+        let capability_draft = draft(&format!("http://{addr}/v1"));
+        let saved = service.save_verified(capability_draft).await.expect("save");
+        assert_eq!(
+            saved.models[0].verification_status,
+            VerificationStatus::DraftUnverified
+        );
+        assert!(saved.verified_model_id.is_none());
+        server.await.expect("mock server task");
+    }
+
+    #[tokio::test]
+    async fn save_verified_does_not_persist_when_the_connection_test_fails() {
+        let database = Arc::new(Database::in_memory().expect("database"));
+        let service = ProviderService::new(database, Arc::new(MemorySecretStore::default()))
+            .expect("service");
+        // 端口 1 直接拒绝连接，保证用例不依赖外网。
+        let failing = draft("http://127.0.0.1:1/v1");
+
+        let error = service
+            .save_verified(failing)
+            .await
+            .expect_err("unreachable endpoint must block saving");
+        assert!(
+            error.message.contains("协议验证失败"),
+            "real connection error must be surfaced: {}",
+            error.message
+        );
+        assert!(
+            service.list().expect("providers").is_empty(),
+            "failed connection must not persist the provider"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_remote_models_parses_sorts_and_deduplicates_ids() {
+        let database = Arc::new(Database::in_memory().expect("database"));
+        let service = ProviderService::new(database, Arc::new(MemorySecretStore::default()))
+            .expect("service");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("local mock listener");
+        let addr = listener.local_addr().expect("mock addr");
+        let server = tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut buffer = [0u8; 2048];
+                let _ = socket.read(&mut buffer).await;
+                let body = r#"{"object":"list","data":[
+                    {"id":"glm-5.2","owned_by":"system","type":"CHAT"},
+                    {"id":"glm-5","owned_by":"system","type":"CHAT"},
+                    {"id":"doubao-seedream-5.0-pro","owned_by":"system","type":"IMAGE"},
+                    {"id":"glm-5.2","owned_by":"system","type":"CHAT"}
+                ]}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+
+        let models = service
+            .list_remote_models(
+                &format!("http://{addr}/v1"),
+                ApiProtocol::OpenaiChatCompletions,
+                "secret",
+            )
+            .await
+            .expect("model list");
+        assert_eq!(models.len(), 3);
+        assert_eq!(models[0].id, "doubao-seedream-5.0-pro");
+        assert_eq!(models[0].output_modality, ModelOutputModality::Image);
+        assert_eq!(models[1].id, "glm-5");
+        assert_eq!(models[1].owned_by.as_deref(), Some("system"));
+        assert_eq!(models[1].output_modality, ModelOutputModality::Text);
+        assert_eq!(models[2].id, "glm-5.2");
+        server.await.expect("mock server task");
+    }
+
+    #[tokio::test]
+    async fn list_remote_models_rejects_an_empty_model_list() {
+        let database = Arc::new(Database::in_memory().expect("database"));
+        let service = ProviderService::new(database, Arc::new(MemorySecretStore::default()))
+            .expect("service");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("local mock listener");
+        let addr = listener.local_addr().expect("mock addr");
+        let server = tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut buffer = [0u8; 2048];
+                let _ = socket.read(&mut buffer).await;
+                let body = r#"{"object":"list","data":[]}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+
+        let error = service
+            .list_remote_models(
+                &format!("http://{addr}/v1"),
+                ApiProtocol::OpenaiChatCompletions,
+                "secret",
+            )
+            .await
+            .expect_err("empty list must be an error");
+        assert_eq!(error.code, "provider_models_empty");
+        server.await.expect("mock server task");
     }
 
     #[test]

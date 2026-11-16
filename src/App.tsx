@@ -479,16 +479,28 @@ function AppContent() {
   const saveProvider = async (draft: ProviderDraft) => {
     setSavingProvider(true);
     try {
-      await api.saveProvider(draft);
+      // 保存即验证：先用草稿值做真实连接测试（不落库），失败时阻断保存并
+      // 展示真实连接错误；通过后落库并把默认文本模型直接标记为已验证。
+      const saved = await api.saveProviderVerified(draft);
       setProviderModal(false);
       await loadSnapshot(true);
       notify(
         "good",
         text("模型供应商已安全保存", "Provider saved securely"),
-        text(
-          "文本模型首次应用前需要完成连接测试；生图、语音和视频模型无需验证。",
-          "Text models require a connection test before first use. Image-generation, audio, and video models do not require verification.",
-        ),
+        saved.verifiedModelId
+          ? text(
+              "连接测试已通过，默认文本模型已验证、可直接切换。",
+              "The connection passed and the default text model is verified and ready to switch.",
+            )
+          : saved.models.some((model) => model.outputModality === "text")
+            ? text(
+                "连接已验证。文本模型声明了流式/工具能力，切换前请逐个完成连接测试。",
+                "The connection is verified. Text models with streaming or tool capabilities need individual connection tests before switching.",
+              )
+            : text(
+                "连接测试已通过；当前供应商没有需要验证的文本模型。",
+                "The connection passed; this provider has no text models to verify.",
+              ),
       );
     } catch (error) {
       notify(

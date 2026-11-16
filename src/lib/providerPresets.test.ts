@@ -65,10 +65,10 @@ describe("provider presets", () => {
       "NMauto",
       "deepseek-v4-flash",
       "GLM-5.2",
-      "doubao-seedream-5.0-lite",
+      "doubao-seedream-5.0-pro",
     ]);
     const seedream = providerPresets.mongyun.models.find(
-      (model) => model.modelId === "doubao-seedream-5.0-lite",
+      (model) => model.modelId === "doubao-seedream-5.0-pro",
     );
     expect(seedream).toMatchObject({
       outputModality: "image",
