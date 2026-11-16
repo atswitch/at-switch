@@ -1,0 +1,19 @@
+# cargo-deny configuration for the dependency audit workflow
+# (`.github/workflows/dependency-audit.yml`, `cargo deny check advisories`).
+
+[advisories]
+version = 2
+
+ignore = [
+  # unsafe-libyaml (transitive of serde_yaml 0.9) is unmaintained upstream.
+  # serde_yaml is frozen at 0.9 for the Hermes config reader; no drop-in
+  # replacement is available without rewriting the YAML layer.
+  { id = "RUSTSEC-2024-0449", reason = "serde_yaml 0.9 -> unsafe-libyaml is unmaintained; no safe upgrade without rewriting the Hermes YAML reader" },
+
+  # The zbus 5 stack (zbus_names / zvariant / zvariant_derive) is pulled in by
+  # tauri-plugin-opener and tauri-plugin-single-instance on Linux. Tauri owns
+  # that dependency chain; we cannot upgrade or replace it from this repo.
+  { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained; transitive of tauri-plugin-opener/single-instance (zbus 5)" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained; transitive of tauri-plugin-opener/single-instance (zbus 5)" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained; transitive of tauri-plugin-opener/single-instance (zbus 5)" },
+]
