@@ -52,6 +52,14 @@ const seedTestProviders = async () => {
   });
 };
 
+/** 顶部工具入口已迁入会员菜单，测试统一先展开菜单再点击快捷项。 */
+const openMemberMenu = async (
+  user: ReturnType<typeof userEvent.setup>,
+  label = "未登录 / 点击登录",
+) => {
+  await user.click(screen.getByRole("button", { name: label }));
+};
+
 describe("AT-Switch desktop shell", () => {
   afterEach(() => vi.restoreAllMocks());
   beforeEach(async () => {
@@ -169,6 +177,7 @@ describe("AT-Switch desktop shell", () => {
     await user.click(screen.getByRole("tab", { name: "QClaw" }));
     await screen.findByRole("heading", { name: "QClaw" });
 
+    await openMemberMenu(user);
     await user.click(
       screen.getByRole("button", { name: "模型供应商与大模型" }),
     );
@@ -181,68 +190,95 @@ describe("AT-Switch desktop shell", () => {
     expect(screen.getAllByText("蒙云智算").length).toBeGreaterThan(0);
   });
 
-  it("shows toolbar descriptions only in the selected language", async () => {
+  it("keeps only member entry and language in the toolbar, with shortcuts in the menu", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     await screen.findByRole("heading", { name: "WorkBuddy" });
     const toolbar = screen.getByRole("navigation", { name: "工具导航" });
+    // 工具入口已收进会员菜单：顶部只剩会员入口与语言切换。
+    for (const name of [
+      "刷新状态",
+      "智能体状态",
+      "模型供应商与大模型",
+      "高级设置",
+      "新增模型供应商",
+    ]) {
+      expect(
+        within(toolbar).queryByRole("button", { name }),
+      ).not.toBeInTheDocument();
+    }
     expect(
-      within(toolbar).getByRole("button", { name: "刷新状态" }),
+      within(toolbar).getByRole("button", {
+        name: "切换界面语言为 English",
+      }),
+    ).toBeInTheDocument();
+    const memberEntry = within(toolbar).getByRole("button", {
+      name: "未登录 / 点击登录",
+    });
+    expect(memberEntry).toHaveTextContent("登录");
+
+    await user.click(memberEntry);
+    const menu = screen.getByRole("menu", { name: "会员中心" });
+    expect(
+      within(menu).getByRole("button", { name: "刷新状态" }),
     ).toHaveAttribute("title", "刷新状态");
     expect(
-      within(toolbar).getByRole("button", { name: "智能体状态" }),
+      within(menu).getByRole("button", { name: "智能体状态" }),
     ).toHaveAttribute("title", "查看智能体状态");
     expect(
-      within(toolbar).getByRole("button", { name: "模型供应商与大模型" }),
+      within(menu).getByRole("button", { name: "模型供应商与大模型" }),
     ).toHaveAttribute("title", "管理模型供应商与大模型");
-    // PRD 功能 2：首页不再保留设置入口，设置整体迁入会员中心。
-    expect(
-      within(toolbar).queryByRole("button", { name: "高级设置" }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "未登录 / 点击登录" }),
-    ).toBeInTheDocument();
-    expect(
-      within(toolbar).queryByRole("button", { name: "新增模型供应商" }),
-    ).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "未登录 / 点击登录" }));
-    await user.click(await screen.findByRole("button", { name: /^设置/ }));
+    await user.click(within(menu).getByRole("button", { name: /^设置/ }));
     await user.click(screen.getByRole("button", { name: "切换界面语言为 English" }));
     expect(window.localStorage.getItem("at-switch-language")).toBe("en");
+    expect(
+      await screen.findByRole("heading", { name: "Advanced settings" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("高级设置")).not.toBeInTheDocument();
 
     const englishToolbar = screen.getByRole("navigation", {
       name: "Toolbar navigation",
     });
     expect(
-      within(englishToolbar).getByRole("button", { name: "Refresh status" }),
+      within(englishToolbar).getByRole("button", {
+        name: "Switch language to 简体中文",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(englishToolbar).queryByRole("button", { name: "Agent status" }),
+    ).not.toBeInTheDocument();
+
+    await openMemberMenu(user, "Not signed in / Click to sign in");
+    const englishMenu = screen.getByRole("menu", { name: "Member center" });
+    expect(
+      within(englishMenu).getByRole("button", { name: "Refresh status" }),
     ).toHaveAttribute("title", "Refresh status");
     expect(
-      within(englishToolbar).getByRole("button", { name: "Agent status" }),
+      within(englishMenu).getByRole("button", { name: "Agent status" }),
     ).toHaveAttribute("title", "View agent status");
     expect(
-      within(englishToolbar).getByRole("button", {
+      within(englishMenu).getByRole("button", {
         name: "Model providers & LLMs",
       }),
     ).toHaveAttribute("title", "Manage model providers & LLMs");
-    expect(
-      screen.getByRole("heading", { name: "Advanced settings" }),
-    ).toBeInTheDocument();
-    expect(screen.queryByText("高级设置")).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
 
     await user.click(screen.getByRole("button", { name: "Go back" }));
     expect(
       await screen.findByRole("heading", { name: "WorkBuddy" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Current route")).toBeInTheDocument();
-    await user.click(
-      screen.getByRole("button", { name: "Agent status" }),
-    );
+
+    await openMemberMenu(user, "Not signed in / Click to sign in");
+    await user.click(screen.getByRole("button", { name: "Agent status" }));
     expect(
       await screen.findByRole("heading", { name: "Agents" }),
     ).toBeInTheDocument();
     expect(screen.getAllByText("Installation").length).toBeGreaterThan(0);
+
+    await openMemberMenu(user, "Not signed in / Click to sign in");
     await user.click(
       screen.getByRole("button", { name: "Model providers & LLMs" }),
     );
@@ -253,15 +289,32 @@ describe("AT-Switch desktop shell", () => {
     expect(
       screen.getByRole("button", { name: "New model provider" }),
     ).toHaveClass("provider-create-action");
-    await user.click(
-      screen.getByRole("button", { name: "Not signed in / Click to sign in" }),
-    );
-    await user.click(await screen.findByRole("button", { name: /^Settings/ }));
+
     await user.click(screen.getByRole("button", { name: "Switch language to 简体中文" }));
-    await screen.findByRole("heading", { name: "高级设置" });
     await waitFor(() => {
       expect(window.localStorage.getItem("at-switch-language")).toBe("zh-CN");
     });
+  });
+
+  it("shows the signed-in member name next to the member entry icon", async () => {
+    vi.spyOn(api, "getAccountStatus").mockResolvedValue({
+      configured: true,
+      loggedIn: true,
+      offline: false,
+      frozen: false,
+      profile: {
+        userId: "1",
+        username: "tester",
+        displayName: "杰王",
+        email: "tester@example.test",
+        providerType: "google",
+      },
+    });
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "WorkBuddy" });
+    const entry = await screen.findByTitle("杰王");
+    expect(within(entry).getByText("杰王")).toBeInTheDocument();
   });
 
   it(
@@ -297,7 +350,9 @@ describe("AT-Switch desktop shell", () => {
     await user.click(await screen.findByRole("button", { name: "微信扫码登录" }));
     // mock 轮询含 2s 真实延时，放宽等待窗口；按钮为纯图标，用 title 定位。
     await screen.findByTitle("预览用户", {}, { timeout: 6000 });
-    await user.click(screen.getByTitle("预览用户"));
+    const signedInEntry = screen.getByTitle("预览用户");
+    expect(within(signedInEntry).getByText("预览用户")).toBeInTheDocument();
+    await user.click(signedInEntry);
     await user.click(screen.getByRole("button", { name: "退出登录" }));
     expect(
       await screen.findByText(
@@ -319,8 +374,10 @@ describe("AT-Switch desktop shell", () => {
     render(<App />);
 
     await screen.findByRole("heading", { name: "WorkBuddy" });
+    await openMemberMenu(user);
     await user.click(screen.getByRole("button", { name: "智能体状态" }));
     await screen.findByRole("heading", { name: "智能体" });
+    await openMemberMenu(user);
     await user.click(
       screen.getByRole("button", { name: "模型供应商与大模型" }),
     );
@@ -366,6 +423,7 @@ describe("AT-Switch desktop shell", () => {
     render(<App />);
 
     await screen.findByRole("heading", { name: "WorkBuddy" });
+    await openMemberMenu(user);
     await user.click(screen.getByRole("button", { name: "智能体状态" }));
 
     const detailButtons = await screen.findAllByRole("button", {
@@ -385,6 +443,7 @@ describe("AT-Switch desktop shell", () => {
     render(<App />);
 
     await screen.findByRole("heading", { name: "WorkBuddy" });
+    await openMemberMenu(user);
     await user.click(
       screen.getByRole("button", { name: "模型供应商与大模型" }),
     );
@@ -695,6 +754,7 @@ describe("AT-Switch desktop shell", () => {
     render(<App />);
 
     await screen.findByRole("heading", { name: "WorkBuddy" });
+    await openMemberMenu(user);
     await user.click(
       screen.getByRole("button", { name: "模型供应商与大模型" }),
     );
@@ -723,6 +783,7 @@ describe("AT-Switch desktop shell", () => {
     render(<App />);
 
     await screen.findByRole("heading", { name: "WorkBuddy" });
+    await openMemberMenu(user);
     await user.click(
       screen.getByRole("button", { name: "模型供应商与大模型" }),
     );

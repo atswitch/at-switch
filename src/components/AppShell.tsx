@@ -1,11 +1,4 @@
-import {
-  ArrowLeft,
-  Bot,
-  Boxes,
-  CircleUserRound,
-  Globe,
-  RefreshCw,
-} from "lucide-react";
+import { ArrowLeft, CircleUserRound, Globe } from "lucide-react";
 import clsx from "clsx";
 import { useLanguage } from "../i18n";
 import type { AgentSummary, AppLanguage, PageId } from "../types";
@@ -18,14 +11,16 @@ interface AppShellProps {
   onBack: () => void;
   agents: AgentSummary[];
   activeAgentId: string;
-  refreshing: boolean;
   onSelectAgent: (agentId: string) => void;
-  onRefresh: () => void;
   onToggleLanguage?: (language: AppLanguage) => void;
-  /** 会员入口（PRD：首页右上角会员名称，未登录显示「未登录 / 点击登录」）。 */
+  /** 会员入口的无障碍名称与悬浮提示（未登录显示「未登录 / 点击登录」）。 */
   memberLabel: string;
+  /** 会员入口可见短标签：登录时显示用户名，未登录显示「登录」。 */
+  memberDisplayLabel: string;
   /** 有新版本时在会员入口显示提醒红点。 */
   updateBadge?: boolean;
+  /** 待更新版本号：有值时在登录名右侧显示「v3.18.1 可更新」提醒。 */
+  updateVersion?: string;
   onOpenMemberCenter: () => void;
   children: React.ReactNode;
 }
@@ -36,36 +31,16 @@ export function AppShell({
   onBack,
   agents,
   activeAgentId,
-  refreshing,
   onSelectAgent,
-  onRefresh,
   onToggleLanguage,
   memberLabel,
+  memberDisplayLabel,
   updateBadge,
+  updateVersion,
   onOpenMemberCenter,
   children,
 }: AppShellProps) {
   const { language, setLanguage, text } = useLanguage();
-  const navigation: Array<{
-    id: PageId;
-    label: string;
-    tooltip: string;
-    icon: typeof Bot;
-  }> = [
-    {
-      id: "agents",
-      label: text("智能体状态", "Agent status"),
-      tooltip: text("查看智能体状态", "View agent status"),
-      icon: Bot,
-    },
-    {
-      id: "providers",
-      label: text("模型供应商与大模型", "Model providers & LLMs"),
-      tooltip: text("管理模型供应商与大模型", "Manage model providers & LLMs"),
-      icon: Boxes,
-    },
-    // 首页不再保留「设置」入口（PRD 功能 2：整体迁入会员中心）。
-  ];
 
   return (
     <div className="desktop-shell">
@@ -106,44 +81,25 @@ export function AppShell({
           >
             <button
               type="button"
-              className="toolbar-icon-button"
-              onClick={onRefresh}
-              aria-label={text("刷新状态", "Refresh status")}
-              title={text("刷新状态", "Refresh status")}
-              disabled={refreshing}
-            >
-              <RefreshCw
-                size={25}
-                className={refreshing ? "is-spinning" : undefined}
-              />
-            </button>
-            {navigation.map((item) => {
-              const Icon = item.icon;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={clsx(
-                    "toolbar-icon-button",
-                    page === item.id && "is-active",
-                  )}
-                  onClick={() => onNavigate(item.id)}
-                  aria-label={item.label}
-                  title={item.tooltip}
-                >
-                  <Icon size={25} strokeWidth={1.8} />
-                </button>
-              );
-            })}
-            <button
-              type="button"
-              className={clsx("toolbar-icon-button", "member-entry")}
+              className={clsx(
+                "toolbar-icon-button",
+                "member-entry",
+                "member-entry--labeled",
+              )}
               onClick={onOpenMemberCenter}
               aria-label={memberLabel}
               title={memberLabel}
             >
               <CircleUserRound size={25} strokeWidth={1.8} />
-              {updateBadge && <i className="member-entry__dot" aria-hidden="true" />}
+              <span className="member-entry__label">{memberDisplayLabel}</span>
+              {updateVersion && (
+                <span className="member-entry__update">
+                  v{updateVersion} {text("可更新", "available")}
+                </span>
+              )}
+              {updateBadge && !updateVersion && (
+                <i className="member-entry__dot" aria-hidden="true" />
+              )}
             </button>
 
             <span className="toolbar-divider" aria-hidden="true" />

@@ -89,9 +89,21 @@ pub async fn wait_for_google_code(state: &str) -> Result<String, CommandError> {
             .accept()
             .await
             .map_err(|_| CommandError::new("auth_login_failed", "本地授权回调中断"))?;
-        let mut buffer = [0u8; 2048];
-        let read = socket.read(&mut buffer).await.unwrap_or(0);
-        let request = String::from_utf8_lossy(&buffer[..read]).into_owned();
+        // 回调 URL 会带 scope/authuser/iss 等长参数，固定 2048 字节缓冲可能截断末尾的
+        // code；读到请求头结束为止，并对超长请求保留上限防止无界读取。
+        let mut request_bytes = Vec::new();
+        let mut chunk = [0u8; 4096];
+        while request_bytes.len() < 16 * 1024 {
+            let read = socket.read(&mut chunk).await.unwrap_or(0);
+            if read == 0 {
+                break;
+            }
+            request_bytes.extend_from_slice(&chunk[..read]);
+            if request_bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        let request = String::from_utf8_lossy(&request_bytes).into_owned();
         let Some(path) = request.split_whitespace().nth(1) else {
             continue;
         };
@@ -126,10 +138,10 @@ pub async fn wait_for_google_code(state: &str) -> Result<String, CommandError> {
 
 fn extract_query_param(path: &str, key: &str) -> Option<String> {
     let query = path.split_once('?')?.1;
-    query.split('&').find_map(|pair| {
-        let (name, value) = pair.split_once('=')?;
-        (name == key).then(|| value.to_owned())
-    })
+    // Google 会把授权码里的 "/" 编码成 %2F，原样透传会被 token 接口判为 Malformed auth code。
+    url::form_urlencoded::parse(query.as_bytes())
+        .find(|(name, _)| name.as_ref() == key)
+        .map(|(_, value)| value.into_owned())
 }
 
 #[cfg(test)]
@@ -149,5 +161,25 @@ mod tests {
         assert_eq!(extract_query_param(path, "code").as_deref(), Some("xyz"));
         assert_eq!(extract_query_param(path, "state").as_deref(), Some("abc"));
         assert_eq!(extract_query_param(path, "other"), None);
+    }
+
+    #[test]
+    fn decodes_percent_encoded_authorization_code() {
+        let path = "/callback?state=abc&code=4%2F0AeaYSHD-abc_123&scope=openid%20email";
+        assert_eq!(
+            extract_query_param(path, "code").as_deref(),
+            Some("4/0AeaYSHD-abc_123")
+        );
+        assert_eq!(extract_query_param(path, "state").as_deref(), Some("abc"));
+    }
+
+    #[test]
+    fn finds_code_after_long_query_without_truncation() {
+        let padding = "x".repeat(4096);
+        let path = format!("/callback?state=abc&scope={padding}&code=4%2F0AeaYSHD");
+        assert_eq!(
+            extract_query_param(&path, "code").as_deref(),
+            Some("4/0AeaYSHD")
+        );
     }
 }

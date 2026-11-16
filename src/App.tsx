@@ -1,5 +1,5 @@
 import { AlertTriangle, CheckCircle2, LoaderCircle } from "lucide-react";
-import { FeedbackDialog, LoginDialog, MemberMenu, UpdateToast } from "./components/MemberCenterModal";
+import { FeedbackDialog, LoginDialog, MemberMenu } from "./components/MemberCenterModal";
 import type { UpdateState } from "./components/MemberCenterModal";
 import type { AccountStatus, LoginMethod, LoginPoll } from "./types";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -126,6 +126,9 @@ function AppContent() {
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const activeLogin = useRef<{ method: LoginMethod; loginState: string } | null>(null);
   const [updateState, setUpdateState] = useState<UpdateState>({ kind: "idle" });
+  // 供回调读取最新更新状态（useCallback 闭包不刷新，避免把已下载待重启的状态打回 available）。
+  const updateStateRef = useRef(updateState);
+  updateStateRef.current = updateState;
 
   const totalModelsCount = useMemo(() => {
     if (!snapshot) return 0;
@@ -261,12 +264,20 @@ function AppContent() {
   // 自动更新（PRD 功能 3）：启动时静默检查（发现新版挂提醒标识）；
   // 打开会员中心自动校验，非最新自动开始下载；更新过程不阻断其他功能。
   const startUpdateInstall = useCallback(async () => {
-    setUpdateState((current) =>
-      current.kind === "available" ? { kind: "downloading", percent: 0 } : current,
-    );
+    // 只有 available 才能进入下载；其余（下载中/待重启）重复点击直接忽略，避免并发安装。
+    const current = updateStateRef.current;
+    if (current.kind !== "available") return;
+    const version = current.version;
+    setUpdateState({ kind: "downloading", percent: 0, version });
     try {
+      // installUpdate 内部会推 update://progress / update://ready 事件；
+      // ready 之后才算安装完成（installing 由事件驱动），返回即视为可重启。
       await api.installUpdate();
-      setUpdateState({ kind: "relaunch" });
+      setUpdateState((latest) =>
+        latest.kind === "installing" || latest.kind === "downloading"
+          ? { kind: "relaunch", version: latest.version || version }
+          : latest,
+      );
     } catch (error) {
       setUpdateState({ kind: "error", message: (error as Error).message });
     }
@@ -276,9 +287,14 @@ function AppContent() {
 
   const runUpdateCheck = useCallback(
     async (autoDownload: boolean) => {
-      setUpdateState({ kind: "checking" });
+      // 已下载待重启（relaunch / dismissed）时不重查：重查会把状态打回 available，
+      // 让用户重复下载，并丢掉「重启后生效」这段不可逆进度。
+      const settled = updateStateRef.current.kind === "relaunch"
+        || updateStateRef.current.kind === "dismissed";
+      if (!settled) setUpdateState({ kind: "checking" });
       try {
         const check = await api.checkUpdate();
+        if (settled) return;
         if (!check.available) {
           setUpdateState({ kind: "uptodate" });
           return;
@@ -286,6 +302,8 @@ function AppContent() {
         setUpdateState({ kind: "available", version: check.version ?? "" });
         if (autoDownload) startUpdateInstallRef.current();
       } catch (error) {
+        // 静默复查失败不打断用户：已处于可用/下载态时保留原状态，只记日志。
+        if (settled || updateStateRef.current.kind === "available") return;
         setUpdateState({ kind: "error", message: (error as Error).message });
       }
     },
@@ -309,11 +327,19 @@ function AppContent() {
         (event) => {
           const { downloaded, total } = event.payload;
           const percent = total ? Math.round((downloaded / total) * 100) : 0;
-          setUpdateState({ kind: "downloading", percent });
+          setUpdateState((current) =>
+            current.kind === "available" || current.kind === "downloading"
+              ? { kind: "downloading", percent, version: current.version }
+              : current,
+          );
         },
       );
-      const unready = await listen("update://ready", () => {
-        setUpdateState({ kind: "installing" });
+      const unready = await listen<{ version?: string }>("update://ready", (event) => {
+        setUpdateState((current) => ({
+          kind: "installing",
+          version: event.payload?.version
+            ?? (current.kind === "downloading" ? current.version : ""),
+        }));
       });
       unlisten = () => {
         unprogress();
@@ -330,6 +356,15 @@ function AppContent() {
       );
     }
     return text("未登录 / 点击登录", "Not signed in / Click to sign in");
+  }, [accountStatus, text]);
+
+  const memberShortLabel = useMemo(() => {
+    if (accountStatus?.loggedIn) {
+      return (
+        accountStatus.profile?.displayName || accountStatus.profile?.username || "AT"
+      );
+    }
+    return text("登录", "Sign in");
   }, [accountStatus, text]);
 
   const navigateTo = useCallback((nextPage: PageId) => {
@@ -909,31 +944,39 @@ function AppContent() {
         onBack={goBack}
         agents={snapshot.agents}
         activeAgentId={activeAgent?.id ?? "workbuddy"}
-        refreshing={refreshing}
         onSelectAgent={selectAgent}
-        onRefresh={() => void loadSnapshot(true)}
         onToggleLanguage={(nextLanguage) =>
           void updateSettings({ language: nextLanguage })
         }
         memberLabel={memberLabel}
+        memberDisplayLabel={memberShortLabel}
         updateBadge={
           updateState.kind === "available" ||
           updateState.kind === "downloading" ||
           updateState.kind === "installing" ||
-          updateState.kind === "relaunch"
+          updateState.kind === "relaunch" ||
+          updateState.kind === "dismissed"
+        }
+        updateVersion={
+          updateState.kind === "available" ||
+          updateState.kind === "downloading" ||
+          updateState.kind === "installing" ||
+          updateState.kind === "relaunch" ||
+          updateState.kind === "dismissed"
+            ? updateState.version
+            : undefined
         }
         onOpenMemberCenter={() => {
           setMemberOpen((open) => !open);
           void loadAccountStatus();
           // PRD：打开会员中心自动校验版本；非最新自动开始下载。
-          setUpdateState((current) => {
-            if (current.kind === "idle" || current.kind === "uptodate" || current.kind === "error") {
-              void runUpdateCheck(true);
-            } else if (current.kind === "available") {
-              startUpdateInstallRef.current();
-            }
-            return current;
-          });
+          const current = updateStateRef.current;
+          if (current.kind === "available") {
+            startUpdateInstallRef.current();
+          } else if (current.kind !== "relaunch" && current.kind !== "dismissed") {
+            // 已下载待重启时不重查，避免把状态打回 available 重复下载。
+            void runUpdateCheck(true);
+          }
         }}
       >
         {page === "overview" && activeAgent && (
@@ -1024,14 +1067,6 @@ function AppContent() {
         )}
       </AppShell>
 
-      <UpdateToast
-        state={updateState}
-        onClose={() => setUpdateState({ kind: "idle" })}
-        onInstall={() => void startUpdateInstall()}
-        onRelaunch={() => void api.relaunchApp()}
-        onRetry={() => void runUpdateCheck(false)}
-      />
-
       <MemberMenu
         open={memberOpen}
         appVersion={snapshot.appVersion}
@@ -1040,7 +1075,13 @@ function AppContent() {
         onCheckUpdate={() => void runUpdateCheck(false)}
         onInstallUpdate={() => void startUpdateInstall()}
         onRelaunch={() => void api.relaunchApp()}
-        onDismissUpdate={() => setUpdateState({ kind: "uptodate" })}
+        onDismissUpdate={() =>
+          setUpdateState((current) =>
+            current.kind === "relaunch"
+              ? { kind: "dismissed", version: current.version ?? snapshot.appVersion }
+              : current,
+          )
+        }
         onClose={() => setMemberOpen(false)}
         onOpenLogin={() => {
           setMemberOpen(false);
@@ -1059,6 +1100,15 @@ function AppContent() {
           window.open("https://atswitch.io/docs", "_blank", "noopener")
         }
         onLogout={() => setPendingLogoutConfirm(true)}
+        refreshing={refreshing}
+        onRefresh={() => {
+          setMemberOpen(false);
+          void loadSnapshot(true);
+        }}
+        onNavigate={(nextPage) => {
+          setMemberOpen(false);
+          navigateTo(nextPage);
+        }}
       />
 
       <FeedbackDialog

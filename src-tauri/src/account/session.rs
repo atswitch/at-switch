@@ -32,4 +32,11 @@ impl SessionStore {
     pub fn clear(&self) {
         let _ = self.store.delete(SESSION_REFERENCE);
     }
+
+    /// 共享同一个凭据库句柄：遥测等旁路模块需要只读拿到当前 token。
+    pub fn clone_shared(&self) -> Self {
+        Self {
+            store: Arc::clone(&self.store),
+        }
+    }
 }

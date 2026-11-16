@@ -5,14 +5,35 @@ use serde_json::json;
 
 use super::client::{ApiClient, TelemetryBatch};
 use super::config;
+use super::session::SessionStore;
 
 /// 遥测收集器：白名单元数据（使用事件 + 卡点错误）先进内存队列，
 /// 每 60s 或满 20 条批量上报；失败静默丢弃、不重试、不阻塞主流程（设计 §3.5.1）。
-/// 未登录也上报（匿名 device_id）；登录事件由命令层附加 user_id。
+/// 未登录也上报（匿名 device_id）；flush 时自动附上当前登录态 token 以便服务端写入 user_id。
 pub struct TelemetryCollector {
     device_id: String,
     api: Option<ApiClient>,
     queue: Mutex<CollectorState>,
+    /// 用于 flush 时获取当前 access token；未注入时始终匿名上报。
+    session: Option<Arc<dyn AccessTokenSource>>,
+}
+
+/// 登录态抽象：收集器只需要「当前 token 与用户」，不关心 token 如何持久化。
+pub trait AccessTokenSource: Send + Sync {
+    fn access_token(&self) -> Option<String>;
+
+    /// 客户端声明的用户 ID：服务端无 JWT 时作为兜底，避免整批数据变成匿名。
+    fn user_id(&self) -> Option<String>;
+}
+
+impl AccessTokenSource for SessionStore {
+    fn access_token(&self) -> Option<String> {
+        self.load().map(|tokens| tokens.access_token)
+    }
+
+    fn user_id(&self) -> Option<String> {
+        self.load().map(|tokens| tokens.profile.user_id)
+    }
 }
 
 const MAX_QUEUE: usize = 200;
@@ -23,7 +44,7 @@ struct CollectorState {
     errors: Vec<serde_json::Value>,
 }
 
-/// 埋点调用方提供的最小上下文；本地时间由收集器统一生成。
+/// 埋点调用方提供的最小上下文；设备、平台与本地时间由收集器统一生成。
 pub struct Event<'a> {
     pub event: &'a str,
     pub app_version: &'a str,
@@ -54,7 +75,14 @@ impl TelemetryCollector {
             device_id,
             api: Some(ApiClient::new(api_base)),
             queue: Mutex::new(CollectorState::default()),
+            session: None,
         }
+    }
+
+    /// 注入登录态来源：flush 时读取 access token 让服务端关联 user_id。
+    pub fn with_session(mut self, session: Arc<dyn AccessTokenSource>) -> Self {
+        self.session = Some(session);
+        self
     }
 
     #[cfg(test)]
@@ -63,6 +91,7 @@ impl TelemetryCollector {
             device_id,
             api: None,
             queue: Mutex::new(CollectorState::default()),
+            session: None,
         }
     }
 
@@ -89,6 +118,7 @@ impl TelemetryCollector {
         }));
     }
 
+    /// 卡点错误与使用事件保持同一套设备/平台/版本/时间维度，便于明细表逐条对齐排查。
     pub fn record_error(&self, error: ErrorEvent<'_>) {
         let mut state = self.queue.lock().expect("telemetry queue poisoned");
         if state.errors.len() >= MAX_QUEUE {
@@ -100,6 +130,8 @@ impl TelemetryCollector {
             "errorMessage": error.message,
             "appVersion": error.app_version,
             "os": std::env::consts::OS,
+            "osVersion": os_version(),
+            "arch": std::env::consts::ARCH,
             "contextTag": error.context_tag,
             "userId": error.user_id,
             "ts": local_timestamp(),
@@ -121,8 +153,13 @@ impl TelemetryCollector {
         let Some(api) = self.api.as_ref() else {
             return;
         };
+        let token = self.session.as_ref().and_then(|s| s.access_token());
+        let claim_user_id = self.session.as_ref().and_then(|s| s.user_id());
         // 静默丢弃：遥测失败不重试（设计 §3.5.1）。诊断输出走 stdout 便于终端排查。
-        match api.telemetry_batch(&owned.as_batch()).await {
+        match api
+            .telemetry_batch(token.as_deref(), claim_user_id.as_deref(), &owned.as_batch())
+            .await
+        {
             Ok(()) => println!("[telemetry] batch flushed: {} events, {} errors",
                 owned.events.len(), owned.errors.len()),
             Err(error) => println!("[telemetry] flush failed: {} ({})", error.code, error.message),
@@ -165,7 +202,8 @@ fn local_timestamp() -> String {
     chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string()
 }
 
-fn os_version() -> String {
+/// 系统版本号：随事件与错误一起上报，供明细表区分同平台的不同系统版本。
+pub(crate) fn os_version() -> String {
     #[cfg(target_os = "macos")]
     if let Ok(output) = std::process::Command::new("sw_vers")
         .arg("-productVersion")
@@ -199,5 +237,24 @@ mod tests {
             });
         }
         assert_eq!(collector.queue.lock().unwrap().events.len(), MAX_QUEUE);
+    }
+
+    #[test]
+    fn error_event_carries_platform_fields() {
+        let collector = TelemetryCollector::without_network("device-1".to_owned());
+        collector.record_error(ErrorEvent {
+            error_code: "AUTH_LOGIN_FAILED",
+            message: "boom",
+            app_version: "3.18.0",
+            context_tag: "login=google",
+            user_id: None,
+        });
+        let queue = collector.queue.lock().unwrap();
+        let row = &queue.errors[0];
+        assert_eq!(row["os"], std::env::consts::OS);
+        assert_eq!(row["arch"], std::env::consts::ARCH);
+        assert!(row.get("osVersion").is_some());
+        assert!(row.get("appVersion").is_some());
+        assert!(row.get("ts").is_some());
     }
 }

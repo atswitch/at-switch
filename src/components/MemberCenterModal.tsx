@@ -11,18 +11,23 @@ import {
   CheckCircle2,
   AlertCircle,
   X,
+  Bot,
+  Boxes,
 } from "lucide-react";
 import { useLanguage } from "../i18n";
-import type { AccountStatus, LoginMethod } from "../types";
+import type { AccountStatus, LoginMethod, PageId } from "../types";
 
 export type UpdateState =
   | { kind: "idle" }
   | { kind: "checking" }
+  /** 真·服务端无更高版本 */
   | { kind: "uptodate" }
+  /** 已下载待重启，但用户点了「稍后处理」：静默，但必须仍能点「立即更新」回到重启 */
+  | { kind: "dismissed"; version: string }
   | { kind: "available"; version: string }
-  | { kind: "downloading"; percent: number }
-  | { kind: "installing" }
-  | { kind: "relaunch" }
+  | { kind: "downloading"; percent: number; version: string }
+  | { kind: "installing"; version: string }
+  | { kind: "relaunch"; version: string }
   | { kind: "error"; message: string };
 
 export interface UpdateSectionProps {
@@ -56,6 +61,10 @@ export interface MemberMenuProps {
   onOpenDocs: () => void;
   onOpenFeedback: () => void;
   onLogout: () => void;
+  /** 顶部工具入口迁入菜单后的快捷动作；点击后由调用方关闭菜单。 */
+  refreshing: boolean;
+  onRefresh: () => void;
+  onNavigate: (page: PageId) => void;
 }
 
 export function MemberMenu(props: MemberMenuProps) {
@@ -100,6 +109,43 @@ export function MemberMenu(props: MemberMenuProps) {
             {text("会员服务离线", "Member service offline")}
           </p>
         )}
+
+        <div className="member-menu__group member-menu__shortcuts">
+          <button
+            type="button"
+            className="member-menu__item"
+            onClick={props.onRefresh}
+            disabled={props.refreshing}
+            aria-label={text("刷新状态", "Refresh status")}
+            title={text("刷新状态", "Refresh status")}
+          >
+            <RefreshCw
+              size={17}
+              className={props.refreshing ? "is-spinning" : undefined}
+            />
+            <span>{text("刷新状态", "Refresh status")}</span>
+          </button>
+          <button
+            type="button"
+            className="member-menu__item"
+            onClick={() => props.onNavigate("agents")}
+            aria-label={text("智能体状态", "Agent status")}
+            title={text("查看智能体状态", "View agent status")}
+          >
+            <Bot size={17} />
+            <span>{text("智能体状态", "Agent status")}</span>
+          </button>
+          <button
+            type="button"
+            className="member-menu__item"
+            onClick={() => props.onNavigate("providers")}
+            aria-label={text("模型供应商与大模型", "Model providers & LLMs")}
+            title={text("管理模型供应商与大模型", "Manage model providers & LLMs")}
+          >
+            <Boxes size={17} />
+            <span>{text("模型供应商与大模型", "Model providers & LLMs")}</span>
+          </button>
+        </div>
 
         <div className="member-menu__group">
           <button
@@ -294,6 +340,8 @@ export function UpdateSection({
         return text("检查中…", "Checking…");
       case "uptodate":
         return text("已是最新", "Up to date") + ` v${appVersion}`;
+      case "dismissed":
+        return `${text("已下载", "Downloaded")} v${state.version}${text("，待重启", ", relaunch to apply")}`;
       case "available":
         return `${text("发现新版本", "New version")} v${state.version}`;
       case "downloading":
@@ -338,6 +386,11 @@ export function UpdateSection({
           </button>
         </>
       )}
+      {state.kind === "dismissed" && (
+        <button type="button" className="link-button" onClick={onRelaunch}>
+          {text("立即重启", "Relaunch now")}
+        </button>
+      )}
     </div>
   );
 }
@@ -359,6 +412,7 @@ export function UpdateToast({ state, onClose, onInstall, onRelaunch, onRetry }: 
   if (
     state.kind === "idle" ||
     state.kind === "uptodate" ||
+    state.kind === "dismissed" ||
     state.kind === "checking"
   ) {
     return null;
@@ -436,7 +490,12 @@ export function UpdateToast({ state, onClose, onInstall, onRelaunch, onRetry }: 
   );
 }
 
-/** 建议反馈弹窗（PRD 功能 4）：反馈内容必填、联系方式选填，提交后明确成功/失败提示。 */
+/**
+ * 建议反馈弹窗（PRD 功能 4）：反馈内容必填、联系方式选填。
+ *
+ * 视觉与 LoginDialog 完全共用 login-modal 结构（渐变 hero + 380px 白卡 + 同款按钮），
+ * 避免两处弹窗外形割裂。提交成功后直接关闭弹窗并清空输入（失败才留在原地提示重试）。
+ */
 export interface FeedbackDialogProps {
   open: boolean;
   onClose: () => void;
@@ -447,7 +506,7 @@ export function FeedbackDialog({ open, onClose }: FeedbackDialogProps) {
   const [content, setContent] = useState("");
   const [contact, setContact] = useState("");
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<{ ok: boolean; message: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -458,23 +517,31 @@ export function FeedbackDialog({ open, onClose }: FeedbackDialogProps) {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [open, onClose]);
 
+  // 每次重新打开都从干净状态开始，避免上次失败提示残留。
+  useEffect(() => {
+    if (open) return;
+    setContent("");
+    setContact("");
+    setError(null);
+    setBusy(false);
+  }, [open]);
+
   if (!open) return null;
 
   const submit = async () => {
     if (busy || !content.trim()) return;
     setBusy(true);
-    setNotice(null);
+    setError(null);
     try {
       const { api } = await import("../lib/api");
       await api.submitFeedback(content.trim(), contact.trim() || undefined);
-      setNotice({ ok: true, message: text("提交成功，感谢反馈", "Submitted. Thank you.") });
       setContent("");
       setContact("");
-    } catch (error) {
-      setNotice({
-        ok: false,
-        message: `${text("提交失败，请稍后重试", "Submit failed, please retry")}：${(error as Error).message}`,
-      });
+      onClose();
+    } catch (err) {
+      setError(
+        `${text("提交失败，请稍后重试", "Submit failed, please retry")}：${(err as Error).message}`,
+      );
     } finally {
       setBusy(false);
     }
@@ -483,51 +550,72 @@ export function FeedbackDialog({ open, onClose }: FeedbackDialogProps) {
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <section
-        className="modal login-dialog"
+        className="login-modal feedback-modal"
         role="dialog"
         aria-modal="true"
         aria-label={text("建议反馈", "Feedback")}
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <header className="modal__header">
-          <div>
-            <p className="eyebrow">{text("会员中心", "Member center")}</p>
-            <h2>{text("建议反馈", "Feedback")}</h2>
+        <div className="login-modal__hero">
+          <div className="login-modal__logo">
+            <MessageSquare size={20} />
           </div>
-          <button className="icon-button" onClick={onClose} aria-label={text("关闭", "Close")}>
-            ×
-          </button>
-        </header>
-        <div className="modal__content login-dialog__content">
-          <textarea
-            className="feedback-textarea"
-            value={content}
-            rows={5}
-            onChange={(event) => setContent(event.target.value)}
-            placeholder={text("反馈内容（必填）", "Feedback (required)")}
-          />
-          <input
-            value={contact}
-            onChange={(event) => setContact(event.target.value)}
-            placeholder={text("联系方式（选填）", "Contact (optional)")}
-          />
-          {notice && (
-            <p className={notice.ok ? "member-muted" : "member-menu__offline"}>
-              {notice.message}
-            </p>
-          )}
-          <div className="member-feedback__actions">
-            <button type="button" onClick={onClose}>
-              {text("关闭", "Close")}
+          <h2>{text("建议反馈", "Feedback")}</h2>
+          <p>{text("你的建议会帮助我们把 AT-Switch 做得更好", "Your feedback helps us improve AT-Switch")}</p>
+        </div>
+        <div className="login-modal__body feedback-modal__body">
+          <label className="feedback-field">
+            <span className="login-modal__label feedback-field__label">
+              {text("反馈内容", "Feedback")}
+              <em>{text("必填", "Required")}</em>
+            </span>
+            <textarea
+              className="feedback-input feedback-textarea"
+              value={content}
+              rows={5}
+              maxLength={4000}
+              onChange={(event) => setContent(event.target.value)}
+              placeholder={text(
+                "描述你遇到的问题或希望改进的地方…",
+                "Describe the issue or what could be improved…",
+              )}
+            />
+          </label>
+          <label className="feedback-field">
+            <span className="login-modal__label feedback-field__label">
+              {text("联系方式", "Contact")}
+              <em>{text("选填", "Optional")}</em>
+            </span>
+            <input
+              className="feedback-input"
+              value={contact}
+              maxLength={255}
+              onChange={(event) => setContact(event.target.value)}
+              placeholder={text("邮箱或微信，方便我们回复你", "Email or WeChat so we can reply")}
+            />
+          </label>
+          {error && <p className="login-modal__error">{error}</p>}
+          <div className="feedback-modal__actions">
+            <button
+              type="button"
+              className="login-modal__back"
+              onClick={onClose}
+              disabled={busy}
+            >
+              {text("取消", "Cancel")}
             </button>
             <button
               type="button"
+              className="feedback-modal__submit"
               disabled={busy || !content.trim()}
               onClick={() => void submit()}
             >
               {busy ? text("提交中…", "Submitting…") : text("提交", "Submit")}
             </button>
           </div>
+        </div>
+        <div className="login-modal__foot">
+          {text("反馈会附带设备与版本信息，便于定位问题", "Feedback includes device and version info to help us debug")}
         </div>
       </section>
     </div>

@@ -32,9 +32,10 @@ pub async fn account_login_start(
     method: String,
 ) -> AppResult<LoginStart> {
     let service = service(&state)?;
+    let device = service.device_context();
     match method.as_str() {
         "wechat" => {
-            let (login_state, qr_url) = service.api.create_login_state().await?;
+            let (login_state, qr_url) = service.api.create_login_state(&device).await?;
             Ok(LoginStart {
                 method,
                 login_state,
@@ -52,7 +53,12 @@ pub async fn account_login_start(
             let flow_state = login_state.clone();
             tauri::async_runtime::spawn(async move {
                 let result = match auth::wait_for_google_code(&flow_state).await {
-                    Ok(code) => flow_service.api.google_exchange(&code, &verifier).await,
+                    Ok(code) => {
+                        flow_service
+                            .api
+                            .google_exchange(&code, &verifier, &device)
+                            .await
+                    }
                     Err(error) => Err(error),
                 };
                 if let Err(error) = &result {
@@ -156,7 +162,7 @@ pub async fn account_logout(state: State<'_, AppState>) -> AppResult<()> {
         // 服务端吊销失败不阻断本地登出（离线也要能退出）。
         let _ = service
             .api
-            .logout(&tokens.access_token, &tokens.refresh_token)
+            .logout(&tokens.access_token, &tokens.refresh_token, &service.device_context())
             .await;
         service.telemetry.record_event(Event {
             event: "account_logout",
@@ -183,10 +189,20 @@ pub async fn submit_feedback(
     let service = service(&state)?;
     let contact = contact.unwrap_or_default();
     // 反馈免登录（PRD 调整）：登录态附带 token 关联用户，匿名直接提交。
-    let access_token = service.session.load().map(|tokens| tokens.access_token);
+    let tokens = service.session.load();
+    let access_token = tokens.as_ref().map(|t| t.access_token.clone());
+    let claim_user_id = tokens.as_ref().map(|t| t.profile.user_id.clone());
+    // 设备上下文与登录、埋点共用同一份，保证反馈同样具备设备/平台/版本公共字段。
+    let device = service.device_context();
     service
         .api
-        .feedback(access_token.as_deref(), &content, &contact)
+        .feedback(
+            access_token.as_deref(),
+            claim_user_id.as_deref(),
+            &content,
+            &contact,
+            &device,
+        )
         .await
         .inspect_err(|error| {
             service.telemetry.record_error(ErrorEvent {
@@ -194,7 +210,7 @@ pub async fn submit_feedback(
                 message: &error.message,
                 app_version: env!("CARGO_PKG_VERSION"),
                 context_tag: "feedback",
-                user_id: service.session.load().map(|t| t.profile.user_id).as_deref(),
+                user_id: claim_user_id.as_deref(),
             });
         })?;
     service.telemetry.record_event(Event {
@@ -206,7 +222,7 @@ pub async fn submit_feedback(
         model_detail: "",
         proxy_mode: "",
         result: "success",
-        user_id: service.session.load().map(|t| t.profile.user_id).as_deref(),
+        user_id: claim_user_id.as_deref(),
     });
     Ok(())
 }

@@ -10,12 +10,13 @@ pub mod update;
 
 use std::sync::Arc;
 
+use crate::domain::CommandError;
 use crate::infrastructure::SecretStore;
 
 use self::auth::GoogleLoginRegistry;
 use self::client::ApiClient;
 use self::session::SessionStore;
-use self::telemetry::TelemetryCollector;
+use self::telemetry::{AccessTokenSource, TelemetryCollector};
 
 /// 会员/遥测服务的聚合入口：注册到 `AppState`，命令层只与它交互。
 pub struct AccountService {
@@ -31,14 +32,24 @@ impl AccountService {
     pub fn new(store: Arc<dyn SecretStore>, device_id: String) -> Option<Self> {
         let base = config::api_base()?;
         println!("[account] service configured, api_base={base}");
+        let session = SessionStore::new(store);
+        // 遥测 flush 时共享同一登录态：未登录匿名上报，登录后由服务端按 token 写入 user_id。
+        let session_ref: Arc<dyn AccessTokenSource> = Arc::new(session.clone_shared());
         Some(Self {
-            session: SessionStore::new(store),
+            session,
             api: Arc::new(ApiClient::new(base.to_owned())),
             google_registry: GoogleLoginRegistry::default(),
-            telemetry: Arc::new(TelemetryCollector::new(device_id.clone(), base.to_owned())),
+            telemetry: Arc::new(
+                TelemetryCollector::new(device_id.clone(), base.to_owned()).with_session(session_ref),
+            ),
             device_id,
             sync_in_flight: std::sync::Mutex::new(false),
         })
+    }
+
+    /// 登录/登出上报的设备上下文（设备号 + 平台 + 系统版本 + 架构 + 客户端版本）。
+    pub fn device_context(&self) -> client::DeviceContext {
+        client::DeviceContext::local(self.device_id.clone())
     }
 
 
@@ -55,21 +66,35 @@ impl AccountService {
                 profile: None,
             };
         };
-        let fresh = match self.api.check(&tokens.access_token).await {
-            Ok(profile) => Some(profile),
-            Err(error) if error.code == "auth_expired" => match self
-                .api
-                .refresh(&tokens.refresh_token, &tokens.provider_type)
-                .await
-            {
-                Ok(new_tokens) => {
-                    let profile = new_tokens.profile.clone();
-                    if let Err(save_error) = self.session.save(&new_tokens) {
-                        log::warn!("session refresh persist failed: {}", save_error.message);
+        // Ok(profile) / Err(错误码)：错误码用于区分「网络不可达」与「服务端已响应但报错」。
+        let fresh: Result<types::AccountProfile, CommandError> =
+            match self.api.check(&tokens.access_token).await {
+                Ok(profile) => Ok(profile),
+                Err(error) if error.code == "auth_expired" => match self
+                    .api
+                    .refresh(&tokens.refresh_token, &tokens.provider_type)
+                    .await
+                {
+                    Ok(new_tokens) => {
+                        let profile = new_tokens.profile.clone();
+                        if let Err(save_error) = self.session.save(&new_tokens) {
+                            log::warn!("session refresh persist failed: {}", save_error.message);
+                        }
+                        Ok(profile)
                     }
-                    Some(profile)
-                }
-                Err(refresh_error) if refresh_error.code == "account_frozen" => {
+                    Err(refresh_error) if refresh_error.code == "account_frozen" => {
+                        self.session.clear();
+                        return types::AccountStatus {
+                            configured: true,
+                            logged_in: false,
+                            offline: false,
+                            frozen: Some(true),
+                            profile: None,
+                        };
+                    }
+                    Err(refresh_error) => Err(refresh_error),
+                },
+                Err(error) if error.code == "account_frozen" => {
                     self.session.clear();
                     return types::AccountStatus {
                         configured: true,
@@ -79,35 +104,29 @@ impl AccountService {
                         profile: None,
                     };
                 }
-                Err(_) => None,
-            },
-            Err(error) if error.code == "account_frozen" => {
-                self.session.clear();
-                return types::AccountStatus {
-                    configured: true,
-                    logged_in: false,
-                    offline: false,
-                    frozen: Some(true),
-                    profile: None,
-                };
-            }
-            Err(_) => None,
-        };
+                Err(error) => Err(error),
+            };
         match fresh {
-            Some(profile) => types::AccountStatus {
+            Ok(profile) => types::AccountStatus {
                 configured: true,
                 logged_in: true,
                 offline: false,
                 frozen: Some(false),
                 profile: Some(profile),
             },
-            None => types::AccountStatus {
-                configured: true,
-                logged_in: true,
-                offline: true,
-                frozen: None,
-                profile: Some(tokens.profile),
-            },
+            Err(error) => {
+                // 只有真正的网络不可达才标记离线；服务端已响应（4xx/5xx、响应格式异常）
+                // 说明服务是通的，不应提示「会员服务离线」，否则会把鉴权/配置问题误导成网络问题。
+                let offline = error.code == "account_offline";
+                log::warn!("account status check failed: code={} (offline={offline})", error.code);
+                types::AccountStatus {
+                    configured: true,
+                    logged_in: true,
+                    offline,
+                    frozen: None,
+                    profile: Some(tokens.profile),
+                }
+            }
         }
     }
 

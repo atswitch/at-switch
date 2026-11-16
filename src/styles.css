@@ -4278,6 +4278,49 @@ textarea:focus-visible {
   position: relative;
 }
 
+/* 会员入口由纯图标扩为「图标 + 用户名」，未登录显示短标签「登录」 */
+.member-entry--labeled {
+  width: auto;
+  min-width: 52px;
+  max-width: 320px;
+  padding: 0 14px 0 12px;
+  grid-auto-flow: column;
+  gap: 8px;
+}
+
+.member-entry__label {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.member-entry--labeled:hover .member-entry__label {
+  color: var(--ink);
+}
+
+/* 版本提醒：紧跟登录名右侧，用红色小胶囊提示「v3.18.1 可更新」 */
+.member-entry__update {
+  flex: none;
+  margin-left: 2px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, #f53f3f 12%, transparent);
+  color: #f53f3f;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.member-entry--labeled:hover .member-entry__update {
+  background: #f53f3f;
+  color: #fff;
+}
+
 .member-entry__dot {
   position: absolute;
   top: 10px;
@@ -4513,8 +4556,13 @@ textarea:focus-visible {
   flex: 1;
 }
 
-.member-menu__item:hover:not(.member-menu__item--static) {
+.member-menu__item:hover:not(.member-menu__item--static):not(:disabled) {
   background: var(--surface-hover, #f7f8fa);
+}
+
+.member-menu__item:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .member-menu__item--static {
@@ -4850,6 +4898,102 @@ textarea:focus-visible {
   font-size: 12px;
   color: #d93025;
   text-align: center;
+}
+
+/* ==================== 建议反馈弹窗（复用登录弹窗视觉） ==================== */
+.feedback-modal__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 16px;
+}
+
+.feedback-field {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 登录弹窗的 label 带左右分隔线，反馈表单里改成普通字段标题。 */
+.feedback-field__label {
+  margin: 0 0 6px;
+  gap: 8px;
+}
+
+.feedback-field__label::before,
+.feedback-field__label::after {
+  display: none;
+}
+
+.feedback-field__label em {
+  font-style: normal;
+  font-size: 11px;
+  color: #b3b8c4;
+}
+
+.feedback-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #e8eaf0;
+  border-radius: 12px;
+  background: #fafbfd;
+  padding: 11px 14px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #22262f;
+  transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+}
+
+.feedback-input::placeholder {
+  color: #b3b8c4;
+}
+
+.feedback-input:focus {
+  outline: none;
+  border-color: #4f6ef7;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(79, 110, 247, 0.12);
+}
+
+.feedback-textarea {
+  resize: vertical;
+  min-height: 108px;
+}
+
+.feedback-modal__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.feedback-modal__submit {
+  border: none;
+  border-radius: 10px;
+  padding: 10px 22px;
+  background: linear-gradient(135deg, #4f6ef7 0%, #6a5cf0 100%);
+  color: #fff;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.feedback-modal__submit:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(79, 110, 247, 0.32);
+}
+
+.feedback-modal__submit:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.feedback-modal .login-modal__back:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .login-modal__foot {

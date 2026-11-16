@@ -74,6 +74,39 @@ pub enum LoginPollOutcome {
     Expired,
 }
 
+/// 登录/登出上报的设备上下文：服务端据此写入登录明细（设备、平台、版本）。
+/// 与遥测使用同一 device_id，不额外派生设备标识。
+#[derive(Debug, Clone, Default)]
+pub struct DeviceContext {
+    pub device_id: String,
+    pub os: String,
+    pub os_version: String,
+    pub arch: String,
+    pub app_version: String,
+}
+
+impl DeviceContext {
+    pub fn local(device_id: String) -> Self {
+        Self {
+            device_id,
+            os: std::env::consts::OS.to_owned(),
+            os_version: super::telemetry::os_version(),
+            arch: std::env::consts::ARCH.to_owned(),
+            app_version: env!("CARGO_PKG_VERSION").to_owned(),
+        }
+    }
+
+    fn as_json(&self) -> serde_json::Value {
+        json!({
+            "deviceId": self.device_id,
+            "os": self.os,
+            "osVersion": self.os_version,
+            "arch": self.arch,
+            "appVersion": self.app_version,
+        })
+    }
+}
+
 pub struct TelemetryBatch<'a> {
     pub events: &'a [serde_json::Value],
     pub errors: &'a [serde_json::Value],
@@ -81,22 +114,37 @@ pub struct TelemetryBatch<'a> {
 
 impl ApiClient {
     pub fn new(base: String) -> Self {
-        Self {
-            http: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(15))
-                // 直连打包注入的服务端地址：不继承系统/环境代理，
-                // 否则本地或企业代理会以 502 拦截遥测与登录请求。
-                .no_proxy()
-                .build()
-                .unwrap_or_default(),
-            base,
-        }
+        // 直连打包注入的服务端地址：不继承系统/环境代理，
+        // 否则本地或企业代理会以 502 拦截遥测与登录请求。
+        // build 失败时不再静默退化成 `Client::new()`（那个会继承系统代理），
+        // 现场打印一次原因，便于定位「会员服务离线」这类难复现问题。
+        let http = match reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .no_proxy()
+            .build()
+        {
+            Ok(client) => client,
+            Err(error) => {
+                log::error!("api client build failed, falling back to default: {error}");
+                reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(15))
+                    .no_proxy()
+                    .build()
+                    .unwrap_or_else(|_| reqwest::Client::new())
+            }
+        };
+        Self { http, base }
     }
 
-    pub async fn create_login_state(&self) -> Result<(String, Option<String>), CommandError> {
+    /// 申请微信扫码 state：同时把设备上下文中转给服务端，登录成功时写入登录明细。
+    pub async fn create_login_state(
+        &self,
+        device: &DeviceContext,
+    ) -> Result<(String, Option<String>), CommandError> {
         let response = self
             .http
             .post(format!("{}/v1/auth/state", self.base))
+            .json(&device.as_json())
             .send()
             .await
             .map_err(|_| offline())?;
@@ -146,11 +194,16 @@ impl ApiClient {
         &self,
         code: &str,
         code_verifier: &str,
+        device: &DeviceContext,
     ) -> Result<StoredTokens, CommandError> {
         let response = self
             .http
             .post(format!("{}/v1/auth/google/exchange", self.base))
-            .json(&json!({ "code": code, "codeVerifier": code_verifier }))
+            .json(&json!({
+                "code": code,
+                "codeVerifier": code_verifier,
+                "device": device.as_json(),
+            }))
             .send()
             .await
             .map_err(|_| offline())?;
@@ -191,12 +244,16 @@ impl ApiClient {
         &self,
         access_token: &str,
         refresh_token: &str,
+        device: &DeviceContext,
     ) -> Result<(), CommandError> {
         let response = self
             .http
             .post(format!("{}/v1/account/logout", self.base))
             .bearer_auth(access_token)
-            .json(&json!({ "refreshToken": refresh_token }))
+            .json(&json!({
+                "refreshToken": refresh_token,
+                "device": device.as_json(),
+            }))
             .send()
             .await
             .map_err(|_| offline())?;
@@ -221,14 +278,27 @@ impl ApiClient {
         Ok(())
     }
 
-    pub async fn telemetry_batch(&self, batch: &TelemetryBatch<'_>) -> Result<(), CommandError> {
-        let response = self
+    /// 遥测批量上报：登录态携带 Bearer token，服务端据此写入 user_id；
+    /// 未登录时匿名上报（token 为空）。token 过期不阻断上报，事件仍入库但 user_id 为空。
+    /// `claim_user_id` 为客户端声明的用户身份，仅在服务端无 JWT 时作为兜底。
+    pub async fn telemetry_batch(
+        &self,
+        access_token: Option<&str>,
+        claim_user_id: Option<&str>,
+        batch: &TelemetryBatch<'_>,
+    ) -> Result<(), CommandError> {
+        let mut request = self
             .http
             .post(format!("{}/v1/telemetry/batch", self.base))
-            .json(&json!({ "events": batch.events, "errors": batch.errors }))
-            .send()
-            .await
-            .map_err(|_| offline())?;
+            .json(&json!({
+                "events": batch.events,
+                "errors": batch.errors,
+                "claimUserId": claim_user_id,
+            }));
+        if let Some(token) = access_token {
+            request = request.bearer_auth(token);
+        }
+        let response = request.send().await.map_err(|_| offline())?;
         parse_json::<serde_json::Value>(response).await?;
         Ok(())
     }
@@ -271,16 +341,33 @@ impl ApiClient {
     }
 
     /// 反馈免登录：token 为空时匿名提交。
+    ///
+    /// 反馈同样必须携带完整设备上下文（设备号/平台/系统版本/架构/客户端版本），
+    /// 否则后台无法按设备与版本定位问题——匿名反馈也不能丢这组公共字段。
+    ///
+    /// 身份关联优先靠 Bearer token（服务端可信）；`claim_user_id` 作为兜底，
+    /// 保证 token 恰好过期时反馈仍能挂到登录用户身上。
     pub async fn feedback(
         &self,
         access_token: Option<&str>,
+        claim_user_id: Option<&str>,
         content: &str,
         contact: &str,
+        device: &DeviceContext,
     ) -> Result<(), CommandError> {
         let mut request = self
             .http
             .post(format!("{}/v1/feedback", self.base))
-            .json(&json!({ "content": content, "contact": contact }));
+            .json(&json!({
+                "content": content,
+                "contact": contact,
+                "deviceId": device.device_id,
+                "os": device.os,
+                "osVersion": device.os_version,
+                "arch": device.arch,
+                "appVersion": device.app_version,
+                "claimUserId": claim_user_id,
+            }));
         if let Some(token) = access_token {
             request = request.bearer_auth(token);
         }
