@@ -5120,6 +5120,8 @@ textarea:focus-visible {
   background: linear-gradient(90deg, #07c160, #35d383);
   border-radius: 0 2px 2px 0;
   transition: width 0.3s ease;
+}
+
 /* Remote model picker (provider form "获取模型列表") */
 .remote-model-picker {
   position: fixed;
