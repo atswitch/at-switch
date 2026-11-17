@@ -57,11 +57,11 @@ pub fn open_browser(url: &str) -> Result<(), CommandError> {
     };
     #[cfg(target_os = "windows")]
     let mut command = {
-        // cmd /C 会重新解析整行：URL 里的 `&` 若不加引号会被当作命令分隔符，
-        // 导致授权 URL 被截断（redirect_uri/client_id/scope 丢失）。引号包裹后
-        // start 收到完整 URL；引号本身由 start 剥离，不影响浏览器打开。
-        let mut c = std::process::Command::new("cmd");
-        c.args(["/C", "start", "", &format!("\"{}\"", url)]);
+        // 不经 cmd /C start：cmd 的引号转义规则与 Rust std::process 的 CRT 转义
+        // 互不兼容（URL 里的 `&` 会被截断，加引号又会变成 `\"` 前缀路径）。
+        // explorer.exe 直接接收 URL 参数并交给默认浏览器，无 shell 解析问题。
+        let mut c = std::process::Command::new("explorer.exe");
+        c.arg(url);
         c
     };
     #[cfg(all(unix, not(target_os = "macos")))]
