@@ -250,23 +250,7 @@ export function LoginDialog(props: LoginDialogProps) {
           {!qrUrl && (
             <>
               <div className="login-modal__label">{text("选择登录方式", "Choose a sign-in method")}</div>
-              <button
-                type="button"
-                className="login-option login-option--wechat"
-                disabled={props.busy}
-                onClick={() => props.onChoose("wechat")}
-              >
-                <span className="login-option__icon">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M9.5 4C5.36 4 2 6.69 2 10c0 1.89 1.08 3.56 2.78 4.66l-.7 2.1 2.45-1.23c.93.31 1.93.47 2.97.47.28 0 .55-.01.82-.04A5.1 5.1 0 0 1 10 14.5c0-2.9 2.91-5.25 6.5-5.25.28 0 .55.01.82.04C16.61 6.36 13.36 4 9.5 4zM7 8.75a.95.95 0 1 1 0-1.9.95.95 0 0 1 0 1.9zm5 0a.95.95 0 1 1 0-1.9.95.95 0 0 1 0 1.9zM22 14.5c0-2.76-2.69-5-6-5s-6 2.24-6 5 2.69 5 6 5c.87 0 1.7-.14 2.45-.4l2.05 1.03-.58-1.75C21.13 17.51 22 16.08 22 14.5zm-7.9-.83a.8.8 0 1 1 0-1.6.8.8 0 0 1 0 1.6zm3.8 0a.8.8 0 1 1 0-1.6.8.8 0 0 1 0 1.6z"/>
-                  </svg>
-                </span>
-                <span className="login-option__text">
-                  <strong>{text("微信扫码登录", "Sign in with WeChat")}</strong>
-                  <span>{text("打开手机微信扫一扫", "Scan with WeChat on your phone")}</span>
-                </span>
-                <span className="login-option__arrow">›</span>
-              </button>
+              {/* 微信登录暂时下线（服务端保留），恢复时把微信按钮与二维码块加回即可 */}
               <button
                 type="button"
                 className="login-option login-option--google"
@@ -291,26 +275,6 @@ export function LoginDialog(props: LoginDialogProps) {
                 <p className="login-modal__hint">{text("正在跳转授权…", "Redirecting to authorize…")}</p>
               )}
             </>
-          )}
-          {qrUrl && (
-            <div className="login-modal__qr">
-              <iframe
-                src={qrUrl}
-                title="WeChat QR"
-                sandbox="allow-scripts allow-same-origin"
-              />
-              <p className="login-modal__qr-tip">
-                {text("请使用微信扫描二维码登录", "Scan the QR code with WeChat")}
-              </p>
-              <div className="login-modal__qr-actions">
-                <button type="button" className="login-modal__refresh" onClick={props.onRefreshQr} disabled={props.busy}>
-                  {text("刷新二维码", "Refresh QR code")}
-                </button>
-                <button type="button" className="login-modal__back" onClick={props.onCancel}>
-                  {text("返回选择", "Back")}
-                </button>
-              </div>
-            </div>
           )}
           {props.error && <p className="login-modal__error">{props.error}</p>}
         </div>
