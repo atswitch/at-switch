@@ -5,6 +5,7 @@ use tauri::{AppHandle, Manager, State};
 use crate::{
     account::{
         auth,
+        client::RemoteProviderPreset,
         telemetry::{ErrorEvent, Event},
         types::{AccountStatus, LoginPoll, LoginStart, StoredTokens},
         AccountService,
@@ -19,6 +20,16 @@ fn service(state: &State<'_, AppState>) -> AppResult<Arc<AccountService>> {
         .account
         .clone()
         .ok_or_else(|| CommandError::new("account_service_not_configured", "会员服务未配置"))
+}
+
+#[tauri::command]
+/// 供应商预设目录（匿名可拉）：供应商表单下拉的数据源。
+/// account 未配置（服务端地址未注入）时返回空列表，前端回退内置预设。
+pub async fn fetch_provider_presets(state: State<'_, AppState>) -> AppResult<Vec<RemoteProviderPreset>> {
+    let Some(service) = state.account.as_deref() else {
+        return Ok(Vec::new());
+    };
+    Ok(service.api.provider_presets().await?)
 }
 
 #[tauri::command]

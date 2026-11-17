@@ -12,6 +12,7 @@ import type {
   ProviderSummary,
   ProxyStatus,
   RemoteModelSummary,
+  RemoteProviderPreset,
 } from "../types";
 import { supportsDirectBinding, usesServiceModelSettings } from "./agentCapabilities";
 
@@ -562,6 +563,9 @@ async function invokeMock<T>(
       }
       return structuredClone(agent) as T;
     }
+    case "fetch_provider_presets":
+      // mock 环境返回空：前端回退内置预设（与服务端初始数据一致）。
+      return [] as unknown as T;
     case "fetch_provider_models": {
       const apiKey = args?.apiKey as string | undefined;
       const providerId = args?.providerId as string | undefined;
@@ -908,6 +912,8 @@ export const api = {
     invoke<ProviderSummary>("test_provider", { providerId, modelId }),
   testProviderDraft: (draft: ProviderDraft) =>
     invoke<void>("test_provider_draft", { draft }),
+  fetchProviderPresets: () =>
+    invoke<RemoteProviderPreset[]>("fetch_provider_presets"),
   fetchProviderModels: (
     baseUrl: string,
     protocol: ApiProtocol,

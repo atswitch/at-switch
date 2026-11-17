@@ -8,7 +8,7 @@ import {
   Trash2,
 } from "lucide-react";
 import clsx from "clsx";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useLanguage } from "../i18n";
 import type {
   ApiProtocol,
@@ -17,6 +17,7 @@ import type {
   ProviderKind,
   ProviderSummary,
   RemoteModelSummary,
+  RemoteProviderPreset,
 } from "../types";
 import { protocolLabels } from "../lib/format";
 import { api } from "../lib/api";
@@ -24,6 +25,7 @@ import { ProviderLogo } from "./ProviderLogo";
 import {
   presetModelDisplayName,
   providerPresetDisplayOrder,
+  providerPresetDisplayRank,
   providerPresetForKind,
   type ProviderPreset,
   type ProviderPresetKind,
@@ -62,6 +64,24 @@ const kindLabelsEn: Record<ProviderKind, string> = {
 
 const presetKinds: Array<[ProviderPresetKind, string]> =
   providerPresetDisplayOrder.map((kind) => [kind, kindLabels[kind]]);
+
+/** 统一的预设下拉选项：服务端预设与内置预设共用一套渲染与选择逻辑。 */
+type PresetOption = {
+  kind: ProviderPresetKind | ProviderKind;
+  label: string;
+  baseUrl: string;
+  protocol: ApiProtocol;
+  models: ProviderPresetModelShape[];
+  priority: number;
+};
+
+type ProviderPresetModelShape = {
+  modelId: string;
+  displayName: string;
+  outputModality: ModelOutputModality;
+  supportsStreaming: boolean;
+  supportsTools: boolean;
+};
 
 function kindForInput(value: string): ProviderKind {
   const normalized = value.trim().toLocaleLowerCase();
@@ -107,10 +127,10 @@ function createModelRow(
 }
 
 function createPresetModelRows(
-  preset: ProviderPreset,
+  models: readonly ProviderPresetModelShape[],
   language: "zh-CN" | "en",
 ) {
-  return preset.models.map((model) =>
+  return models.map((model) =>
     createModelRow({
       modelId: model.modelId,
       displayName: presetModelDisplayName(model, language),
@@ -165,6 +185,59 @@ export function ProviderForm({
   const [apiKeyLoading, setApiKeyLoading] = useState(
     Boolean(initialProvider?.hasApiKey && loadMaskedApiKey),
   );
+  // 服务端供应商预设目录：管理后台维护，按 priority 升序；拉取失败静默回退内置预设。
+  const [remotePresets, setRemotePresets] = useState<RemoteProviderPreset[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .fetchProviderPresets()
+      .then((items) => {
+        if (!cancelled) setRemotePresets(items);
+      })
+      .catch(() => {
+        /* 静默回退内置预设 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /** 合并下拉选项：服务端预设（priority 升序）在前，内置预设中未被覆盖的项在后。 */
+  const presetOptions = useMemo(() => {
+    const builtin: PresetOption[] = presetKinds.map(([presetKind, label]) => ({
+      kind: presetKind,
+      label,
+      baseUrl: providerPresetForKind(presetKind)?.baseUrl ?? "",
+      protocol: providerPresetForKind(presetKind)?.protocol ?? "openai_chat_completions",
+      models: [...(providerPresetForKind(presetKind)?.models ?? [])],
+      priority: 1000 + providerPresetDisplayRank(presetKind),
+    }));
+    const remote: PresetOption[] = remotePresets.map((preset) => {
+      let models: PresetOption["models"] = [];
+      try {
+        const parsed = JSON.parse(preset.models) as PresetOption["models"];
+        if (Array.isArray(parsed)) models = parsed;
+      } catch {
+        /* 忽略格式错误的模型清单 */
+      }
+      const knownKind = presetKinds.some(([presetKind]) => presetKind === preset.kind)
+        ? (preset.kind as ProviderPresetKind)
+        : ("custom" as ProviderPresetKind);
+      return {
+        kind: knownKind,
+        label: preset.name,
+        baseUrl: preset.baseUrl,
+        protocol: (preset.protocol as ApiProtocol) ?? "openai_chat_completions",
+        models,
+        priority: preset.priority,
+      };
+    });
+    const remoteKinds = new Set(remote.map((option) => option.kind));
+    const builtinFallback = builtin.filter((option) => !remoteKinds.has(option.kind));
+    return [...remote, ...builtinFallback].sort(
+      (left, right) => left.priority - right.priority,
+    );
+  }, [remotePresets]);
   const [apiKeyError, setApiKeyError] = useState<string>();
   const [models, setModels] = useState<ModelFormRow[]>(() => {
     if (initialProvider && !initialPreset) {
@@ -179,7 +252,7 @@ export function ProviderForm({
         : [createModelRow()];
     }
     return initialPreset
-      ? createPresetModelRows(initialPreset, language)
+      ? createPresetModelRows(initialPreset.models, language)
       : [createModelRow()];
   });
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -417,7 +490,7 @@ export function ProviderForm({
                 if (nextPreset) {
                   setProtocol(nextPreset.protocol);
                   setBaseUrl(nextPreset.baseUrl);
-                  setModels(createPresetModelRows(nextPreset, language));
+                  setModels(createPresetModelRows(nextPreset.models, language));
                 }
               }}
             />
@@ -442,35 +515,33 @@ export function ProviderForm({
         </label>
         {isDropdownOpen && (
           <ul className="combobox-dropdown" role="listbox">
-            {presetKinds.map(([presetKind, label]) => (
+            {presetOptions.map((option) => (
               <li
-                key={presetKind}
+                key={`${option.kind}:${option.label}`}
                 role="option"
-                aria-selected={kind === presetKind}
+                aria-selected={kind === option.kind && name === option.label}
                 className={clsx(
                   "combobox-dropdown__item",
-                  kind === presetKind && "is-selected",
+                  kind === option.kind && "is-selected",
                 )}
                 onClick={() => {
-                  const nextPreset = providerPresetForKind(presetKind);
-                  const presetName = labels[presetKind];
-                  setName(presetName);
-                  setKind(presetKind);
+                  setName(option.label);
+                  setKind(option.kind);
                   setIsDropdownOpen(false);
-                  if (nextPreset) {
-                    setProtocol(nextPreset.protocol);
-                    setBaseUrl(nextPreset.baseUrl);
-                      setModels(createPresetModelRows(nextPreset, language));
-                  }
+                  setProtocol(option.protocol);
+                  setBaseUrl(option.baseUrl);
+                  setModels(
+                    createPresetModelRows(option.models, language),
+                  );
                 }}
               >
                 <ProviderLogo
-                  provider={{ kind: presetKind, name: labels[presetKind] }}
+                  provider={{ kind: option.kind, name: option.label }}
                   size="row"
                   className="combobox-dropdown__logo"
                   aria-hidden="true"
                 />
-                <span>{labels[presetKind]}</span>
+                <span>{option.label}</span>
               </li>
             ))}
           </ul>

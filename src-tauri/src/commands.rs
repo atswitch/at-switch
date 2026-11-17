@@ -5,7 +5,7 @@ use tauri_plugin_autostart::ManagerExt;
 
 pub use crate::account::commands::{
     account_get_status, account_login_poll, account_login_start, account_logout,
-    spawn_periodic_check, spawn_usage_reporter, submit_feedback,
+    fetch_provider_presets, spawn_periodic_check, spawn_usage_reporter, submit_feedback,
 };
 pub use crate::account::update::{check_update, install_update, relaunch_app};
 use crate::{

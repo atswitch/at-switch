@@ -7,6 +7,17 @@ export type ApiProtocol =
   | "openai_responses"
   | "anthropic_messages";
 
+/** 服务端供应商预设目录项（GET /v1/provider-presets，匿名可拉，与用户无关）。 */
+export interface RemoteProviderPreset {
+  kind: string;
+  name: string;
+  baseUrl: string;
+  protocol: string;
+  priority: number;
+  /** ProviderPresetModel[] 的 JSON 文本。 */
+  models: string;
+}
+
 export type ProviderKind =
   | "mongyun"
   | "deepseek"

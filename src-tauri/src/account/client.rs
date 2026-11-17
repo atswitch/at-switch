@@ -1,4 +1,5 @@
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -66,6 +67,24 @@ struct LoginStatePoll {
 #[serde(rename_all = "camelCase")]
 struct GoogleAuthorizeResponse {
     authorize_url: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteProviderPreset {
+    pub kind: String,
+    pub name: String,
+    pub base_url: String,
+    pub protocol: String,
+    pub priority: i64,
+    /// 客户端 ProviderPresetModel[] 的 JSON 文本（原样透传给前端解析）。
+    pub models: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteProviderPresetsResponse {
+    items: Vec<RemoteProviderPreset>,
 }
 
 pub enum LoginPollOutcome {
@@ -188,6 +207,18 @@ impl ApiClient {
             .map_err(|_| offline())?;
         let parsed: GoogleAuthorizeResponse = parse_json(response).await?;
         Ok(parsed.authorize_url)
+    }
+
+    /// 供应商预设目录（匿名可拉，与用户无关）：客户端供应商表单下拉的数据源。
+    pub async fn provider_presets(&self) -> Result<Vec<RemoteProviderPreset>, CommandError> {
+        let response = self
+            .http
+            .get(format!("{}/v1/provider-presets", self.base))
+            .send()
+            .await
+            .map_err(|_| offline())?;
+        let parsed: RemoteProviderPresetsResponse = parse_json(response).await?;
+        Ok(parsed.items)
     }
 
     pub async fn google_exchange(
