@@ -58,10 +58,12 @@ pub fn open_browser(url: &str) -> Result<(), CommandError> {
     #[cfg(target_os = "windows")]
     let mut command = {
         // 不经 cmd /C start：cmd 的引号转义规则与 Rust std::process 的 CRT 转义
-        // 互不兼容（URL 里的 `&` 会被截断，加引号又会变成 `\"` 前缀路径）。
-        // explorer.exe 直接接收 URL 参数并交给默认浏览器，无 shell 解析问题。
-        let mut c = std::process::Command::new("explorer.exe");
-        c.arg(url);
+        // 互不兼容（URL 里的 `&` 会被截断，加引号又会变成 `\"` 前缀路径）；
+        // explorer.exe 会把 URL 当路径解析（打开文件夹）。rundll32 的
+        // FileProtocolHandler 直接把 URL 交给默认浏览器，参数不经 shell 解析，
+        // `&` 不会被分割，且这是 Windows 上打开 URL 的经典方式。
+        let mut c = std::process::Command::new("rundll32");
+        c.args(["url.dll,FileProtocolHandler", url]);
         c
     };
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -79,14 +81,31 @@ pub fn open_browser(url: &str) -> Result<(), CommandError> {
 
 /// 一次性本地 HTTP 监听：等待 Google 带 code 回跳 `/callback`，返回 code。
 /// 用户关闭浏览器页面即无回调；外层轮询超时后关闭监听。
+/// bind 失败（上一次登录流程的监听尚未超时释放）自动重试 15 秒，仍失败再报错。
 pub async fn wait_for_google_code(state: &str) -> Result<String, CommandError> {
-    let listener = TcpListener::bind(("127.0.0.1", GOOGLE_LOOPBACK_PORT))
-        .await
-        .map_err(|error| {
-            log::warn!("google loopback bind failed: {error}");
+    let listener = {
+        const BIND_RETRY_MS: u64 = 500;
+        const BIND_RETRY_MAX: usize = 30;
+        let mut listener = None;
+        for attempt in 1..=BIND_RETRY_MAX {
+            match TcpListener::bind(("127.0.0.1", GOOGLE_LOOPBACK_PORT)).await {
+                Ok(value) => {
+                    listener = Some(value);
+                    break;
+                }
+                Err(error) => {
+                    log::warn!(
+                        "google loopback bind failed (attempt {attempt}/{BIND_RETRY_MAX}): {error}"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(BIND_RETRY_MS)).await;
+                }
+            }
+        }
+        listener.ok_or_else(|| {
             CommandError::new("auth_login_failed", "本地授权回调端口被占用")
                 .with_recovery("请稍后重试；若持续失败请反馈给管理员。")
-        })?;
+        })?
+    };
     loop {
         let (mut socket, _) = listener
             .accept()
