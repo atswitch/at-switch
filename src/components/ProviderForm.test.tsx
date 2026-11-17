@@ -1,7 +1,8 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { LanguageProvider } from "../i18n";
+import { api } from "../lib/api";
 import type { ProviderSummary } from "../types";
 import { ProviderForm } from "./ProviderForm";
 
@@ -44,6 +45,10 @@ const provider: ProviderSummary = {
 };
 
 describe("ProviderForm", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("marks a missing API key in red", () => {
     render(<ProviderForm onSubmit={vi.fn()} busy={false} />);
 
@@ -82,6 +87,30 @@ describe("ProviderForm", () => {
     expect(onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({ apiKey: undefined }),
     );
+  });
+
+  it("hides a built-in preset that the backend reports as disabled", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "fetchProviderPresets").mockResolvedValue({
+      items: [],
+      disabledBuiltinKinds: ["kimi"],
+    });
+    render(<ProviderForm onSubmit={vi.fn()} busy={false} />);
+
+    await user.click(screen.getByRole("button", { name: "切换预设下拉" }));
+    expect(screen.queryByRole("option", { name: "Kimi" })).not.toBeInTheDocument();
+    // 其余内置预设备不受影响。
+    expect(screen.getByRole("option", { name: "智谱" })).toBeInTheDocument();
+  });
+
+  it("keeps built-in presets when the preset catalog fails to load", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "fetchProviderPresets").mockRejectedValue(new Error("timeout"));
+    render(<ProviderForm onSubmit={vi.fn()} busy={false} />);
+
+    await user.click(screen.getByRole("button", { name: "切换预设下拉" }));
+    expect(screen.getByRole("option", { name: "Kimi" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "智谱" })).toBeInTheDocument();
   });
 
   it("accepts a manually typed Provider and exposes Kimi and Zhipu presets", async () => {

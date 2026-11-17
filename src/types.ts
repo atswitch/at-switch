@@ -18,6 +18,18 @@ export interface RemoteProviderPreset {
   models: string;
 }
 
+/** GET /v1/provider-presets 的响应体。 */
+export interface ProviderPresetsResult {
+  /** 后台启用的预设，按 priority 升序；停用项不在其中。 */
+  items: RemoteProviderPreset[];
+  /**
+   * 后台停用的内置预设 kind。服务端只下发启用项，被停用的内置项如果靠
+   * 「列表里没有」推断，会和「从未配置过」混为一谈，因此单独列出，
+   * 客户端据此跳过内置预设兜底。
+   */
+  disabledBuiltinKinds: string[];
+}
+
 export type ProviderKind =
   | "mongyun"
   | "deepseek"

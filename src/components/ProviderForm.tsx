@@ -187,12 +187,20 @@ export function ProviderForm({
   );
   // 服务端供应商预设目录：管理后台维护，按 priority 升序；拉取失败静默回退内置预设。
   const [remotePresets, setRemotePresets] = useState<RemoteProviderPreset[]>([]);
+  // 后台停用的内置预设 kind 列表：服务端只下发启用项，被停用的内置项若靠「缺席」
+  // 推断会与「从未配置过」混淆，因此由服务端显式告知，客户端据此跳过内置兜底。
+  const [disabledBuiltinKinds, setDisabledBuiltinKinds] = useState<string[]>([]);
   useEffect(() => {
     let cancelled = false;
     api
       .fetchProviderPresets()
-      .then((items) => {
-        if (!cancelled) setRemotePresets(items);
+      .then((result) => {
+        if (cancelled) return;
+        // 兼容旧后端/mock 直接返回数组的形态，避免 undefined.map 崩溃。
+        const items = Array.isArray(result) ? result : result?.items ?? [];
+        const disabled = Array.isArray(result) ? [] : result?.disabledBuiltinKinds ?? [];
+        setRemotePresets(items);
+        setDisabledBuiltinKinds(disabled);
       })
       .catch(() => {
         /* 静默回退内置预设 */
@@ -204,14 +212,17 @@ export function ProviderForm({
 
   /** 合并下拉选项：服务端预设（priority 升序）在前，内置预设中未被覆盖的项在后。 */
   const presetOptions = useMemo(() => {
-    const builtin: PresetOption[] = presetKinds.map(([presetKind, label]) => ({
-      kind: presetKind,
-      label,
-      baseUrl: providerPresetForKind(presetKind)?.baseUrl ?? "",
-      protocol: providerPresetForKind(presetKind)?.protocol ?? "openai_chat_completions",
-      models: [...(providerPresetForKind(presetKind)?.models ?? [])],
-      priority: 1000 + providerPresetDisplayRank(presetKind),
-    }));
+    const disabledKinds = new Set(disabledBuiltinKinds);
+    const builtin: PresetOption[] = presetKinds
+      .filter(([presetKind]) => !disabledKinds.has(presetKind))
+      .map(([presetKind, label]) => ({
+        kind: presetKind,
+        label,
+        baseUrl: providerPresetForKind(presetKind)?.baseUrl ?? "",
+        protocol: providerPresetForKind(presetKind)?.protocol ?? "openai_chat_completions",
+        models: [...(providerPresetForKind(presetKind)?.models ?? [])],
+        priority: 1000 + providerPresetDisplayRank(presetKind),
+      }));
     const remote: PresetOption[] = remotePresets.map((preset) => {
       let models: PresetOption["models"] = [];
       try {
@@ -237,7 +248,7 @@ export function ProviderForm({
     return [...remote, ...builtinFallback].sort(
       (left, right) => left.priority - right.priority,
     );
-  }, [remotePresets]);
+  }, [disabledBuiltinKinds, remotePresets]);
   const [apiKeyError, setApiKeyError] = useState<string>();
   const [models, setModels] = useState<ModelFormRow[]>(() => {
     if (initialProvider && !initialPreset) {

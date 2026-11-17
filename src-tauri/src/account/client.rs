@@ -85,6 +85,18 @@ pub struct RemoteProviderPreset {
 #[serde(rename_all = "camelCase")]
 struct RemoteProviderPresetsResponse {
     items: Vec<RemoteProviderPreset>,
+    /// 后台停用的内置预设 kind：客户端据此跳过内置预设兜底。
+    /// 旧服务端不返回该字段，缺省空列表（行为与本改动前一致）。
+    #[serde(default)]
+    disabled_builtin_kinds: Vec<String>,
+}
+
+/// 供应商预设目录的快照：启用项 + 被停用的内置项 kind。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderPresetsSnapshot {
+    pub items: Vec<RemoteProviderPreset>,
+    pub disabled_builtin_kinds: Vec<String>,
 }
 
 pub enum LoginPollOutcome {
@@ -210,7 +222,7 @@ impl ApiClient {
     }
 
     /// 供应商预设目录（匿名可拉，与用户无关）：客户端供应商表单下拉的数据源。
-    pub async fn provider_presets(&self) -> Result<Vec<RemoteProviderPreset>, CommandError> {
+    pub async fn provider_presets(&self) -> Result<ProviderPresetsSnapshot, CommandError> {
         let response = self
             .http
             .get(format!("{}/v1/provider-presets", self.base))
@@ -218,7 +230,10 @@ impl ApiClient {
             .await
             .map_err(|_| offline())?;
         let parsed: RemoteProviderPresetsResponse = parse_json(response).await?;
-        Ok(parsed.items)
+        Ok(ProviderPresetsSnapshot {
+            items: parsed.items,
+            disabled_builtin_kinds: parsed.disabled_builtin_kinds,
+        })
     }
 
     pub async fn google_exchange(

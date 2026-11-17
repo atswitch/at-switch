@@ -10,6 +10,7 @@ import type {
   LoginPoll,
   ProviderDraft,
   ProviderSummary,
+  ProviderPresetsResult,
   ProxyStatus,
   RemoteModelSummary,
   RemoteProviderPreset,
@@ -564,8 +565,8 @@ async function invokeMock<T>(
       return structuredClone(agent) as T;
     }
     case "fetch_provider_presets":
-      // mock 环境返回空：前端回退内置预设（与服务端初始数据一致）。
-      return [] as unknown as T;
+      // mock 环境返回空目录：前端回退内置预设（与服务端初始数据一致）。
+      return { items: [], disabledBuiltinKinds: [] } as unknown as T;
     case "fetch_provider_models": {
       const apiKey = args?.apiKey as string | undefined;
       const providerId = args?.providerId as string | undefined;
@@ -912,8 +913,19 @@ export const api = {
     invoke<ProviderSummary>("test_provider", { providerId, modelId }),
   testProviderDraft: (draft: ProviderDraft) =>
     invoke<void>("test_provider_draft", { draft }),
-  fetchProviderPresets: () =>
-    invoke<RemoteProviderPreset[]>("fetch_provider_presets"),
+  // 兼容旧后端/旧 mock：早期命令只返回数组，这里统一归一化为带停用清单的对象。
+  fetchProviderPresets: async (): Promise<ProviderPresetsResult> => {
+    const raw = await invoke<ProviderPresetsResult | RemoteProviderPreset[]>(
+      "fetch_provider_presets",
+    );
+    if (Array.isArray(raw)) {
+      return { items: raw, disabledBuiltinKinds: [] };
+    }
+    return {
+      items: raw?.items ?? [],
+      disabledBuiltinKinds: raw?.disabledBuiltinKinds ?? [],
+    };
+  },
   fetchProviderModels: (
     baseUrl: string,
     protocol: ApiProtocol,
